@@ -77,17 +77,59 @@ return [
     | Each cluster name becomes a key in keyword_hits['positive'|'negative'].
     | Phrases are substring-matched (case-insensitive) against review text.
     */
+    /*
+    | Substring-matched case-insensitively against each review's text.
+    | Shorter root forms (e.g. "bersih") intentionally hit derivatives
+    | ("kebersihan", "bersih banget") without needing word boundaries.
+    */
     'recall_keyword_clusters' => [
         'positive' => [
-            'cleanliness'  => ['harum', 'bersih', 'wangi', 'rapi', 'bersih banget'],
-            'timeliness'   => ['tepat waktu', 'tepat', 'cepat', 'on time', 'nggak lama', 'kilat'],
-            'friendliness' => ['ramah', 'sopan', 'baik', 'friendly', 'senyum'],
-            'satisfaction' => ['rekomen', 'rekomendasi', 'puas', 'senang', 'bagus', 'memuaskan', 'mantap'],
+            'cleanliness'    => [
+                'harum', 'bersih', 'wangi', 'rapi', 'kinclong', 'fresh', 'segar',
+                'bebas noda', 'noda hilang', 'cucian bersih', 'hasil bersih',
+                'kebersihan', 'keharuman', 'kewangian', 'cemerlang',
+            ],
+            'speed'          => [
+                'cepat', 'tepat waktu', 'tepat', 'kilat', 'ekspres', 'express',
+                'same day', 'on time', 'nggak lama', 'tidak lama', 'sesuai jadwal',
+                'selesai tepat', 'kecepatan', 'fast',
+            ],
+            'service'        => [
+                'ramah', 'sopan', 'baik', 'friendly', 'senyum', 'pelayanan',
+                'responsif', 'fast respon', 'fast response', 'sigap', 'membantu',
+                'profesional', 'helpful',
+            ],
+            'recommendation' => [
+                'rekomen', 'rekomendasi', 'recommend', 'puas', 'senang', 'mantap',
+                'terbaik', 'terpercaya', 'worth it', 'balik lagi', 'bakal balik',
+                'langganan', 'favorit', 'highly recommended', 'suka', '5 bintang',
+            ],
+            'quality'        => [
+                'kualitas', 'berkualitas', 'memuaskan', 'tidak kecewa',
+                'sesuai harapan', 'sesuai ekspektasi', 'tidak mengecewakan',
+                'bagus', 'top', 'luar biasa', 'oke',
+            ],
         ],
         'negative' => [
-            'lateness'     => ['telat', 'lambat', 'lama banget', 'kelamaan', 'nungguin', 'molor'],
-            'lost_clothes' => ['tertukar', 'hilang', 'rusak', 'robek', 'cacat', 'kurang'],
-            'no_response'  => ['tidak direspons', 'tidak balas', 'no respon', 'susah dihubungi', 'ga dibalas', 'gak dibalas'],
+            'late'        => [
+                'telat', 'lambat', 'lama banget', 'kelamaan', 'nungguin', 'molor',
+                'ngaret', 'terlambat', 'delay', 'tidak tepat waktu', 'lewat jadwal',
+                'ditunda',
+            ],
+            'lost'        => [
+                'tertukar', 'hilang', 'baju hilang', 'pakaian hilang', 'barang hilang',
+                'kehilangan',
+            ],
+            'unresponsive' => [
+                'tidak direspons', 'tidak balas', 'no respon', 'susah dihubungi',
+                'ga dibalas', 'gak dibalas', 'tidak ada respon', 'slow respon',
+                'slow response', 'wa tidak dibalas',
+            ],
+            'damage'      => [
+                'rusak', 'robek', 'cacat', 'luntur', 'pudar', 'menyusut', 'melar',
+                'sobek', 'kelunturan', 'bau aneh', 'bau tidak sedap', 'bau apek',
+                'masih kotor', 'tidak bersih',
+            ],
         ],
     ],
 
