@@ -43,6 +43,7 @@ new class extends Component {
     public ?string $errorMessage       = null;
     public ?string $activationKitPath  = null;
     public bool    $kitGenerating      = false;
+    public array   $scoreBreakdown     = [];
 
     // Modal
     public bool    $showModal   = false;
@@ -107,6 +108,7 @@ new class extends Component {
         $this->recommendations   = $audit->recommendations ?? [];
         $this->errorMessage      = $audit->error_message;
         $this->activationKitPath = $audit->activation_kit_path;
+        $this->scoreBreakdown    = $audit->score_breakdown ?? [];
 
         // Stop showing the spinner once the file has actually landed.
         if ($this->activationKitPath) {
@@ -723,9 +725,62 @@ new class extends Component {
                             @if (count($sbs) > 0)
                                 <div class="flex flex-col mb-4" style="border-top: 1px solid var(--border-default);">
                                     @foreach ($sbs as $k => $v)
-                                        <div class="flex justify-between items-center py-2" style="border-bottom: 1px solid var(--border-default);">
-                                            <span style="font-size: 12px; color: var(--text-secondary);">{{ $subBucketLabels[$k] ?? $k }}</span>
-                                            <span style="font-size: 13px; font-weight: 500; color: var(--text-primary);">{{ $v }}</span>
+                                        @php $bd = is_array($scoreBreakdown[$slug][$k] ?? null) ? $scoreBreakdown[$slug][$k] : null; @endphp
+                                        <div x-data="{ open: false }" style="border-bottom: 1px solid var(--border-default);">
+                                            <div class="flex justify-between items-center py-2">
+                                                <span style="font-size: 12px; color: var(--text-secondary);">{{ $subBucketLabels[$k] ?? $k }}</span>
+                                                <div style="display: flex; align-items: center; gap: 6px;">
+                                                    @if ($bd !== null)
+                                                        <button type="button" @click="open = !open"
+                                                            style="width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--border-strong); background: var(--surface-muted); color: var(--text-tertiary); font-size: 10px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; line-height: 1; flex-shrink: 0;"
+                                                            title="Lihat detail perhitungan">?</button>
+                                                    @endif
+                                                    <span style="font-size: 13px; font-weight: 500; color: var(--text-primary);">{{ $v }}</span>
+                                                </div>
+                                            </div>
+                                            @if ($bd !== null)
+                                                <div x-show="open" x-cloak style="padding: 8px 12px 12px; background: var(--surface-muted); border-top: 1px solid var(--border-default); font-size: 11px; color: var(--text-secondary);">
+                                                    @php
+                                                        $formula      = $bd['formula'] ?? 'unknown';
+                                                        $rawInputs    = (array) ($bd['raw_inputs'] ?? []);
+                                                        $tierTable    = (array) ($bd['tier_table'] ?? []);
+                                                        $llmReasoning = (string) ($bd['llm_reasoning'] ?? '');
+                                                        $limitations  = (array) ($bd['limitations'] ?? []);
+
+                                                        if ($formula === 'llm_judgment') {
+                                                            $inputLine = implode(', ', (array) ($rawInputs['context_provided'] ?? []));
+                                                        } else {
+                                                            $parts = [];
+                                                            foreach ($rawInputs as $rk => $rv) {
+                                                                if ($rk === 'source') continue;
+                                                                $parts[] = $rk . ': ' . (is_bool($rv) ? ($rv ? 'Ya' : 'Tidak') : $rv);
+                                                            }
+                                                            $inputLine = implode(' · ', $parts);
+                                                        }
+                                                    @endphp
+                                                    <p style="margin: 0 0 6px;"><strong>Berdasarkan:</strong> {{ $inputLine }}</p>
+
+                                                    @if ($formula === 'deterministic_threshold' && count($tierTable) > 0)
+                                                        <table style="width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 6px;">
+                                                            @foreach ($tierTable as $tier)
+                                                                @php $isMatch = (bool) ($tier['matched'] ?? false); @endphp
+                                                                <tr style="background: {{ $isMatch ? 'var(--chimera-500)' : 'transparent' }}; color: {{ $isMatch ? '#FFFFFF' : 'inherit' }}; border-radius: 4px;">
+                                                                    <td style="padding: 3px 8px;">{{ $tier['range'] }}</td>
+                                                                    <td style="padding: 3px 8px; text-align: right; font-weight: {{ $isMatch ? '600' : 'normal' }};">{{ $tier['points'] }} pt</td>
+                                                                </tr>
+                                                            @endforeach
+                                                        </table>
+                                                    @endif
+
+                                                    @if ($formula === 'llm_judgment' && $llmReasoning !== '')
+                                                        <p style="margin: 0 0 4px; line-height: 1.55;">{{ $llmReasoning }}</p>
+                                                    @endif
+
+                                                    @if (count($limitations) > 0)
+                                                        <p style="margin: 0; font-style: italic; color: var(--text-tertiary); font-size: 10px;">Keterbatasan: {{ implode('; ', $limitations) }}</p>
+                                                    @endif
+                                                </div>
+                                            @endif
                                         </div>
                                     @endforeach
                                 </div>
