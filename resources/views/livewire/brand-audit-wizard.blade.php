@@ -207,30 +207,72 @@ new class extends Component {
         ];
 
         $subBucketLabels = [
+            // brand-recall
             'rating_tier'         => 'Rating',
             'review_count_tier'   => 'Jumlah Review',
             'keyword_saturation'  => 'Kata Kunci',
             'sentiment_quality'   => 'Sentimen',
+            // digital-presence
+            'has_gmaps'           => 'Google Maps',
+            'has_instagram'       => 'Instagram',
+            'has_website'         => 'Website',
+            'has_wa'              => 'WhatsApp Business',
+            'has_tiktok'          => 'TikTok',
+            'review_bonus'        => 'Bonus Review',
+            // brand-konsistensi
             'kehadiran_digital'   => 'Kehadiran Digital',
-            'konsistensi_visual'  => 'Visual',
+            'konsistensi_visual'  => 'Konsistensi Visual',
             'kelengkapan_layanan' => 'Kelengkapan Layanan',
             'transparansi_harga'  => 'Transparansi Harga',
-            'base'                => 'Dasar',
-            'ekspres'             => 'Ekspres',
-            'antar_jemput'        => 'Antar Jemput',
-            'variasi'             => 'Variasi',
-            'price_list'          => 'Daftar Harga',
-            'sop_keluhan'         => 'Penanganan Keluhan',
+            // brand-experience
+            'base'                  => 'Dasar',
+            'bonus_ekspres'         => 'Layanan Ekspres',
+            'bonus_antar_jemput'    => 'Antar Jemput',
+            'bonus_variasi_layanan' => 'Variasi Layanan',
+            'bonus_sop_keluhan'     => 'SOP Keluhan',
+            'bonus_price_list'      => 'Daftar Harga',
+            'penalty_keterlambatan' => 'Penalti Keterlambatan',
+            'penalty_pakaian_hilang' => 'Penalti Pakaian Hilang',
+            'penalty_no_response_wa' => 'Penalti No-Response WA',
         ];
+
+        // Normalize pillar scores: {pillar => {score, evidence, ...}} → {pillar => int}
+        $pillarScoreInts = [];
+        foreach ($this->pillarScores as $slug => $data) {
+            $pillarScoreInts[$slug] = is_array($data) ? ($data['score'] ?? null) : $data;
+        }
+
+        // Build bucket → pillar reverse lookup so we can group recommendations by pillar
+        $bucketToPillar = [];
+        foreach ($this->subBucketScores as $pillarSlug => $buckets) {
+            foreach (array_keys((array) $buckets) as $bucket) {
+                $bucketToPillar[$bucket] = $pillarSlug;
+            }
+        }
 
         $modalRecs = $this->modalPillar
             ? array_values(array_filter(
                 $this->recommendations,
-                fn ($r) => ($r['pillar'] ?? '') === $this->modalPillar,
+                fn ($r) => ($bucketToPillar[$r['bucket'] ?? ''] ?? '') === $this->modalPillar,
             ))
             : [];
 
-        return compact('pillarMeta', 'subBucketLabels', 'modalRecs') + [
+        // Count recs per pillar so cards know whether to show the link
+        $recsByPillar = [];
+        foreach ($this->recommendations as $r) {
+            $p = $bucketToPillar[$r['bucket'] ?? ''] ?? null;
+            if ($p) {
+                $recsByPillar[$p] = ($recsByPillar[$p] ?? 0) + 1;
+            }
+        }
+
+        return compact(
+            'pillarMeta',
+            'subBucketLabels',
+            'modalRecs',
+            'pillarScoreInts',
+            'recsByPillar',
+        ) + [
             'serviceTypes' => [
                 'kiloan'  => 'Kiloan (per kg)',
                 'satuan'  => 'Satuan (per pakaian)',
@@ -595,13 +637,27 @@ new class extends Component {
                             @if (count($keyFindings) > 0)
                                 <div class="flex flex-col gap-2">
                                     @foreach (array_slice($keyFindings, 0, 3) as $finding)
+                                        @php
+                                            $impact = is_array($finding) ? ($finding['impact'] ?? 'neutral') : 'neutral';
+                                            $obs    = is_array($finding) ? ($finding['observation'] ?? '') : (string) $finding;
+                                            $iconClr = match ($impact) {
+                                                'positive' => 'var(--chimera-500)',
+                                                'negative' => 'var(--color-danger)',
+                                                default    => 'var(--text-tertiary)',
+                                            };
+                                            $icon = match ($impact) {
+                                                'positive' => 'ti-circle-check-filled',
+                                                'negative' => 'ti-alert-circle-filled',
+                                                default    => 'ti-point-filled',
+                                            };
+                                        @endphp
                                         <div class="flex items-start gap-2" style="font-size: 13px; color: var(--text-secondary);">
-                                            <i class="ti ti-point-filled" style="color: var(--chimera-400); font-size: 10px; margin-top: 4px; flex-shrink: 0;"></i>
-                                            {{ $finding }}
+                                            <i class="ti {{ $icon }}" style="color: {{ $iconClr }}; font-size: 13px; margin-top: 2px; flex-shrink: 0;"></i>
+                                            <span>{{ $obs }}</span>
                                         </div>
                                     @endforeach
                                     @if (count($keyFindings) > 3)
-                                        <p style="font-size: 12px; color: var(--text-tertiary);">+{{ count($keyFindings) - 3 }} temuan lainnya</p>
+                                        <p style="font-size: 12px; color: var(--text-tertiary);">+{{ count($keyFindings) - 3 }} temuan lainnya di bawah</p>
                                     @endif
                                 </div>
                             @endif
@@ -613,14 +669,14 @@ new class extends Component {
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
                     @foreach ($pillarMeta as $slug => $meta)
                         @php
-                            $ps = $pillarScores[$slug] ?? null;
+                            $ps = $pillarScoreInts[$slug] ?? null;
                             $pc = match (true) {
                                 ($ps ?? 0) >= 80 => 'var(--chimera-500)',
                                 ($ps ?? 0) >= 60 => 'var(--color-warning)',
                                 default          => 'var(--color-danger)',
                             };
                             $sbs = $subBucketScores[$slug] ?? [];
-                            $hasRecs = count(array_filter($recommendations, fn ($r) => ($r['pillar'] ?? '') === $slug)) > 0;
+                            $hasRecs = ($recsByPillar[$slug] ?? 0) > 0;
                         @endphp
                         <div class="nui-card p-6">
                             <div class="flex items-center justify-between mb-4">
@@ -665,9 +721,29 @@ new class extends Component {
                         <p style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: var(--text-primary);">Semua Temuan</p>
                         <div class="flex flex-col gap-3">
                             @foreach ($keyFindings as $finding)
+                                @php
+                                    $impact = is_array($finding) ? ($finding['impact'] ?? 'neutral') : 'neutral';
+                                    $obs    = is_array($finding) ? ($finding['observation'] ?? '') : (string) $finding;
+                                    $tp     = is_array($finding) ? ($finding['touchpoint'] ?? null) : null;
+                                    $iconClr = match ($impact) {
+                                        'positive' => 'var(--chimera-500)',
+                                        'negative' => 'var(--color-danger)',
+                                        default    => 'var(--text-tertiary)',
+                                    };
+                                    $icon = match ($impact) {
+                                        'positive' => 'ti-circle-check-filled',
+                                        'negative' => 'ti-alert-circle-filled',
+                                        default    => 'ti-point-filled',
+                                    };
+                                @endphp
                                 <div class="flex items-start gap-2" style="font-size: 13px; color: var(--text-secondary);">
-                                    <i class="ti ti-point-filled" style="color: var(--chimera-400); font-size: 10px; margin-top: 5px; flex-shrink: 0;"></i>
-                                    {{ $finding }}
+                                    <i class="ti {{ $icon }}" style="color: {{ $iconClr }}; font-size: 13px; margin-top: 2px; flex-shrink: 0;"></i>
+                                    <div>
+                                        <span>{{ $obs }}</span>
+                                        @if ($tp)
+                                            <span style="font-size: 11px; color: var(--text-tertiary); margin-left: 6px;">[{{ $tp }}]</span>
+                                        @endif
+                                    </div>
                                 </div>
                             @endforeach
                         </div>
@@ -708,15 +784,30 @@ new class extends Component {
                         <div class="flex flex-col gap-5">
                             @foreach ($modalRecs as $i => $rec)
                                 @php
-                                    $prio      = $rec['priority'] ?? 'medium';
-                                    $prioClr   = match ($prio) { 'high' => 'var(--color-danger)', 'medium' => 'var(--color-warning)', default => 'var(--text-tertiary)' };
-                                    $prioLabel = match ($prio) { 'high' => 'Prioritas Tinggi', 'medium' => 'Prioritas Sedang', default => 'Prioritas Rendah' };
+                                    $prio      = $rec['priority'] ?? 'opsional';
+                                    $prioClr   = match ($prio) {
+                                        'tinggi'  => 'var(--color-danger)',
+                                        'penting' => 'var(--color-warning)',
+                                        default   => 'var(--text-tertiary)',
+                                    };
+                                    $prioLabel = match ($prio) {
+                                        'tinggi'  => 'Prioritas Tinggi',
+                                        'penting' => 'Penting',
+                                        default   => 'Opsional',
+                                    };
+                                    $bucketLabel = $subBucketLabels[$rec['bucket'] ?? ''] ?? ($rec['bucket'] ?? '');
                                 @endphp
                                 <div @if ($i < count($modalRecs) - 1) style="padding-bottom: 20px; border-bottom: 1px solid var(--border-default);" @endif>
-                                    <div style="margin-bottom: 8px;">
+                                    <div class="flex items-center gap-2" style="margin-bottom: 8px; flex-wrap: wrap;">
                                         <span style="font-size: 11px; font-weight: 500; color: {{ $prioClr }}; background: var(--surface-muted); border-radius: var(--radius-pill); padding: 2px 8px; border: 1px solid {{ $prioClr }};">
                                             {{ $prioLabel }}
                                         </span>
+                                        @if ($bucketLabel)
+                                            <span style="font-size: 11px; color: var(--text-tertiary);">{{ $bucketLabel }}</span>
+                                        @endif
+                                        @if (isset($rec['gap']))
+                                            <span style="font-size: 11px; color: var(--text-tertiary);">· gap {{ $rec['gap'] }} pt</span>
+                                        @endif
                                     </div>
                                     <p style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 6px;">{{ $rec['title'] ?? '' }}</p>
                                     <p style="font-size: 13px; color: var(--text-secondary); line-height: 1.65;">{{ $rec['body'] ?? '' }}</p>
