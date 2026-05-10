@@ -37,6 +37,7 @@ class BrandAudit extends Model
         'evidence',
         'error_message',
         'activation_kit_path',
+        'score_breakdown',
         'expires_at',
     ];
 
@@ -45,8 +46,9 @@ class BrandAudit extends Model
         return [
             'touchpoints'       => 'array',
             'pillar_scores'     => 'array',
-            'sub_bucket_scores' => 'array',
-            'overall_score'     => 'integer',
+            'sub_bucket_scores'  => 'array',
+            'score_breakdown'    => 'array',
+            'overall_score'      => 'integer',
             'key_findings'      => 'array',
             'recommendations'   => 'array',
             'evidence'          => 'array',
