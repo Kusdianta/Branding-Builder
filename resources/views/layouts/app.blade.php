@@ -3,64 +3,75 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>@yield('title', 'Brand Kit Generator') — Chimera Creative</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-    @vite(['resources/css/app.css', 'resources/js/app.js'])
-    <style>
-        * { font-family: 'Montserrat', sans-serif; }
-    </style>
-</head>
-<body class="min-h-full bg-[#0b1015] text-slate-100 antialiased">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <title>{{ isset($title) ? $title . ' — ' : '' }}Branding Builder</title>
 
-    <!-- Nav -->
-    <header class="border-b border-white/5 bg-[#0b1015]/90 backdrop-blur-sm sticky top-0 z-50">
-        <div class="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-            <a href="/" class="flex items-center gap-3 group">
-                <!-- Chimera Creative logo (SVG recreation) -->
-                <div class="flex items-center gap-2.5">
-                    <svg width="36" height="36" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <!-- Rook chess piece simplified -->
-                        <rect x="25" y="10" width="12" height="15" rx="2" fill="#3D8948"/>
-                        <rect x="43" y="10" width="14" height="15" rx="2" fill="#3D8948"/>
-                        <rect x="63" y="10" width="12" height="15" rx="2" fill="#3D8948"/>
-                        <rect x="25" y="22" width="50" height="10" rx="2" fill="#3D8948"/>
-                        <rect x="28" y="30" width="44" height="35" rx="3" fill="#3D8948"/>
-                        <!-- Face -->
-                        <circle cx="40" cy="46" r="4" fill="#2a6335"/>
-                        <circle cx="60" cy="46" r="4" fill="#2a6335"/>
-                        <path d="M40 56 Q50 61 60 56" stroke="#2a6335" stroke-width="2.5" stroke-linecap="round" fill="none"/>
-                        <!-- Body/base -->
-                        <rect x="22" y="63" width="56" height="8" rx="2" fill="#4aaa57"/>
-                        <rect x="18" y="70" width="64" height="8" rx="3" fill="#3D8948"/>
-                        <!-- Shadow -->
-                        <ellipse cx="50" cy="83" rx="28" ry="5" fill="#2a6335" opacity="0.5"/>
-                    </svg>
-                    <div class="leading-tight">
-                        <div class="font-black text-white text-lg leading-none tracking-tight">chimera</div>
-                        <div class="font-black text-white text-lg leading-none tracking-tight">creative</div>
-                    </div>
-                </div>
+    <style>
+        @font-face {
+            font-family: 'Geist';
+            src: url('/vendor/nema-ui-kit/fonts/Geist-Regular.woff2') format('woff2');
+            font-weight: 400; font-style: normal; font-display: swap;
+        }
+        @font-face {
+            font-family: 'Geist';
+            src: url('/vendor/nema-ui-kit/fonts/Geist-Medium.woff2') format('woff2');
+            font-weight: 500; font-style: normal; font-display: swap;
+        }
+        @font-face {
+            font-family: 'Geist';
+            src: url('/vendor/nema-ui-kit/fonts/Geist-SemiBold.woff2') format('woff2');
+            font-weight: 600; font-style: normal; font-display: swap;
+        }
+    </style>
+
+    <link rel="stylesheet" href="/vendor/nema-ui-kit/css/tokens.css">
+    <link rel="stylesheet" href="/vendor/nema-ui-kit/css/components.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
+
+    @vite(['resources/css/app.css', 'resources/js/app.js'])
+    @livewireStyles
+</head>
+<body style="background: var(--surface-canvas); color: var(--text-primary); font-family: var(--font-sans);" class="min-h-screen antialiased">
+
+    <header class="sticky top-4 z-40 px-4">
+        <nav class="nui-nav-pill mx-auto flex max-w-4xl items-center justify-between px-4 py-2">
+            <a href="/" class="flex items-center gap-2">
+                <span class="inline-flex h-8 w-8 items-center justify-center rounded-full"
+                      style="background: var(--chimera-500); color: var(--text-on-primary);">
+                    <i class="ti ti-brand-speedtest" style="font-size: 16px;"></i>
+                </span>
+                <span style="font-weight: 600; font-size: 15px;">Branding Builder</span>
             </a>
-            <div class="flex items-center gap-3">
-                <span class="text-xs text-slate-500 font-medium uppercase tracking-widest hidden sm:block">Brand Kit Generator</span>
-                <span class="w-1.5 h-1.5 rounded-full bg-[#3D8948] hidden sm:block"></span>
-                <span class="text-xs text-slate-500 font-medium">Powered by Claude AI</span>
-            </div>
-        </div>
+            <span style="font-size: 12px; color: var(--text-tertiary);">AI Brand Health Check</span>
+        </nav>
     </header>
 
-    <main>
-        @yield('content')
+    <main class="mx-auto w-full max-w-4xl px-4 py-8">
+        {{ $slot }}
     </main>
 
-    <footer class="border-t border-white/5 mt-20">
-        <div class="max-w-6xl mx-auto px-6 py-6 flex flex-col sm:flex-row items-center justify-between gap-3">
-            <span class="text-xs text-slate-600">© {{ date('Y') }} Chimera Creative. All rights reserved.</span>
-            <span class="text-xs text-slate-600">Social Media Marketing untuk Bisnis Laundry</span>
+    <footer style="border-top: 1px solid var(--border-default); margin-top: 64px;">
+        <div class="mx-auto flex w-full max-w-4xl items-center justify-between px-4 py-4"
+             style="font-size: 12px; color: var(--text-tertiary);">
+            <span>Branding Builder · Nema Platform</span>
+            <span>© {{ date('Y') }}</span>
         </div>
     </footer>
 
+    <div x-data="uiKitToast()" class="nui-toast-stack" x-cloak>
+        <template x-for="t in toasts" :key="t.id">
+            <div class="nui-card px-4 py-3"
+                 :style="{ borderLeft: '3px solid ' + (t.type === 'success' ? 'var(--color-success)' : t.type === 'danger' ? 'var(--color-danger)' : 'var(--color-info)') }">
+                <div class="flex items-start justify-between gap-3">
+                    <p style="font-size: 14px;" x-text="t.message"></p>
+                    <button @click="dismiss(t.id)" style="color: var(--text-tertiary);">&times;</button>
+                </div>
+            </div>
+        </template>
+    </div>
+
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script defer src="/vendor/nema-ui-kit/js/ui-kit.js"></script>
+    @livewireScripts
 </body>
 </html>
