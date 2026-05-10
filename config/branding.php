@@ -71,6 +71,26 @@ return [
         ],
     ],
 
+    /*
+    | Keyword clusters for Brand Recall scanning.
+    | GoogleMapsReviewsFetcher reads this — never hardcode phrases in the class.
+    | Each cluster name becomes a key in keyword_hits['positive'|'negative'].
+    | Phrases are substring-matched (case-insensitive) against review text.
+    */
+    'recall_keyword_clusters' => [
+        'positive' => [
+            'cleanliness'  => ['harum', 'bersih', 'wangi', 'rapi', 'bersih banget'],
+            'timeliness'   => ['tepat waktu', 'tepat', 'cepat', 'on time', 'nggak lama', 'kilat'],
+            'friendliness' => ['ramah', 'sopan', 'baik', 'friendly', 'senyum'],
+            'satisfaction' => ['rekomen', 'rekomendasi', 'puas', 'senang', 'bagus', 'memuaskan', 'mantap'],
+        ],
+        'negative' => [
+            'lateness'     => ['telat', 'lambat', 'lama banget', 'kelamaan', 'nungguin', 'molor'],
+            'lost_clothes' => ['tertukar', 'hilang', 'rusak', 'robek', 'cacat', 'kurang'],
+            'no_response'  => ['tidak direspons', 'tidak balas', 'no respon', 'susah dihubungi', 'ga dibalas', 'gak dibalas'],
+        ],
+    ],
+
     'audit_retention_days' => 30,
 
     'photo_limits' => [

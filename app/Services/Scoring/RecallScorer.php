@@ -82,9 +82,27 @@ final class RecallScorer
         };
     }
 
-    /** +5 per positive cluster that has at least one matching keyword. */
+    /**
+     * +5 per positive cluster with at least one hit.
+     *
+     * Accepts two formats:
+     * - Structured (from GoogleMapsReviewsFetcher):
+     *     ['positive' => ['cleanliness' => 2, 'timeliness' => 0, ...], 'negative' => [...]]
+     * - Legacy flat list (synthetic tests): ['harum', 'tepat_waktu', 'ramah']
+     */
     private function calcKeywordScore(array $hits): int
     {
+        // Structured format — count clusters with at least 1 hit
+        if (array_key_exists('positive', $hits)) {
+            $clustersHit = count(array_filter(
+                (array) ($hits['positive'] ?? []),
+                static fn ($count) => (int) $count > 0,
+            ));
+
+            return min(20, $clustersHit * 5);
+        }
+
+        // Legacy flat format — match against POSITIVE_CLUSTERS constant
         $score = 0;
         foreach (self::POSITIVE_CLUSTERS as $keywords) {
             foreach ($keywords as $kw) {
