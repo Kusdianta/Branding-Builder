@@ -13,8 +13,7 @@ use Illuminate\Support\Facades\Log;
  *
  * Limits:
  * - Max 5 reviews per call (Places API New hard limit).
- * - owner_response_rate is always 0.0 — Places API New does not expose owner
- *   replies on reviews. Google My Business API would be needed; out of scope v1.
+ * - sampled_reviews carries per-review { text, rating } for saturation scoring.
  *
  * Caching: responses are cached by placeId for 24 h to respect API quota.
  * Retries: 429 responses trigger exponential back-off, up to 3 attempts.
@@ -33,9 +32,8 @@ final class GoogleMapsReviewsFetcher
      * @return array{
      *     rating: float,
      *     review_count: int,
-     *     owner_response_rate: float,
      *     keyword_hits: array{positive: array<string,int>, negative: array<string,int>},
-     *     recent_reviews: list<array{text: string, has_owner_response: bool}>,
+     *     sampled_reviews: list<array{text: string, rating: float}>,
      * }|null  null = place not found or unresolvable URL
      */
     public function fetch(string $gmapsUrl, string $brandName = ''): ?array
@@ -192,23 +190,19 @@ final class GoogleMapsReviewsFetcher
         $reviewCount = (int) ($data['userRatingCount'] ?? 0);
         $rawReviews  = is_array($data['reviews'] ?? null) ? $data['reviews'] : [];
 
-        $recentReviews = [];
+        $sampledReviews = [];
         foreach ($rawReviews as $r) {
-            $text = (string) ($r['text']['text'] ?? $r['originalText']['text'] ?? '');
-            $recentReviews[] = [
-                'text'               => $text,
-                'has_owner_response' => false, // not available via Places API New
+            $sampledReviews[] = [
+                'text'   => (string) ($r['text']['text'] ?? $r['originalText']['text'] ?? ''),
+                'rating' => (float) ($r['rating'] ?? 0.0),
             ];
         }
 
         return [
-            'rating'              => $rating,
-            'review_count'        => $reviewCount,
-            'owner_response_rate' => 0.0,
-            'keyword_hits'        => $this->scanKeywords(
-                array_column($recentReviews, 'text'),
-            ),
-            'recent_reviews'      => $recentReviews,
+            'rating'          => $rating,
+            'review_count'    => $reviewCount,
+            'keyword_hits'    => $this->scanKeywords(array_column($sampledReviews, 'text')),
+            'sampled_reviews' => $sampledReviews,
         ];
     }
 

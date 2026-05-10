@@ -1,32 +1,27 @@
-# Brand Recall — Structural Cap Note
+# Brand Recall — Scoring Notes
 
 **Filed:** 2026-05-10
-**Phase 4 context:** Smoke-tested against Less Worry Laundry (4.9★, 291 reviews)
+**Updated:** 2026-05-10 (Recall pillar redesigned — cap removed)
 
-## What happens
+## Scoring model
 
-`keyword_quality` and `review_management` sub-buckets both score **0** for almost every brand.
+Brand Recall is fully deterministic (no LLM scoring call). Sub-buckets (cap 100):
 
-| Sub-bucket | Cap | Why it's always 0 |
+| Sub-bucket | Cap | Source |
 |---|---|---|
-| `keyword_quality` | 20 | Places API (New) returns **max 5 reviews** per call. Those 5 rarely contain our keyword cluster phrases even when the brand has hundreds of positive reviews. |
-| `review_management` | 20 | Places API (New) does **not** expose owner reply data. `owner_response_rate` is always `0.0`. |
+| `rating_tier` | 35 | Overall Google Maps star rating |
+| `review_count_tier` | 25 | Total `userRatingCount` from Places API |
+| `keyword_saturation` | 25 | Share of sampled reviews containing ≥1 positive keyword phrase |
+| `sentiment_quality` | 15 | Avg star rating of sampled reviews |
 
-Net effect: Brand Recall is structurally capped at **60/100** (rating 35 + review_count 25) regardless of how well the brand actually manages its reviews or how keyword-rich its review corpus is.
+## Sampling tradeoff
 
-## Workaround in v1
+Places API (New) returns **max 5 reviews** per call. `keyword_saturation` and `sentiment_quality` are computed on this sample.
 
-None. The 0s are displayed but annotated in the UI as "data tidak tersedia via API" rather than penalising the brand score further. Both zero sub-buckets are excluded from the recommendations engine (since they reflect API gaps, not brand actions).
+**Assumption:** the 5-review sample is broadly representative of the brand's full review corpus.
 
-## Phase 4 polish item
+**Known limitation:** cannot detect recent-reviews-only quality drops. If a brand maintained a 4.9★ average historically but received 5 bad reviews in the past week, `rating_tier` still reflects the aggregate, while `sentiment_quality` may catch the recent signal (since Places API tends to return recent reviews). These two sub-buckets can diverge for brands with recent service incidents.
 
-**Replace Places API sampling with Apify Google Maps Reviews scraper (post-Phase-4):**
+## Phase 4 polish item (post-Phase-4)
 
-- Apify actor `compass/google-maps-reviews-scraper` returns up to 100+ reviews per call
-- Enables real keyword cluster analysis and owner-response-rate calculation
-- Estimated implementation: 1 slice (swap `GoogleMapsReviewsFetcher`, keep `RecallScorer` unchanged — it already accepts the structured `keyword_hits` format)
-- Cost: ~$0.10–0.30 per brand audit at 100 reviews
-
-## Impact when fixed
-
-Recall ceiling rises from 60 → 100. Brands with active review management and positive keyword-rich reviews will score meaningfully higher. Overall score ceiling rises from ~82 → ~100.
+Swap `GoogleMapsReviewsFetcher` to use the Apify Google Maps Reviews scraper (actor `compass/google-maps-reviews-scraper`) which returns 100+ reviews. `RecallScorer` requires no changes — it already accepts the `sampled_reviews: [{text, rating}]` contract. Larger sample improves saturation and sentiment accuracy at ~$0.10–0.30 per audit.

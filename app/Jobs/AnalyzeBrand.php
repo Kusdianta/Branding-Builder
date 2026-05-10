@@ -57,11 +57,11 @@ class AnalyzeBrand implements ShouldQueue
         // ── 2. Build per-pillar input payloads ────────────────────────────────
         $pillarInputs = [
             ScoringRubric::PILLAR_RECALL => [
-                'brand_name'          => $brandName,
-                'rating'              => $reviewData['rating'],
-                'review_count'        => $reviewData['review_count'],
-                'owner_response_rate' => $reviewData['owner_response_rate'],
-                'keyword_hits'        => $reviewData['keyword_hits'],
+                'brand_name'      => $brandName,
+                'rating'          => $reviewData['rating'],
+                'review_count'    => $reviewData['review_count'],
+                'keyword_hits'    => $reviewData['keyword_hits'],
+                'sampled_reviews' => $reviewData['sampled_reviews'],
             ],
             ScoringRubric::PILLAR_DIGITAL => array_merge(
                 $presence,
@@ -110,11 +110,10 @@ class AnalyzeBrand implements ShouldQueue
     private function fetchReviews(string $gmapsUrl, string $brandName): array
     {
         $fallback = [
-            'rating'              => 0.0,
-            'review_count'        => 0,
-            'owner_response_rate' => 0.0,
-            'keyword_hits'        => ['positive' => [], 'negative' => []],
-            'recent_reviews'      => [],
+            'rating'          => 0.0,
+            'review_count'    => 0,
+            'keyword_hits'    => ['positive' => [], 'negative' => []],
+            'sampled_reviews' => [],
         ];
 
         $googleMapsKey = (string) config('services.google.maps_api_key', '');

@@ -32,18 +32,18 @@ use App\Models\ScoringRubric;
 // =============================================================================
 // TEST BRAND — fill in before running
 // =============================================================================
-$BRAND_NAME    = 'Laundry Bersih Jaya';   // brand name for GMaps text-search fallback
-$INSTAGRAM_URL = '';                       // e.g. https://www.instagram.com/handle/
-$WEBSITE_URL   = '';                       // e.g. https://laundrybersih.com
-$GMAPS_URL     = '';                       // full or short Google Maps URL
-$WA_ACTIVE     = false;                   // true if WA Business is listed
-$TIKTOK_URL    = '';                       // nullable
+$BRAND_NAME    = 'Less Worry Laundry';
+$INSTAGRAM_URL = 'https://www.instagram.com/lessworry.id/';
+$WEBSITE_URL   = 'https://lessworry.id/';
+$GMAPS_URL     = 'https://maps.app.goo.gl/hyHayqtwyA2wBLK57';
+$WA_ACTIVE     = true;
+$TIKTOK_URL    = 'https://www.tiktok.com/@daily.lessworry';
 // =============================================================================
 
 echo "=== Slice 5 Smoke Test: {$BRAND_NAME} ===\n\n";
 
 // Google Maps API key from vault
-$googleMapsKey = (string) config('services.google_maps.key', '');
+$googleMapsKey = (string) config('services.google.maps_api_key', '');
 
 // ── Step 1: GMaps reviews ────────────────────────────────────────────────────
 echo "[1/5] Fetching Google Maps reviews…\n";
@@ -57,11 +57,10 @@ if ($googleMapsKey !== '' && $GMAPS_URL !== '') {
 if ($reviewData === null) {
     echo "      ⚠  GMaps fetch failed or API key missing — using synthetic fallback\n";
     $reviewData = [
-        'rating'              => 0.0,
-        'review_count'        => 0,
-        'owner_response_rate' => 0.0,
-        'keyword_hits'        => ['positive' => [], 'negative' => []],
-        'recent_reviews'      => [],
+        'rating'          => 0.0,
+        'review_count'    => 0,
+        'keyword_hits'    => ['positive' => [], 'negative' => []],
+        'sampled_reviews' => [],
     ];
 }
 
@@ -103,11 +102,11 @@ $claude = new ClaudeService();
 
 // — Recall (deterministic + narrative) —
 $recallInputs = [
-    'brand_name'          => $BRAND_NAME,
-    'rating'              => $reviewData['rating'],
-    'review_count'        => $reviewData['review_count'],
-    'owner_response_rate' => $reviewData['owner_response_rate'],
-    'keyword_hits'        => $reviewData['keyword_hits'],
+    'brand_name'      => $BRAND_NAME,
+    'rating'          => $reviewData['rating'],
+    'review_count'    => $reviewData['review_count'],
+    'keyword_hits'    => $reviewData['keyword_hits'],
+    'sampled_reviews' => $reviewData['sampled_reviews'],
 ];
 $recallScore = $claude->scorePillar(ScoringRubric::PILLAR_RECALL, $recallInputs);
 

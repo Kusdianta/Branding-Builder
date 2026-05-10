@@ -11,40 +11,33 @@ use App\Models\ScoringRubric;
  * Deterministic scorer for the Brand Recall pillar.
  * No LLM call — pure arithmetic against the canonical deck rubric.
  * ClaudeService wraps this and optionally appends an evidence narrative.
+ *
+ * Sub-buckets (total cap 100):
+ *   rating_tier        35  — overall Google star rating tier
+ *   review_count_tier  25  — volume of Google reviews
+ *   keyword_saturation 25  — share of sampled reviews containing ≥1 positive keyword
+ *   sentiment_quality  15  — avg star rating of sampled reviews
  */
 final class RecallScorer
 {
-    private const POSITIVE_CLUSTERS = [
-        'harum_bersih' => ['harum', 'bersih'],
-        'tepat_cepat'  => ['tepat', 'cepat', 'tepat_waktu'],  // fetcher may emit compound key
-        'ramah_sopan'  => ['ramah', 'sopan'],
-        'rekomen_puas' => ['rekomen', 'puas'],
-    ];
-
     /**
      * @param array{
      *     rating: float,
      *     review_count: int,
-     *     owner_response_rate: float,
-     *     keyword_hits: list<string>,
-     *     sop_keluhan_visible?: bool,
+     *     keyword_hits: array<string,mixed>,
+     *     sampled_reviews: list<array{text: string, rating: float}>,
      * } $inputs
      */
     public function score(array $inputs): PillarScore
     {
-        $ratingScore     = $this->calcRatingScore((float) $inputs['rating']);
-        $countScore      = $this->calcCountScore((int) $inputs['review_count']);
-        $keywordScore    = $this->calcKeywordScore((array) ($inputs['keyword_hits'] ?? []));
-        $managementScore = $this->calcManagementScore(
-            (float) ($inputs['owner_response_rate'] ?? 0.0),
-            (bool) ($inputs['sop_keluhan_visible'] ?? false),
-        );
+        $clusters       = (array) config('branding.recall_keyword_clusters', []);
+        $sampledReviews = (array) ($inputs['sampled_reviews'] ?? []);
 
         $subBuckets = [
-            'rating'            => $ratingScore,
-            'review_count'      => $countScore,
-            'keyword_quality'   => $keywordScore,
-            'review_management' => $managementScore,
+            'rating_tier'        => $this->calcRatingScore((float) $inputs['rating']),
+            'review_count_tier'  => $this->calcCountScore((int) $inputs['review_count']),
+            'keyword_saturation' => $this->keywordSaturation($sampledReviews, $clusters),
+            'sentiment_quality'  => $this->sentimentQuality($sampledReviews),
         ];
 
         $total = max(0, min(100, array_sum($subBuckets)));
@@ -83,51 +76,58 @@ final class RecallScorer
     }
 
     /**
-     * +5 per positive cluster with at least one hit.
+     * Count of sampled reviews containing ≥1 positive keyword phrase,
+     * divided by total sampled, scaled to 25 pts.
      *
-     * Accepts two formats:
-     * - Structured (from GoogleMapsReviewsFetcher):
-     *     ['positive' => ['cleanliness' => 2, 'timeliness' => 0, ...], 'negative' => [...]]
-     * - Legacy flat list (synthetic tests): ['harum', 'tepat_waktu', 'ramah']
+     * Scale: 5/5=25, 4/5=20, 3/5=15, 2/5=10, 1/5=5, 0/5=0
+     *
+     * @param list<array{text: string, rating: float}> $reviews
+     * @param array<string,mixed> $clusters
      */
-    private function calcKeywordScore(array $hits): int
+    private function keywordSaturation(array $reviews, array $clusters): int
     {
-        // Structured format — count clusters with at least 1 hit
-        if (array_key_exists('positive', $hits)) {
-            $clustersHit = count(array_filter(
-                (array) ($hits['positive'] ?? []),
-                static fn ($count) => (int) $count > 0,
-            ));
-
-            return min(20, $clustersHit * 5);
+        $total = count($reviews);
+        if ($total === 0) {
+            return 0;
         }
 
-        // Legacy flat format — match against POSITIVE_CLUSTERS constant
-        $score = 0;
-        foreach (self::POSITIVE_CLUSTERS as $keywords) {
-            foreach ($keywords as $kw) {
-                if (in_array($kw, $hits, true)) {
-                    $score += 5;
-                    break;
+        $phrases = array_merge(...array_values((array) ($clusters['positive'] ?? [])));
+
+        $hitsCount = 0;
+        foreach ($reviews as $review) {
+            $text = mb_strtolower((string) ($review['text'] ?? ''));
+            foreach ($phrases as $phrase) {
+                if (str_contains($text, mb_strtolower((string) $phrase))) {
+                    $hitsCount++;
+                    break; // count each review once
                 }
             }
         }
 
-        return min(20, $score);
+        $ratio = $hitsCount / $total;
+        return min(25, (int) round($ratio * 5) * 5);
     }
 
     /**
-     * Bases: balas semua (>=0.8) = 20, kadang (>0) = 10, never = 0.
-     * +5 SOP bonus can push above base but overall pillar still caps at 100.
+     * Average star rating of sampled reviews → 15-pt tier.
+     *
+     * @param list<array{text: string, rating: float}> $reviews
      */
-    private function calcManagementScore(float $responseRate, bool $sopVisible): int
+    private function sentimentQuality(array $reviews): int
     {
-        $base = match (true) {
-            $responseRate >= 0.8 => 20,
-            $responseRate > 0.0  => 10,
-            default              => 0,
-        };
+        $total = count($reviews);
+        if ($total === 0) {
+            return 0;
+        }
 
-        return $base + ($sopVisible ? 5 : 0);
+        $avg = array_sum(array_column($reviews, 'rating')) / $total;
+
+        return match (true) {
+            $avg >= 4.8 => 15,
+            $avg >= 4.5 => 12,
+            $avg >= 4.0 => 8,
+            $avg >= 3.5 => 4,
+            default     => 0,
+        };
     }
 }

@@ -50,16 +50,16 @@ return [
         'body'     => 'Minta setiap pelanggan puas meninggalkan ulasan di Google Maps {{brand_name}}. Kirim link ulasan via WhatsApp setelah pesanan selesai — target minimal 50 ulasan untuk meningkatkan visibilitas pencarian lokal secara signifikan.',
     ],
 
-    'review_management' => [
-        'priority' => 'tinggi',
-        'title'    => 'Balas Semua Ulasan dalam 24 Jam',
-        'body'     => 'Buat jadwal rutin membalas semua ulasan Google Maps {{brand_name}} dalam 24 jam — positif maupun negatif. Balasan yang personal dan spesifik meningkatkan persepsi profesionalisme dan membangun kepercayaan calon pelanggan baru.',
-    ],
-
-    'keyword_quality' => [
+    'keyword_saturation' => [
         'priority' => 'penting',
         'title'    => 'Arahkan Pelanggan Menulis Ulasan Spesifik',
         'body'     => 'Minta pelanggan menyebutkan hal spesifik dalam ulasan mereka: "bersih", "harum", "tepat waktu", atau "ramah". Contoh pertanyaan di WhatsApp: "Bagaimana pengalaman kebersihan dan kecepatan pelayanan {{brand_name}} hari ini?" — ulasan dengan kata kunci spesifik meningkatkan brand recall di pencarian lokal.',
+    ],
+
+    'sentiment_quality' => [
+        'priority' => 'tinggi',
+        'title'    => 'Perbaiki Kualitas Layanan yang Dikeluhkan',
+        'body'     => 'Rating rata-rata ulasan terbaru {{brand_name}} menunjukkan ketidakpuasan pelanggan. Identifikasi keluhan berulang dan buat action plan 30 hari: standar waktu pengerjaan, pengecekan kualitas sebelum serah terima, dan prosedur follow-up kepuasan pelanggan.',
     ],
 
     // ── Experience ────────────────────────────────────────────────────────────

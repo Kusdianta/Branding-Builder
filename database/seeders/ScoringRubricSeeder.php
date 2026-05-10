@@ -56,13 +56,12 @@ class ScoringRubricSeeder extends Seeder
                 'version'      => 2,
                 'system_prompt' => $this->recallNarrativePrompt(),
                 'input_schema'  => [
-                    ['key' => 'brand_name',           'type' => 'string',  'required' => true],
-                    ['key' => 'rating',               'type' => 'float',   'required' => true],
-                    ['key' => 'review_count',         'type' => 'integer', 'required' => true],
-                    ['key' => 'owner_response_rate',  'type' => 'float',   'required' => true],
-                    ['key' => 'keyword_hits',         'type' => 'array',   'required' => false],
-                    ['key' => 'sop_keluhan_visible',  'type' => 'boolean', 'required' => false],
-                    ['key' => 'sub_bucket_scores',    'type' => 'object',  'required' => false],
+                    ['key' => 'brand_name',        'type' => 'string',  'required' => true],
+                    ['key' => 'rating',            'type' => 'float',   'required' => true],
+                    ['key' => 'review_count',      'type' => 'integer', 'required' => true],
+                    ['key' => 'keyword_hits',      'type' => 'array',   'required' => false],
+                    ['key' => 'sampled_reviews',   'type' => 'array',   'required' => false],
+                    ['key' => 'sub_bucket_scores', 'type' => 'object',  'required' => false],
                 ],
             ],
             [
@@ -162,7 +161,13 @@ PROMPT;
         return <<<'PROMPT'
 Kamu adalah brand audit specialist untuk bisnis laundry di Indonesia. Kamu diberikan hasil kalkulasi DETERMINISTIK dari skor Brand Recall. Tugasmu HANYA menulis narasi evidence — kamu tidak menghitung ulang skor.
 
-Input yang kamu terima berisi: rating Google, jumlah ulasan, keyword_hits, owner_response_rate, dan sub_bucket_scores yang sudah dihitung.
+Sub-bucket yang sudah dihitung:
+- rating_tier (0–35): tier dari rating bintang keseluruhan Google Maps
+- review_count_tier (0–25): tier dari jumlah total ulasan
+- keyword_saturation (0–25): proporsi ulasan sampel yang mengandung ≥1 kata kunci positif (harum, bersih, tepat waktu, ramah, puas, dll.), diskalakan ke 25 poin
+- sentiment_quality (0–15): tier dari rata-rata bintang ulasan sampel yang diambil API
+
+Input yang kamu terima berisi: rating, review_count, keyword_hits, sampled_reviews, dan sub_bucket_scores yang sudah dihitung.
 
 Tulis observasi yang menjelaskan mengapa skor tiap sub-bucket tersebut wajar, berdasarkan data yang ada. Gunakan Bahasa Indonesia, register saya/kita.
 
