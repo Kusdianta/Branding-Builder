@@ -31,15 +31,18 @@ new class extends Component {
     public array $outletPhotosInner = [];
 
     // Audit results
-    public ?string $auditId         = null;
-    public string  $auditStatus     = '';
-    public ?int    $overallScore    = null;
-    public ?string $overallLabel    = null;
-    public array   $pillarScores    = [];
-    public array   $subBucketScores = [];
-    public array   $keyFindings     = [];
-    public array   $recommendations = [];
-    public ?string $errorMessage    = null;
+    public ?string $auditId            = null;
+    public ?string $sessionToken       = null;
+    public string  $auditStatus        = '';
+    public ?int    $overallScore       = null;
+    public ?string $overallLabel       = null;
+    public array   $pillarScores       = [];
+    public array   $subBucketScores    = [];
+    public array   $keyFindings        = [];
+    public array   $recommendations    = [];
+    public ?string $errorMessage       = null;
+    public ?string $activationKitPath  = null;
+    public bool    $kitGenerating      = false;
 
     // Modal
     public bool    $showModal   = false;
@@ -92,16 +95,23 @@ new class extends Component {
 
     private function loadAudit(BrandAudit $audit): void
     {
-        $this->auditId         = $audit->id;
-        $this->auditStatus     = $audit->status;
-        $this->brandName       = $audit->brand_name ?? '';
-        $this->overallScore    = $audit->overall_score;
-        $this->overallLabel    = $audit->overall_label;
-        $this->pillarScores    = $audit->pillar_scores ?? [];
-        $this->subBucketScores = $audit->sub_bucket_scores ?? [];
-        $this->keyFindings     = $audit->key_findings ?? [];
-        $this->recommendations = $audit->recommendations ?? [];
-        $this->errorMessage    = $audit->error_message;
+        $this->auditId           = $audit->id;
+        $this->sessionToken      = $audit->session_token;
+        $this->auditStatus       = $audit->status;
+        $this->brandName         = $audit->brand_name ?? '';
+        $this->overallScore      = $audit->overall_score;
+        $this->overallLabel      = $audit->overall_label;
+        $this->pillarScores      = $audit->pillar_scores ?? [];
+        $this->subBucketScores   = $audit->sub_bucket_scores ?? [];
+        $this->keyFindings       = $audit->key_findings ?? [];
+        $this->recommendations   = $audit->recommendations ?? [];
+        $this->errorMessage      = $audit->error_message;
+        $this->activationKitPath = $audit->activation_kit_path;
+
+        // Stop showing the spinner once the file has actually landed.
+        if ($this->activationKitPath) {
+            $this->kitGenerating = false;
+        }
 
         $this->step = match ($audit->status) {
             'done', 'failed' => 'dashboard',
@@ -195,6 +205,34 @@ new class extends Component {
     {
         $this->modalPillar = null;
         $this->dispatch('close-modal-recommendations');
+    }
+
+    public function generateKit(): void
+    {
+        if (! $this->auditId) {
+            return;
+        }
+
+        $audit = BrandAudit::find($this->auditId);
+        if (! $audit || ! $audit->isComplete()) {
+            return;
+        }
+
+        $this->kitGenerating = true;
+        \App\Jobs\GenerateActivationKit::dispatch($audit);
+    }
+
+    public function checkKit(): void
+    {
+        if (! $this->kitGenerating || ! $this->auditId) {
+            return;
+        }
+
+        $audit = BrandAudit::find($this->auditId);
+        if ($audit && $audit->activation_kit_path) {
+            $this->activationKitPath = $audit->activation_kit_path;
+            $this->kitGenerating     = false;
+        }
     }
 
     public function with(): array
@@ -578,19 +616,42 @@ new class extends Component {
                     <p style="font-size: 13px; color: var(--text-tertiary); margin-bottom: 4px;">Hasil Brand Health Check</p>
                     <h2 style="font-size: 26px; font-weight: 600; color: var(--text-primary);">{{ $brandName }}</h2>
                 </div>
-                <div class="flex items-center gap-3 flex-wrap">
+                <div class="flex items-center gap-3 flex-wrap" @if ($kitGenerating) wire:poll.3000ms="checkKit" @endif>
                     <a href="{{ route('home') }}" style="font-size: 13px; color: var(--chimera-600); text-decoration: underline;">
                         Analisis brand lain
                     </a>
-                    <button
-                        disabled
-                        title="Segera hadir"
-                        style="display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border-default); border-radius: var(--radius-pill); padding: 8px 16px; font-size: 13px; font-weight: 500; color: var(--text-tertiary); background: var(--surface-muted); cursor: not-allowed; opacity: 0.65;"
-                    >
-                        <i class="ti ti-file-text"></i>
-                        Buat Activation Kit
-                        <span style="font-size: 10px; background: var(--chimera-50); color: var(--chimera-700); border-radius: var(--radius-pill); padding: 1px 7px; margin-left: 2px;">Segera</span>
-                    </button>
+
+                    @if ($activationKitPath && $sessionToken)
+                        <a
+                            href="{{ route('audit.kit.download', ['token' => $sessionToken]) }}"
+                            class="nui-btn-primary rounded-pill"
+                            style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; font-size: 13px; font-weight: 500;"
+                        >
+                            <i class="ti ti-download"></i>
+                            Download Activation Kit (PDF)
+                        </a>
+                    @elseif ($kitGenerating)
+                        <span
+                            style="display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--border-default); border-radius: var(--radius-pill); padding: 8px 16px; font-size: 13px; font-weight: 500; color: var(--text-secondary); background: var(--surface-muted);"
+                        >
+                            <span style="width: 14px; height: 14px; border: 2px solid var(--chimera-200); border-top-color: var(--chimera-500); border-radius: 50%; display: inline-block; animation: baw-spin .8s linear infinite;"></span>
+                            Membuat activation kit...
+                        </span>
+                    @else
+                        <button
+                            type="button"
+                            wire:click="generateKit"
+                            wire:loading.attr="disabled"
+                            wire:target="generateKit"
+                            class="nui-btn-primary rounded-pill"
+                            style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; font-size: 13px; font-weight: 500;"
+                        >
+                            <span wire:loading.remove wire:target="generateKit">
+                                <i class="ti ti-file-text"></i> Buat Activation Kit (PDF)
+                            </span>
+                            <span wire:loading wire:target="generateKit">Memulai...</span>
+                        </button>
+                    @endif
                 </div>
             </div>
 
