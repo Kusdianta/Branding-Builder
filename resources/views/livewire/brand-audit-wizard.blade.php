@@ -188,22 +188,23 @@ new class extends Component {
     public function openModal(string $pillar): void
     {
         $this->modalPillar = $pillar;
-        $this->showModal   = true;
+        $this->dispatch('open-modal-recommendations');
     }
 
     public function closeModal(): void
     {
-        $this->showModal   = false;
         $this->modalPillar = null;
+        $this->dispatch('close-modal-recommendations');
     }
 
     public function with(): array
     {
+        // 2x2 grid order: Konsistensi TL, Recall TR, Experience BL, Digital BR
         $pillarMeta = [
-            'brand-recall'      => ['label' => 'Brand Recall',      'icon' => 'ti-message-star'],
-            'digital-presence'  => ['label' => 'Digital Presence',  'icon' => 'ti-world'],
             'brand-konsistensi' => ['label' => 'Konsistensi Brand', 'icon' => 'ti-layers-intersect'],
+            'brand-recall'      => ['label' => 'Brand Recall',      'icon' => 'ti-message-star'],
             'brand-experience'  => ['label' => 'Brand Experience',  'icon' => 'ti-users'],
+            'digital-presence'  => ['label' => 'Digital Presence',  'icon' => 'ti-world'],
         ];
 
         $subBucketLabels = [
@@ -559,25 +560,23 @@ new class extends Component {
     {{-- ===== STEP 3: DASHBOARD ===== --}}
     @if ($step === 'dashboard')
         @php
-            $circ      = 263.89;
-            $filled    = $overallScore ? round(($overallScore / 100) * $circ, 2) : 0;
-            $scoreClr  = match (true) {
-                ($overallScore ?? 0) >= 80 => 'var(--chimera-500)',
-                ($overallScore ?? 0) >= 60 => 'var(--color-warning)',
-                default                    => 'var(--color-danger)',
+            $tierColor = static fn (?int $s): string => match (true) {
+                ($s ?? 0) >= 70 => 'var(--chimera-500)',
+                ($s ?? 0) >= 50 => 'var(--color-warning)',
+                default         => 'var(--color-danger)',
             };
+            $circ     = 263.89;
+            $filled   = $overallScore ? round(($overallScore / 100) * $circ, 2) : 0;
+            $scoreClr = $tierColor($overallScore);
         @endphp
 
-        <div class="max-w-4xl mx-auto">
+        <div class="max-w-5xl mx-auto pb-16">
 
             {{-- Header --}}
-            <div class="flex items-start justify-between mb-8 flex-wrap gap-4">
+            <div class="flex items-start justify-between mb-10 flex-wrap gap-4">
                 <div>
                     <p style="font-size: 13px; color: var(--text-tertiary); margin-bottom: 4px;">Hasil Brand Health Check</p>
                     <h2 style="font-size: 26px; font-weight: 600; color: var(--text-primary);">{{ $brandName }}</h2>
-                    @if ($overallLabel)
-                        <p style="font-size: 14px; color: var(--text-secondary); margin-top: 4px;">{{ $overallLabel }}</p>
-                    @endif
                 </div>
                 <div class="flex items-center gap-3 flex-wrap">
                     <a href="{{ route('home') }}" style="font-size: 13px; color: var(--chimera-600); text-decoration: underline;">
@@ -596,97 +595,64 @@ new class extends Component {
             </div>
 
             @if ($auditStatus === 'failed')
-                <div class="nui-card p-6" style="border-left: 3px solid var(--color-danger);">
-                    <p style="font-weight: 500; color: var(--color-danger); margin-bottom: 4px;">Analisis gagal</p>
-                    @if ($errorMessage)
-                        <p style="font-size: 13px; color: var(--text-secondary);">{{ $errorMessage }}</p>
-                    @endif
-                    <a href="{{ route('home') }}" style="font-size: 13px; color: var(--chimera-600); text-decoration: underline; margin-top: 12px; display: inline-block;">
-                        Coba lagi
-                    </a>
-                </div>
+                <x-nui-card>
+                    <div style="border-left: 3px solid var(--color-danger); padding-left: 16px;">
+                        <p style="font-weight: 500; color: var(--color-danger); margin-bottom: 4px;">Analisis gagal</p>
+                        @if ($errorMessage)
+                            <p style="font-size: 13px; color: var(--text-secondary);">{{ $errorMessage }}</p>
+                        @endif
+                        <a href="{{ route('home') }}" style="font-size: 13px; color: var(--chimera-600); text-decoration: underline; margin-top: 12px; display: inline-block;">
+                            Coba lagi
+                        </a>
+                    </div>
+                </x-nui-card>
             @else
 
-                {{-- Overall score card --}}
-                <div class="nui-card p-8 mb-6">
-                    <div class="flex flex-col sm:flex-row items-center gap-8">
-                        <div class="flex-shrink-0" style="position: relative; width: 140px; height: 140px;">
-                            <svg viewBox="0 0 100 100" style="width: 140px; height: 140px;">
-                                <circle cx="50" cy="50" r="42" fill="none" stroke="var(--chimera-50)" stroke-width="8"/>
-                                <circle
-                                    cx="50" cy="50" r="42"
-                                    fill="none"
-                                    stroke="{{ $scoreClr }}"
-                                    stroke-width="8"
-                                    stroke-dasharray="{{ $filled }} {{ $circ }}"
-                                    stroke-linecap="round"
-                                    transform="rotate(-90 50 50)"
-                                />
-                            </svg>
-                            <div style="position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;">
-                                <span style="font-size: 32px; font-weight: 700; color: {{ $scoreClr }}; line-height: 1;">{{ $overallScore ?? '—' }}</span>
-                                <span style="font-size: 12px; color: var(--text-tertiary);">dari 100</span>
-                            </div>
-                        </div>
-
-                        <div class="flex-1">
-                            <p style="font-size: 13px; color: var(--text-tertiary); margin-bottom: 4px;">Skor Keseluruhan</p>
-                            <p style="font-size: 22px; font-weight: 600; color: var(--text-primary); margin-bottom: 12px;">
-                                {{ $overallLabel ?? '—' }}
-                            </p>
-                            @if (count($keyFindings) > 0)
-                                <div class="flex flex-col gap-2">
-                                    @foreach (array_slice($keyFindings, 0, 3) as $finding)
-                                        @php
-                                            $impact = is_array($finding) ? ($finding['impact'] ?? 'neutral') : 'neutral';
-                                            $obs    = is_array($finding) ? ($finding['observation'] ?? '') : (string) $finding;
-                                            $iconClr = match ($impact) {
-                                                'positive' => 'var(--chimera-500)',
-                                                'negative' => 'var(--color-danger)',
-                                                default    => 'var(--text-tertiary)',
-                                            };
-                                            $icon = match ($impact) {
-                                                'positive' => 'ti-circle-check-filled',
-                                                'negative' => 'ti-alert-circle-filled',
-                                                default    => 'ti-point-filled',
-                                            };
-                                        @endphp
-                                        <div class="flex items-start gap-2" style="font-size: 13px; color: var(--text-secondary);">
-                                            <i class="ti {{ $icon }}" style="color: {{ $iconClr }}; font-size: 13px; margin-top: 2px; flex-shrink: 0;"></i>
-                                            <span>{{ $obs }}</span>
-                                        </div>
-                                    @endforeach
-                                    @if (count($keyFindings) > 3)
-                                        <p style="font-size: 12px; color: var(--text-tertiary);">+{{ count($keyFindings) - 3 }} temuan lainnya di bawah</p>
-                                    @endif
-                                </div>
-                            @endif
+                {{-- ===== Overall score ring (centered, top of dashboard) ===== --}}
+                <div class="max-w-md mx-auto mb-12 text-center">
+                    <div style="position: relative; width: 220px; height: 220px; margin: 0 auto;">
+                        <svg viewBox="0 0 100 100" style="width: 220px; height: 220px;">
+                            <circle cx="50" cy="50" r="42" fill="none" stroke="var(--chimera-50)" stroke-width="7"/>
+                            <circle
+                                cx="50" cy="50" r="42"
+                                fill="none"
+                                stroke="{{ $scoreClr }}"
+                                stroke-width="7"
+                                stroke-dasharray="{{ $filled }} {{ $circ }}"
+                                stroke-linecap="round"
+                                transform="rotate(-90 50 50)"
+                            />
+                        </svg>
+                        <div style="position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+                            <span style="font-size: 56px; font-weight: 700; line-height: 1; color: {{ $scoreClr }}; font-family: var(--font-display);">{{ $overallScore ?? '—' }}</span>
+                            <span style="font-size: 12px; color: var(--text-tertiary); margin-top: 4px;">dari 100</span>
                         </div>
                     </div>
+                    @if ($overallLabel)
+                        <p style="font-size: 18px; font-weight: 600; color: var(--text-primary); margin-top: 16px;">
+                            {{ $overallLabel }}
+                        </p>
+                    @endif
                 </div>
 
-                {{-- Pillar cards --}}
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+                {{-- ===== 2x2 pillar grid ===== --}}
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12">
                     @foreach ($pillarMeta as $slug => $meta)
                         @php
-                            $ps = $pillarScoreInts[$slug] ?? null;
-                            $pc = match (true) {
-                                ($ps ?? 0) >= 80 => 'var(--chimera-500)',
-                                ($ps ?? 0) >= 60 => 'var(--color-warning)',
-                                default          => 'var(--color-danger)',
-                            };
-                            $sbs = $subBucketScores[$slug] ?? [];
+                            $ps      = $pillarScoreInts[$slug] ?? null;
+                            $pc      = $tierColor($ps);
+                            $sbs     = $subBucketScores[$slug] ?? [];
                             $hasRecs = ($recsByPillar[$slug] ?? 0) > 0;
                         @endphp
-                        <div class="nui-card p-6">
+                        <x-nui-card>
                             <div class="flex items-center justify-between mb-4">
-                                <div class="flex items-center gap-2">
-                                    <div style="width: 32px; height: 32px; border-radius: var(--radius-sm); background: var(--chimera-50); display: flex; align-items: center; justify-content: center;">
-                                        <i class="ti {{ $meta['icon'] }}" style="color: var(--chimera-500); font-size: 16px;"></i>
+                                <div class="flex items-center gap-3">
+                                    <div style="width: 36px; height: 36px; border-radius: var(--radius-md); background: var(--chimera-50); display: flex; align-items: center; justify-content: center;">
+                                        <i class="ti {{ $meta['icon'] }}" style="color: var(--chimera-600); font-size: 18px;"></i>
                                     </div>
-                                    <span style="font-size: 14px; font-weight: 600; color: var(--text-primary);">{{ $meta['label'] }}</span>
+                                    <span style="font-size: 15px; font-weight: 600; color: var(--text-primary);">{{ $meta['label'] }}</span>
                                 </div>
-                                <span style="font-size: 24px; font-weight: 700; color: {{ $pc }};">{{ $ps ?? '—' }}</span>
+                                <span style="font-size: 28px; font-weight: 700; color: {{ $pc }}; line-height: 1;">{{ $ps ?? '—' }}</span>
                             </div>
 
                             <div style="height: 6px; background: var(--chimera-50); border-radius: 999px; margin-bottom: 16px;">
@@ -706,47 +672,54 @@ new class extends Component {
 
                             @if ($hasRecs)
                                 <button
+                                    type="button"
                                     wire:click="openModal('{{ $slug }}')"
-                                    style="font-size: 12px; color: var(--chimera-600); text-decoration: underline; background: none; border: none; cursor: pointer; padding: 0;"
+                                    style="font-size: 13px; font-weight: 500; color: var(--chimera-600); text-decoration: none; background: none; border: none; cursor: pointer; padding: 0; display: inline-flex; align-items: center; gap: 4px;"
+                                    onmouseover="this.style.textDecoration='underline'"
+                                    onmouseout="this.style.textDecoration='none'"
                                 >
-                                    Lihat rekomendasi <i class="ti ti-arrow-right" style="font-size: 11px;"></i>
+                                    Lihat rekomendasi <i class="ti ti-arrow-right" style="font-size: 13px;"></i>
                                 </button>
                             @endif
-                        </div>
+                        </x-nui-card>
                     @endforeach
                 </div>
 
-                @if (count($keyFindings) > 3)
-                    <div class="nui-card p-6">
-                        <p style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: var(--text-primary);">Semua Temuan</p>
-                        <div class="flex flex-col gap-3">
-                            @foreach ($keyFindings as $finding)
-                                @php
-                                    $impact = is_array($finding) ? ($finding['impact'] ?? 'neutral') : 'neutral';
-                                    $obs    = is_array($finding) ? ($finding['observation'] ?? '') : (string) $finding;
-                                    $tp     = is_array($finding) ? ($finding['touchpoint'] ?? null) : null;
-                                    $iconClr = match ($impact) {
-                                        'positive' => 'var(--chimera-500)',
-                                        'negative' => 'var(--color-danger)',
-                                        default    => 'var(--text-tertiary)',
-                                    };
-                                    $icon = match ($impact) {
-                                        'positive' => 'ti-circle-check-filled',
-                                        'negative' => 'ti-alert-circle-filled',
-                                        default    => 'ti-point-filled',
-                                    };
-                                @endphp
-                                <div class="flex items-start gap-2" style="font-size: 13px; color: var(--text-secondary);">
-                                    <i class="ti {{ $icon }}" style="color: {{ $iconClr }}; font-size: 13px; margin-top: 2px; flex-shrink: 0;"></i>
-                                    <div>
-                                        <span>{{ $obs }}</span>
+                {{-- ===== Temuan Utama ===== --}}
+                @if (count($keyFindings) > 0)
+                    <div class="mb-4">
+                        <h3 style="font-size: 18px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px;">Temuan Utama</h3>
+                        <p style="font-size: 13px; color: var(--text-secondary);">Hal-hal positif yang perlu dipertahankan dan area yang perlu diperhatikan.</p>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-12">
+                        @foreach ($keyFindings as $finding)
+                            @php
+                                $impact = is_array($finding) ? ($finding['impact'] ?? 'neutral') : 'neutral';
+                                $obs    = is_array($finding) ? ($finding['observation'] ?? '') : (string) $finding;
+                                $tp     = is_array($finding) ? ($finding['touchpoint'] ?? null) : null;
+                                $isPositive = $impact === 'positive';
+                                $borderClr  = $isPositive ? 'var(--color-success)' : 'var(--color-warning)';
+                                $tagClr     = $isPositive ? 'var(--chimera-700)' : 'var(--color-warning)';
+                                $tagBg      = $isPositive ? 'var(--chimera-50)' : '#FEF3DC';
+                                $tagLabel   = $isPositive ? 'Positif' : 'Perlu perhatian';
+                                $iconName   = $isPositive ? 'ti-circle-check-filled' : 'ti-alert-triangle-filled';
+                            @endphp
+                            <x-nui-card padding="none" :class="''">
+                                <div style="border-left: 4px solid {{ $borderClr }}; padding: 20px 22px; border-radius: var(--radius-lg);">
+                                    <div class="flex items-center gap-2 mb-2">
+                                        <i class="ti {{ $iconName }}" style="color: {{ $borderClr }}; font-size: 14px;"></i>
+                                        <span style="font-size: 11px; font-weight: 500; color: {{ $tagClr }}; background: {{ $tagBg }}; border-radius: var(--radius-pill); padding: 2px 10px;">
+                                            {{ $tagLabel }}
+                                        </span>
                                         @if ($tp)
-                                            <span style="font-size: 11px; color: var(--text-tertiary); margin-left: 6px;">[{{ $tp }}]</span>
+                                            <span style="font-size: 11px; color: var(--text-tertiary); margin-left: auto;">{{ $tp }}</span>
                                         @endif
                                     </div>
+                                    <p style="font-size: 13px; color: var(--text-secondary); line-height: 1.6;">{{ $obs }}</p>
                                 </div>
-                            @endforeach
-                        </div>
+                            </x-nui-card>
+                        @endforeach
                     </div>
                 @endif
 
@@ -754,71 +727,64 @@ new class extends Component {
         </div>
     @endif
 
-    {{-- ===== MODAL: RECOMMENDATIONS ===== --}}
-    @if ($showModal && $modalPillar)
-        <div
-            style="position: fixed; inset: 0; background: rgba(15,20,17,0.5); z-index: 50; display: flex; align-items: center; justify-content: center; padding: 16px;"
-            wire:click.self="closeModal"
-        >
-            <div style="background: var(--surface-card); border-radius: var(--radius-xl); max-width: 520px; width: 100%; max-height: 80vh; overflow-y: auto; box-shadow: var(--shadow-popover);">
-
-                <div style="padding: 24px; border-bottom: 1px solid var(--border-default); display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; background: var(--surface-card); border-radius: var(--radius-xl) var(--radius-xl) 0 0;">
-                    <div>
-                        <p style="font-size: 12px; color: var(--text-tertiary); margin-bottom: 2px;">Rekomendasi</p>
-                        <h3 style="font-size: 17px; font-weight: 600; color: var(--text-primary);">
-                            {{ $pillarMeta[$modalPillar]['label'] ?? $modalPillar }}
-                        </h3>
-                    </div>
-                    <button
-                        wire:click="closeModal"
-                        style="width: 32px; height: 32px; border-radius: var(--radius-sm); border: 1px solid var(--border-default); background: none; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--text-secondary);"
-                    >
-                        <i class="ti ti-x" style="font-size: 16px;"></i>
-                    </button>
+    {{-- ===== MODAL: RECOMMENDATIONS (kit-driven, only visible when triggered) ===== --}}
+    <x-nui-modal name="recommendations" maxWidth="lg">
+        @if ($modalPillar)
+            <div class="flex items-start justify-between" style="margin-bottom: 20px;">
+                <div>
+                    <p style="font-size: 12px; color: var(--text-tertiary); margin-bottom: 2px;">Rekomendasi</p>
+                    <h3 style="font-size: 18px; font-weight: 600; color: var(--text-primary);">
+                        {{ $pillarMeta[$modalPillar]['label'] ?? $modalPillar }}
+                    </h3>
                 </div>
-
-                <div style="padding: 24px;">
-                    @if (count($modalRecs) === 0)
-                        <p style="font-size: 14px; color: var(--text-secondary);">Tidak ada rekomendasi spesifik untuk pilar ini.</p>
-                    @else
-                        <div class="flex flex-col gap-5">
-                            @foreach ($modalRecs as $i => $rec)
-                                @php
-                                    $prio      = $rec['priority'] ?? 'opsional';
-                                    $prioClr   = match ($prio) {
-                                        'tinggi'  => 'var(--color-danger)',
-                                        'penting' => 'var(--color-warning)',
-                                        default   => 'var(--text-tertiary)',
-                                    };
-                                    $prioLabel = match ($prio) {
-                                        'tinggi'  => 'Prioritas Tinggi',
-                                        'penting' => 'Penting',
-                                        default   => 'Opsional',
-                                    };
-                                    $bucketLabel = $subBucketLabels[$rec['bucket'] ?? ''] ?? ($rec['bucket'] ?? '');
-                                @endphp
-                                <div @if ($i < count($modalRecs) - 1) style="padding-bottom: 20px; border-bottom: 1px solid var(--border-default);" @endif>
-                                    <div class="flex items-center gap-2" style="margin-bottom: 8px; flex-wrap: wrap;">
-                                        <span style="font-size: 11px; font-weight: 500; color: {{ $prioClr }}; background: var(--surface-muted); border-radius: var(--radius-pill); padding: 2px 8px; border: 1px solid {{ $prioClr }};">
-                                            {{ $prioLabel }}
-                                        </span>
-                                        @if ($bucketLabel)
-                                            <span style="font-size: 11px; color: var(--text-tertiary);">{{ $bucketLabel }}</span>
-                                        @endif
-                                        @if (isset($rec['gap']))
-                                            <span style="font-size: 11px; color: var(--text-tertiary);">· gap {{ $rec['gap'] }} pt</span>
-                                        @endif
-                                    </div>
-                                    <p style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 6px;">{{ $rec['title'] ?? '' }}</p>
-                                    <p style="font-size: 13px; color: var(--text-secondary); line-height: 1.65;">{{ $rec['body'] ?? '' }}</p>
-                                </div>
-                            @endforeach
-                        </div>
-                    @endif
-                </div>
-
+                <button
+                    type="button"
+                    @click="$dispatch('close-modal-recommendations'); $wire.closeModal()"
+                    style="width: 32px; height: 32px; border-radius: var(--radius-sm); border: 1px solid var(--border-default); background: none; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--text-secondary);"
+                    aria-label="Tutup"
+                >
+                    <i class="ti ti-x" style="font-size: 16px;"></i>
+                </button>
             </div>
-        </div>
-    @endif
+
+            @if (count($modalRecs) === 0)
+                <p style="font-size: 14px; color: var(--text-secondary);">Tidak ada rekomendasi spesifik untuk pilar ini.</p>
+            @else
+                <div class="flex flex-col gap-5">
+                    @foreach ($modalRecs as $i => $rec)
+                        @php
+                            $prio      = $rec['priority'] ?? 'opsional';
+                            $prioClr   = match ($prio) {
+                                'tinggi'  => 'var(--color-danger)',
+                                'penting' => 'var(--color-warning)',
+                                default   => 'var(--text-tertiary)',
+                            };
+                            $prioLabel = match ($prio) {
+                                'tinggi'  => 'Prioritas Tinggi',
+                                'penting' => 'Penting',
+                                default   => 'Opsional',
+                            };
+                            $bucketLabel = $subBucketLabels[$rec['bucket'] ?? ''] ?? ($rec['bucket'] ?? '');
+                        @endphp
+                        <div @if ($i < count($modalRecs) - 1) style="padding-bottom: 20px; border-bottom: 1px solid var(--border-default);" @endif>
+                            <div class="flex items-center gap-2" style="margin-bottom: 8px; flex-wrap: wrap;">
+                                <span style="font-size: 11px; font-weight: 500; color: {{ $prioClr }}; background: var(--surface-muted); border-radius: var(--radius-pill); padding: 2px 10px; border: 1px solid {{ $prioClr }};">
+                                    {{ $prioLabel }}
+                                </span>
+                                @if ($bucketLabel)
+                                    <span style="font-size: 11px; color: var(--text-tertiary);">{{ $bucketLabel }}</span>
+                                @endif
+                                @if (isset($rec['gap']))
+                                    <span style="font-size: 11px; color: var(--text-tertiary);">· gap {{ $rec['gap'] }} pt</span>
+                                @endif
+                            </div>
+                            <p style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 6px;">{{ $rec['title'] ?? '' }}</p>
+                            <p style="font-size: 13px; color: var(--text-secondary); line-height: 1.65;">{{ $rec['body'] ?? '' }}</p>
+                        </div>
+                    @endforeach
+                </div>
+            @endif
+        @endif
+    </x-nui-modal>
 
 </div>
