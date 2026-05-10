@@ -5,6 +5,7 @@
 @source '../**/*.blade.php';
 @source '../**/*.js';
 @source '../../app/Livewire/**/*.php';
+@source '../../../nema-ui-kit/resources/views/**/*.blade.php';
 
 @theme {
     --font-sans: 'Geist', ui-sans-serif, system-ui, sans-serif;

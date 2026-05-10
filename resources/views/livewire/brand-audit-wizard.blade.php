@@ -352,7 +352,7 @@ new class extends Component {
                     </div>
 
                     {{-- URL inputs --}}
-                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
                         <x-nui-form-input
                             name="gmapsUrl"
                             label="Google Maps"
@@ -660,11 +660,11 @@ new class extends Component {
                             </div>
 
                             @if (count($sbs) > 0)
-                                <div class="flex flex-col gap-1.5 mb-4">
+                                <div class="flex flex-col mb-4" style="border-top: 1px solid var(--border-default);">
                                     @foreach ($sbs as $k => $v)
-                                        <div class="flex justify-between items-center">
+                                        <div class="flex justify-between items-center py-2" style="border-bottom: 1px solid var(--border-default);">
                                             <span style="font-size: 12px; color: var(--text-secondary);">{{ $subBucketLabels[$k] ?? $k }}</span>
-                                            <span style="font-size: 12px; font-weight: 500; color: var(--text-primary);">{{ $v }}</span>
+                                            <span style="font-size: 13px; font-weight: 500; color: var(--text-primary);">{{ $v }}</span>
                                         </div>
                                     @endforeach
                                 </div>
