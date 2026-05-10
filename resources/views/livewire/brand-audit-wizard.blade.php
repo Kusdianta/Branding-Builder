@@ -698,8 +698,8 @@ new class extends Component {
                     @endif
                 </div>
 
-                {{-- ===== 2x2 pillar grid ===== --}}
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12">
+                {{-- ===== Pillar grid (single column) ===== --}}
+                <div class="grid grid-cols-1 gap-6 mb-12">
                     @foreach ($pillarMeta as $slug => $meta)
                         @php
                             $ps      = $pillarScoreInts[$slug] ?? null;
@@ -707,6 +707,7 @@ new class extends Component {
                             $sbs     = $subBucketScores[$slug] ?? [];
                             $hasRecs = ($recsByPillar[$slug] ?? 0) > 0;
                         @endphp
+                        <div x-data="{ expandAll: false }">
                         <x-nui-card>
                             <div class="flex items-center justify-between mb-4">
                                 <div class="flex items-center gap-3">
@@ -723,6 +724,12 @@ new class extends Component {
                             </div>
 
                             @if (count($sbs) > 0)
+                                <div class="flex justify-end mb-2">
+                                    <button type="button"
+                                        @click="expandAll = !expandAll"
+                                        x-text="expandAll ? 'Tutup semua detail ↑' : 'Lihat semua detail ↓'"
+                                        style="font-size: 12px; color: var(--chimera-700); background: none; border: none; cursor: pointer; padding: 0;"></button>
+                                </div>
                                 <div class="flex flex-col mb-4" style="border-top: 1px solid var(--border-default);">
                                     @foreach ($sbs as $k => $v)
                                         @php $bd = is_array($scoreBreakdown[$slug][$k] ?? null) ? $scoreBreakdown[$slug][$k] : null; @endphp
@@ -739,7 +746,7 @@ new class extends Component {
                                                 </div>
                                             </div>
                                             @if ($bd !== null)
-                                                <div x-show="open" x-cloak style="padding: 8px 12px 12px; background: var(--surface-muted); border-top: 1px solid var(--border-default); font-size: 11px; color: var(--text-secondary);">
+                                                <div x-show="open || $parent.expandAll" x-cloak style="padding: 8px 12px 12px; background: var(--surface-muted); border-top: 1px solid var(--border-default); font-size: 11px; color: var(--text-secondary);">
                                                     @php
                                                         $formula      = $bd['formula'] ?? 'unknown';
                                                         $rawInputs    = (array) ($bd['raw_inputs'] ?? []);
@@ -798,6 +805,7 @@ new class extends Component {
                                 </button>
                             @endif
                         </x-nui-card>
+                        </div>
                     @endforeach
                 </div>
 
