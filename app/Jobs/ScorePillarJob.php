@@ -48,9 +48,13 @@ class ScorePillarJob implements ShouldQueue
                 $subBuckets = $audit->sub_bucket_scores ?? [];
                 $subBuckets[$this->pillarSlug] = $score->subBucketScores;
 
+                $scoreBreakdown = $audit->score_breakdown ?? [];
+                $scoreBreakdown[$this->pillarSlug] = $score->scoreBreakdown;
+
                 $audit->update([
                     'pillar_scores'     => $pillarScores,
                     'sub_bucket_scores' => $subBuckets,
+                    'score_breakdown'   => $scoreBreakdown,
                 ]);
             });
         } catch (\Throwable $e) {

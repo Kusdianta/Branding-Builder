@@ -16,6 +16,7 @@ final readonly class PillarScore
         public array $evidence,
         public string $reasoning,
         public array $subBucketScores = [],
+        public array $scoreBreakdown = [],
     ) {}
 
     /** @return array{pillar_slug:string,score:int,evidence:list<array<string,string>>,reasoning:string,sub_bucket_scores:array<string,mixed>} */

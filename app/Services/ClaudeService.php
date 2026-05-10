@@ -18,6 +18,27 @@ class ClaudeService
 {
     private const DEFAULT_MODEL = 'claude-sonnet-4-6';
 
+    /** @var array<string,array<string,int|null>> Sub-bucket caps for LLM-judged pillars */
+    private const LLM_BUCKET_CAPS = [
+        'brand-konsistensi' => [
+            'kehadiran_digital'   => 40,
+            'konsistensi_visual'  => 35,
+            'kelengkapan_layanan' => 15,
+            'transparansi_harga'  => 10,
+        ],
+        'brand-experience' => [
+            'base'                   => 30,
+            'bonus_ekspres'          => 10,
+            'bonus_antar_jemput'     => 12,
+            'bonus_variasi_layanan'  => 15,
+            'bonus_sop_keluhan'      => 15,
+            'bonus_price_list'       => 10,
+            'penalty_keterlambatan'  => 8,
+            'penalty_pakaian_hilang' => 10,
+            'penalty_no_response_wa' => 8,
+        ],
+    ];
+
     private const SCORING_MAX_TOKENS = 2048;
 
     private const KIT_MAX_TOKENS = 4096;
@@ -107,6 +128,7 @@ class ClaudeService
             evidence:        $narrative['evidence'],
             reasoning:       $narrative['reasoning'],
             subBucketScores: $base->subBucketScores,
+            scoreBreakdown:  $base->scoreBreakdown,
         );
     }
 
@@ -122,6 +144,7 @@ class ClaudeService
             evidence:        $narrative['evidence'],
             reasoning:       $narrative['reasoning'],
             subBucketScores: $base->subBucketScores,
+            scoreBreakdown:  $base->scoreBreakdown,
         );
     }
 
@@ -191,7 +214,7 @@ class ClaudeService
         $raw    = $this->extractText($response);
         $parsed = $this->parseLlmPillarJson($pillarSlug, $raw);
 
-        return $this->hydrateLlmScore($pillarSlug, $parsed);
+        return $this->hydrateLlmScore($pillarSlug, $parsed, $inputs);
     }
 
     // -------------------------------------------------------------------------
@@ -398,11 +421,11 @@ class ClaudeService
 
     /**
      * @param array{score:int,sub_bucket_scores:array<string,mixed>,evidence:list<array<string,mixed>>,reasoning:string} $parsed
+     * @param array<string,mixed> $inputs
      */
-    private function hydrateLlmScore(string $pillarSlug, array $parsed): PillarScore
+    private function hydrateLlmScore(string $pillarSlug, array $parsed, array $inputs): PillarScore
     {
-        $score = max(0, min(100, $parsed['score']));
-
+        $score    = max(0, min(100, $parsed['score']));
         $evidence = [];
         foreach ($parsed['evidence'] as $row) {
             if (! is_array($row)) {
@@ -411,13 +434,89 @@ class ClaudeService
             $evidence[] = EvidenceItem::fromArray($row);
         }
 
+        $breakdown = $this->buildLlmBreakdown($pillarSlug, $inputs, $parsed['sub_bucket_scores'], $parsed['reasoning']);
+
         return new PillarScore(
             pillarSlug:      $pillarSlug,
             score:           $score,
             evidence:        $evidence,
             reasoning:       $parsed['reasoning'],
             subBucketScores: $parsed['sub_bucket_scores'],
+            scoreBreakdown:  $breakdown,
         );
+    }
+
+    /**
+     * Build per-sub-bucket breakdown for LLM-judged pillars.
+     *
+     * @param  array<string,mixed>  $inputs
+     * @param  array<string,mixed>  $subBucketScores
+     * @return array<string,array<string,mixed>>
+     */
+    private function buildLlmBreakdown(string $pillarSlug, array $inputs, array $subBucketScores, string $reasoning): array
+    {
+        $caps        = self::LLM_BUCKET_CAPS[$pillarSlug] ?? [];
+        $limitations = $this->inferLimitations($inputs);
+        $context     = $this->buildContextList($inputs);
+
+        $breakdown = [];
+        foreach ($subBucketScores as $bucketKey => $score) {
+            $breakdown[$bucketKey] = [
+                'score'          => is_numeric($score) ? (int) $score : 0,
+                'cap'            => $caps[$bucketKey] ?? null,
+                'raw_inputs'     => ['context_provided' => $context],
+                'formula'        => 'llm_judgment',
+                'llm_reasoning'  => $reasoning,
+                'limitations'    => $limitations,
+                'explanation_id' => $bucketKey . '_llm_v1',
+            ];
+        }
+
+        return $breakdown;
+    }
+
+    /** @return list<string> */
+    private function inferLimitations(array $inputs): array
+    {
+        $limitations = [];
+
+        if (! empty($inputs['instagram_url'])) {
+            $limitations[] = 'Instagram content not fetched in v0 — judgment based on URL presence only';
+        }
+        if (! empty($inputs['tiktok_url'])) {
+            $limitations[] = 'TikTok content not fetched in v0 — judgment based on URL presence only';
+        }
+        if (array_key_exists('outlet_photo_paths', $inputs) && empty($inputs['outlet_photo_paths'])) {
+            $limitations[] = 'No outlet photos provided';
+        }
+        if (! empty($inputs['website_url']) && empty($inputs['website_excerpt'])) {
+            $limitations[] = 'Website content not fully extracted in v0';
+        }
+
+        return $limitations;
+    }
+
+    /** @return list<string> */
+    private function buildContextList(array $inputs): array
+    {
+        $context = [];
+        foreach ($inputs as $key => $value) {
+            if ($key === 'brand_name') {
+                continue;
+            }
+            if ($key === 'outlet_photo_paths') {
+                $context[] = 'outlet_photos_count: ' . (is_array($value) ? count($value) : 0);
+            } elseif (is_bool($value)) {
+                $context[] = $key . ': ' . ($value ? 'yes' : 'no');
+            } elseif (is_string($value) && $value !== '') {
+                $context[] = $key . ': yes';
+            } elseif (is_string($value)) {
+                $context[] = $key . ': (tidak tersedia)';
+            } elseif (is_array($value)) {
+                $context[] = $key . ': ' . (count($value) > 0 ? 'present' : 'empty');
+            }
+        }
+        return $context;
     }
 
     private function stripFences(string $raw): string
