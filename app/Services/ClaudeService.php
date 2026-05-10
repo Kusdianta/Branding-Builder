@@ -1,148 +1,522 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Services;
 
 use Anthropic\Client;
-use Exception;
+use App\DTO\EvidenceItem;
+use App\DTO\PillarScore;
+use App\Exceptions\MalformedScoringResponseException;
+use App\Exceptions\MissingAnthropicKeyException;
+use App\Exceptions\UnknownPillarException;
+use App\Models\ScoringRubric;
+use App\Services\Scoring\DigitalPresenceScorer;
+use App\Services\Scoring\RecallScorer;
 
 class ClaudeService
 {
+    private const DEFAULT_MODEL = 'claude-sonnet-4-6';
+
+    private const SCORING_MAX_TOKENS = 2048;
+
+    private const KIT_MAX_TOKENS = 4096;
+
+    private const SCORING_TEMPERATURE = 0.1;
+
+    private const KIT_TEMPERATURE = 0.7;
+
     private Client $client;
+
+    private string $model;
 
     public function __construct()
     {
-        $apiKey = config('services.anthropic.key');
-
-        if (empty($apiKey)) {
-            throw new Exception('Anthropic API key belum diset. Tambahkan ANTHROPIC_API_KEY di file .env kamu.');
+        $apiKey = (string) config('services.anthropic.key', '');
+        if ($apiKey === '') {
+            throw MissingAnthropicKeyException::create();
         }
 
         $this->client = new Client(apiKey: $apiKey);
+        $this->model  = (string) config('services.anthropic.model', self::DEFAULT_MODEL);
     }
 
-    public function generateBrandKit(array $data): array
+    /**
+     * Score a single pillar.
+     *
+     * Recall and Digital Presence are deterministic — no LLM scoring call.
+     * Konsistensi and Experience go through the LLM with sub-bucket prompts.
+     * Recall and Digital receive an optional LLM call for evidence narrative only.
+     *
+     * @param  array<string,mixed>  $inputs  touchpoint data matching the rubric's input_schema
+     */
+    public function scorePillar(string $pillarSlug, array $inputs): PillarScore
     {
-        $prompt = $this->buildPrompt($data);
+        return match ($pillarSlug) {
+            ScoringRubric::PILLAR_RECALL   => $this->scoreRecall($inputs),
+            ScoringRubric::PILLAR_DIGITAL  => $this->scoreDigital($inputs),
+            default                         => $this->scoreLlmPillar($pillarSlug, $inputs),
+        };
+    }
+
+    /**
+     * Generate the activation kit JSON from audit results.
+     *
+     * @param  array<string,mixed>  $auditData
+     * @return array<string,mixed>
+     */
+    public function generateActivationKit(array $auditData): array
+    {
+        $prompt = $this->buildKitPrompt($auditData);
 
         $response = $this->client->messages->create(
-            model: 'claude-sonnet-4-6',
-            maxTokens: 4096,
+            maxTokens: self::KIT_MAX_TOKENS,
             messages: [
                 ['role' => 'user', 'content' => $prompt],
             ],
+            model: $this->model,
+            temperature: self::KIT_TEMPERATURE,
         );
 
-        $content = $response->content[0]->text ?? '';
+        $raw     = $this->extractText($response);
+        $cleaned = $this->stripFences($raw);
+        $decoded = json_decode($cleaned, true);
 
-        return $this->parseResponse($content);
+        if (! is_array($decoded)) {
+            throw new MalformedScoringResponseException(
+                'Activation kit response was not valid JSON: '.json_last_error_msg(),
+            );
+        }
+
+        return $decoded;
     }
 
-    private function buildPrompt(array $d): string
+    // -------------------------------------------------------------------------
+    // Deterministic pillars (score via math, narrative via LLM)
+    // -------------------------------------------------------------------------
+
+    /** @param array<string,mixed> $inputs */
+    private function scoreRecall(array $inputs): PillarScore
     {
-        $competitors = !empty($d['competitors']) ? $d['competitors'] : 'Tidak disebutkan';
+        $base      = (new RecallScorer())->score($inputs);
+        $narrative = $this->fetchNarrative(ScoringRubric::PILLAR_RECALL, $inputs, $base->subBucketScores);
+
+        return new PillarScore(
+            pillarSlug:      $base->pillarSlug,
+            score:           $base->score,
+            evidence:        $narrative['evidence'],
+            reasoning:       $narrative['reasoning'],
+            subBucketScores: $base->subBucketScores,
+        );
+    }
+
+    /** @param array<string,mixed> $inputs */
+    private function scoreDigital(array $inputs): PillarScore
+    {
+        $base      = (new DigitalPresenceScorer())->score($inputs);
+        $narrative = $this->fetchNarrative(ScoringRubric::PILLAR_DIGITAL, $inputs, $base->subBucketScores);
+
+        return new PillarScore(
+            pillarSlug:      $base->pillarSlug,
+            score:           $base->score,
+            evidence:        $narrative['evidence'],
+            reasoning:       $narrative['reasoning'],
+            subBucketScores: $base->subBucketScores,
+        );
+    }
+
+    /**
+     * Call the evidence-narrative rubric for a deterministic pillar.
+     *
+     * @param  array<string,mixed>  $inputs
+     * @param  array<string,mixed>  $subBucketScores
+     * @return array{evidence:list<EvidenceItem>,reasoning:string}
+     */
+    private function fetchNarrative(string $pillarSlug, array $inputs, array $subBucketScores): array
+    {
+        $rubric = ScoringRubric::query()
+            ->forPillar($pillarSlug)
+            ->active()
+            ->orderByDesc('version')
+            ->first();
+
+        if ($rubric === null) {
+            return ['evidence' => [], 'reasoning' => ''];
+        }
+
+        $inputsWithBuckets = array_merge($inputs, ['sub_bucket_scores' => $subBucketScores]);
+        $prompt            = $this->renderInputsAsText($pillarSlug, $inputsWithBuckets);
+
+        $response = $this->client->messages->create(
+            maxTokens: self::SCORING_MAX_TOKENS,
+            messages: [['role' => 'user', 'content' => $prompt]],
+            model: $this->model,
+            system: $rubric->system_prompt,
+            temperature: self::SCORING_TEMPERATURE,
+        );
+
+        $raw  = $this->extractText($response);
+        return $this->parseNarrativeJson($pillarSlug, $raw);
+    }
+
+    // -------------------------------------------------------------------------
+    // LLM pillars (Konsistensi, Experience)
+    // -------------------------------------------------------------------------
+
+    /** @param array<string,mixed> $inputs */
+    private function scoreLlmPillar(string $pillarSlug, array $inputs): PillarScore
+    {
+        $rubric = ScoringRubric::query()
+            ->forPillar($pillarSlug)
+            ->active()
+            ->orderByDesc('version')
+            ->first();
+
+        if ($rubric === null) {
+            throw UnknownPillarException::forSlug($pillarSlug);
+        }
+
+        $userContent = $this->buildUserContent($pillarSlug, $inputs);
+
+        $response = $this->client->messages->create(
+            maxTokens: self::SCORING_MAX_TOKENS,
+            messages: [
+                ['role' => 'user', 'content' => $userContent],
+            ],
+            model: $this->model,
+            system: $rubric->system_prompt,
+            temperature: self::SCORING_TEMPERATURE,
+        );
+
+        $raw    = $this->extractText($response);
+        $parsed = $this->parseLlmPillarJson($pillarSlug, $raw);
+
+        return $this->hydrateLlmScore($pillarSlug, $parsed);
+    }
+
+    // -------------------------------------------------------------------------
+    // Content builders
+    // -------------------------------------------------------------------------
+
+    /**
+     * @param  array<string,mixed>  $inputs
+     * @return list<array<string,mixed>>
+     */
+    private function buildUserContent(string $pillarSlug, array $inputs): array
+    {
+        $blocks   = [];
+        $blocks[] = ['type' => 'text', 'text' => $this->renderInputsAsText($pillarSlug, $inputs)];
+
+        $photoPaths = $inputs['outlet_photo_paths'] ?? [];
+        if (is_array($photoPaths) && $pillarSlug === ScoringRubric::PILLAR_KONSISTENSI) {
+            foreach ($photoPaths as $path) {
+                $block = $this->buildImageBlock((string) $path);
+                if ($block !== null) {
+                    $blocks[] = $block;
+                }
+            }
+        }
+
+        return $blocks;
+    }
+
+    /** @param array<string,mixed> $inputs */
+    private function renderInputsAsText(string $pillarSlug, array $inputs): string
+    {
+        $lines = ['Data touchpoint untuk audit pilar '.$pillarSlug.':', ''];
+
+        foreach ($inputs as $key => $value) {
+            if ($key === 'outlet_photo_paths') {
+                $count   = is_array($value) ? count($value) : 0;
+                $lines[] = sprintf('- outlet_photo_count: %d (terlampir sebagai gambar di bawah)', $count);
+                continue;
+            }
+
+            if (is_array($value) || is_object($value)) {
+                $lines[] = sprintf('- %s: %s', $key, json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+                continue;
+            }
+
+            if ($value === null || $value === '') {
+                $lines[] = sprintf('- %s: (tidak tersedia)', $key);
+                continue;
+            }
+
+            $lines[] = sprintf('- %s: %s', $key, (string) $value);
+        }
+
+        $lines[] = '';
+        $lines[] = 'Berikan skor sesuai rubrik dan kembalikan dalam format JSON yang sudah ditentukan.';
+
+        return implode("\n", $lines);
+    }
+
+    /** @return array<string,mixed>|null */
+    private function buildImageBlock(string $path): ?array
+    {
+        if ($path === '' || ! is_file($path) || ! is_readable($path)) {
+            return null;
+        }
+
+        $mime = $this->detectMime($path);
+        if ($mime === null) {
+            return null;
+        }
+
+        $bytes = @file_get_contents($path);
+        if ($bytes === false) {
+            return null;
+        }
+
+        return [
+            'type'   => 'image',
+            'source' => [
+                'type'       => 'base64',
+                'media_type' => $mime,
+                'data'       => base64_encode($bytes),
+            ],
+        ];
+    }
+
+    private function detectMime(string $path): ?string
+    {
+        $allowed = ['image/jpeg', 'image/png', 'image/webp'];
+
+        if (function_exists('finfo_open')) {
+            $finfo = finfo_open(FILEINFO_MIME_TYPE);
+            if ($finfo !== false) {
+                $mime = finfo_file($finfo, $path);
+                finfo_close($finfo);
+                if (is_string($mime) && in_array($mime, $allowed, true)) {
+                    return $mime;
+                }
+            }
+        }
+
+        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+
+        return match ($ext) {
+            'jpg', 'jpeg' => 'image/jpeg',
+            'png'         => 'image/png',
+            'webp'        => 'image/webp',
+            default       => null,
+        };
+    }
+
+    // -------------------------------------------------------------------------
+    // Response parsing
+    // -------------------------------------------------------------------------
+
+    private function extractText(mixed $response): string
+    {
+        $content = $response->content ?? [];
+        if (! is_array($content) && ! is_iterable($content)) {
+            return '';
+        }
+
+        foreach ($content as $block) {
+            $text = $block->text ?? null;
+            if (is_string($text) && $text !== '') {
+                return $text;
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * Parse LLM response for Konsistensi / Experience (includes sub_bucket_scores).
+     *
+     * @return array{score:int,sub_bucket_scores:array<string,mixed>,evidence:list<array<string,mixed>>,reasoning:string}
+     */
+    private function parseLlmPillarJson(string $pillarSlug, string $raw): array
+    {
+        if ($raw === '') {
+            throw MalformedScoringResponseException::fromReason($pillarSlug, 'response was empty');
+        }
+
+        $cleaned = $this->stripFences($raw);
+        $decoded = json_decode($cleaned, true);
+
+        if (! is_array($decoded)) {
+            throw MalformedScoringResponseException::fromReason(
+                $pillarSlug,
+                'invalid JSON: '.json_last_error_msg(),
+            );
+        }
+
+        if (! array_key_exists('score', $decoded) || ! is_numeric($decoded['score'])) {
+            throw MalformedScoringResponseException::fromReason($pillarSlug, 'missing or non-numeric score');
+        }
+
+        if (! isset($decoded['evidence']) || ! is_array($decoded['evidence'])) {
+            throw MalformedScoringResponseException::fromReason($pillarSlug, 'missing evidence array');
+        }
+
+        if (! isset($decoded['reasoning']) || ! is_string($decoded['reasoning'])) {
+            $decoded['reasoning'] = '';
+        }
+
+        return [
+            'score'             => (int) $decoded['score'],
+            'sub_bucket_scores' => is_array($decoded['sub_bucket_scores'] ?? null) ? $decoded['sub_bucket_scores'] : [],
+            'evidence'          => array_values($decoded['evidence']),
+            'reasoning'         => (string) $decoded['reasoning'],
+        ];
+    }
+
+    /**
+     * Parse LLM response for Recall / Digital (evidence + reasoning only).
+     *
+     * @return array{evidence:list<EvidenceItem>,reasoning:string}
+     */
+    private function parseNarrativeJson(string $pillarSlug, string $raw): array
+    {
+        if ($raw === '') {
+            return ['evidence' => [], 'reasoning' => ''];
+        }
+
+        $cleaned = $this->stripFences($raw);
+        $decoded = json_decode($cleaned, true);
+
+        if (! is_array($decoded)) {
+            return ['evidence' => [], 'reasoning' => ''];
+        }
+
+        $evidence = [];
+        foreach ((array) ($decoded['evidence'] ?? []) as $row) {
+            if (is_array($row)) {
+                $evidence[] = EvidenceItem::fromArray($row);
+            }
+        }
+
+        return [
+            'evidence'  => $evidence,
+            'reasoning' => (string) ($decoded['reasoning'] ?? ''),
+        ];
+    }
+
+    /**
+     * @param array{score:int,sub_bucket_scores:array<string,mixed>,evidence:list<array<string,mixed>>,reasoning:string} $parsed
+     */
+    private function hydrateLlmScore(string $pillarSlug, array $parsed): PillarScore
+    {
+        $score = max(0, min(100, $parsed['score']));
+
+        $evidence = [];
+        foreach ($parsed['evidence'] as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $evidence[] = EvidenceItem::fromArray($row);
+        }
+
+        return new PillarScore(
+            pillarSlug:      $pillarSlug,
+            score:           $score,
+            evidence:        $evidence,
+            reasoning:       $parsed['reasoning'],
+            subBucketScores: $parsed['sub_bucket_scores'],
+        );
+    }
+
+    private function stripFences(string $raw): string
+    {
+        $trimmed = trim($raw);
+        $trimmed = (string) preg_replace('/^```(?:json)?\s*/i', '', $trimmed);
+        $trimmed = (string) preg_replace('/\s*```$/', '', $trimmed);
+
+        return trim($trimmed);
+    }
+
+    // -------------------------------------------------------------------------
+    // Activation kit
+    // -------------------------------------------------------------------------
+
+    /** @param array<string,mixed> $audit */
+    private function buildKitPrompt(array $audit): string
+    {
+        $brand    = (string) ($audit['brand_name'] ?? '');
+        $city     = (string) ($audit['city'] ?? 'Tidak disebutkan');
+        $service  = (string) ($audit['service_type'] ?? '');
+        $overall  = (int) ($audit['overall_score'] ?? 0);
+        $label    = (string) ($audit['overall_label'] ?? '');
+        $pillars  = json_encode($audit['pillar_scores'] ?? [], JSON_UNESCAPED_UNICODE);
+        $findings = json_encode($audit['key_findings'] ?? [], JSON_UNESCAPED_UNICODE);
+        $recs     = json_encode($audit['recommendations'] ?? [], JSON_UNESCAPED_UNICODE);
 
         return <<<PROMPT
-Kamu adalah brand strategist dan copywriter ahli untuk bisnis laundry di Indonesia. Tugasmu adalah membuat "Social Media Brand Activation Kit" untuk klien Chimera Creative berdasarkan data bisnis di bawah.
+Kamu adalah brand strategist & copywriter untuk bisnis laundry di Indonesia. Susun "Social Media Brand Activation Kit" untuk klien Chimera Creative berdasarkan hasil audit di bawah ini.
 
-DATA BISNIS:
-- Nama Bisnis: {$d['business_name']}
-- Lokasi / Kota: {$d['location']}
-- Jenis Layanan: {$d['service_type']}
-- Target Pelanggan: {$d['target_customer']}
-- Keunggulan Utama: {$d['differentiator']}
-- Kepribadian Brand: {$d['brand_personality']}
-- Segmen Harga: {$d['price_segment']}
-- Kompetitor: {$competitors}
+HASIL AUDIT:
+- Nama Brand: {$brand}
+- Kota: {$city}
+- Jenis Layanan: {$service}
+- Overall Score: {$overall}/100 ({$label})
+- Pillar Scores (JSON): {$pillars}
+- Key Findings (JSON): {$findings}
+- Rekomendasi Prioritas (JSON): {$recs}
 
-Hasilkan output HANYA dalam format JSON valid berikut (tanpa markdown, tanpa penjelasan, langsung JSON):
+Output HANYA JSON valid berikut, tanpa markdown, tanpa penjelasan:
 
 {
   "brand_narrative": {
-    "tagline": "Satu kalimat tagline kuat yang menggambarkan brand ini",
-    "big_narrative_title": "Judul naratif besar (3-5 kata, impactful)",
-    "big_narrative_body": "2-3 paragraf narasi brand yang menggambarkan mengapa bisnis ini ada, apa yang mereka percaya, dan bagaimana mereka berbeda. Gaya penulisan: kuat, human, tidak korporat."
+    "tagline": "satu kalimat tagline yang sejalan dengan temuan audit",
+    "big_narrative_title": "judul naratif besar (3-5 kata)",
+    "big_narrative_body": "2-3 paragraf naratif brand yang membahas mengapa brand ini ada, apa yang mereka percaya, dan bagaimana mereka berbeda berdasarkan temuan audit"
   },
   "narrative_pillars": {
     "problem_layer": {
-      "world_title": "Judul kondisi dunia target pelanggan (3-5 kata)",
+      "world_title": "judul kondisi dunia target pelanggan (3-5 kata)",
       "problems": ["masalah 1", "masalah 2", "masalah 3", "masalah 4", "masalah 5"],
-      "content_tone": "3 kata sifat yang menggambarkan tone konten untuk pillar ini"
+      "content_tone": "3 kata sifat untuk tone konten pillar ini"
     },
     "belief_layer": {
-      "mindset_title": "Judul mindset shift (3-5 kata)",
-      "old_belief": "Kepercayaan lama yang salah tentang laundry",
-      "new_belief": "Kepercayaan baru yang brand ini tawarkan",
-      "key_message": "Satu kalimat kunci yang merangkum belief layer ini"
+      "mindset_title": "judul mindset shift (3-5 kata)",
+      "old_belief": "kepercayaan lama yang salah",
+      "new_belief": "kepercayaan baru yang brand tawarkan",
+      "key_message": "kalimat kunci satu baris"
     },
     "action_layer": {
-      "ritual_title": "Nama ritual / aksi (3-5 kata)",
-      "trigger_moments": ["momen 1 ketika pelanggan butuh layanan ini", "momen 2", "momen 3"],
+      "ritual_title": "nama ritual / aksi (3-5 kata)",
+      "trigger_moments": ["momen 1", "momen 2", "momen 3"],
       "ritual_steps": ["langkah 1", "langkah 2", "langkah 3"],
-      "cta": "Call to action satu kalimat"
+      "cta": "call to action satu kalimat"
     }
   },
   "content_story_mapping": {
     "macro_story": {
-      "umbrella_narrative": "Satu kalimat besar yang menjadi payung semua konten (seperti tagline strategi konten)",
-      "brand_beliefs": ["Apa yang brand percaya 1", "Apa yang brand percaya 2", "Apa yang brand percaya 3"],
-      "brand_stands_against": ["Anti ini 1", "Anti ini 2", "Anti ini 3"]
+      "umbrella_narrative": "satu kalimat besar payung konten",
+      "brand_beliefs": ["belief 1", "belief 2", "belief 3"],
+      "brand_stands_against": ["anti 1", "anti 2", "anti 3"]
     },
     "micro_story": {
-      "chapter_1": {
-        "title": "Nama chapter 1",
-        "theme": "Tema singkat",
-        "content_ideas": ["ide konten 1", "ide konten 2", "ide konten 3"],
-        "message": "Pesan utama chapter ini dalam 1 kalimat"
-      },
-      "chapter_2": {
-        "title": "Nama chapter 2",
-        "theme": "Tema singkat",
-        "content_ideas": ["ide konten 1", "ide konten 2", "ide konten 3"],
-        "message": "Pesan utama chapter ini dalam 1 kalimat"
-      },
-      "chapter_3": {
-        "title": "Nama chapter 3",
-        "theme": "Tema singkat",
-        "content_ideas": ["ide konten 1", "ide konten 2", "ide konten 3"],
-        "message": "Pesan utama chapter ini dalam 1 kalimat"
-      }
+      "chapter_1": {"title":"...","theme":"...","content_ideas":["...","...","..."],"message":"..."},
+      "chapter_2": {"title":"...","theme":"...","content_ideas":["...","...","..."],"message":"..."},
+      "chapter_3": {"title":"...","theme":"...","content_ideas":["...","...","..."],"message":"..."}
     }
   },
   "brand_voice": {
-    "tone_description": "Deskripsi 2 kalimat tentang tone brand",
-    "personality_words": ["kata 1", "kata 2", "kata 3", "kata 4"],
-    "dos": ["Lakukan ini 1", "Lakukan ini 2", "Lakukan ini 3", "Lakukan ini 4"],
-    "donts": ["Jangan ini 1", "Jangan ini 2", "Jangan ini 3", "Jangan ini 4"]
+    "tone_description": "deskripsi 2 kalimat",
+    "personality_words": ["kata 1","kata 2","kata 3","kata 4"],
+    "dos": ["lakukan 1","lakukan 2","lakukan 3","lakukan 4"],
+    "donts": ["jangan 1","jangan 2","jangan 3","jangan 4"]
   },
   "content_pillars": [
-    {"name": "Nama Pilar 1", "description": "Deskripsi pilar ini dan jenis konten yang masuk", "example_hook": "Contoh hook caption untuk pilar ini"},
-    {"name": "Nama Pilar 2", "description": "Deskripsi pilar ini dan jenis konten yang masuk", "example_hook": "Contoh hook caption untuk pilar ini"},
-    {"name": "Nama Pilar 3", "description": "Deskripsi pilar ini dan jenis konten yang masuk", "example_hook": "Contoh hook caption untuk pilar ini"},
-    {"name": "Nama Pilar 4", "description": "Deskripsi pilar ini dan jenis konten yang masuk", "example_hook": "Contoh hook caption untuk pilar ini"},
-    {"name": "Nama Pilar 5", "description": "Deskripsi pilar ini dan jenis konten yang masuk", "example_hook": "Contoh hook caption untuk pilar ini"}
+    {"name":"Pilar 1","description":"deskripsi","example_hook":"hook caption"},
+    {"name":"Pilar 2","description":"deskripsi","example_hook":"hook caption"},
+    {"name":"Pilar 3","description":"deskripsi","example_hook":"hook caption"},
+    {"name":"Pilar 4","description":"deskripsi","example_hook":"hook caption"},
+    {"name":"Pilar 5","description":"deskripsi","example_hook":"hook caption"}
   ],
   "caption_examples": [
-    {"type": "Soft Selling", "caption": "Caption lengkap 3-5 baris dengan hook + body + CTA, gaya sesuai brand personality"},
-    {"type": "Edukasi", "caption": "Caption lengkap 3-5 baris dengan hook + body + CTA, gaya sesuai brand personality"},
-    {"type": "Behind the Scenes", "caption": "Caption lengkap 3-5 baris dengan hook + body + CTA, gaya sesuai brand personality"}
+    {"type":"Soft Selling","caption":"caption 3-5 baris"},
+    {"type":"Edukasi","caption":"caption 3-5 baris"},
+    {"type":"Behind the Scenes","caption":"caption 3-5 baris"}
   ]
 }
 
-Return ONLY the JSON. Tidak ada teks lain.
+Gunakan register saya/kita. Jangan pakai gue/lo. Return ONLY JSON.
 PROMPT;
-    }
-
-    private function parseResponse(string $content): array
-    {
-        $content = preg_replace('/^```(?:json)?\s*/i', '', trim($content));
-        $content = preg_replace('/\s*```$/', '', $content);
-
-        $data = json_decode(trim($content), true);
-
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            throw new Exception('Gagal memproses respons dari Claude: ' . json_last_error_msg());
-        }
-
-        return $data;
     }
 }
