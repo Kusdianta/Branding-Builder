@@ -53,13 +53,13 @@ return [
     'keyword_saturation' => [
         'priority' => 'penting',
         'title'    => 'Arahkan Pelanggan Menulis Ulasan Spesifik',
-        'body'     => 'Minta pelanggan menyebutkan hal spesifik dalam ulasan mereka: "bersih", "harum", "tepat waktu", atau "ramah". Contoh pertanyaan di WhatsApp: "Bagaimana pengalaman kebersihan dan kecepatan pelayanan {{brand_name}} hari ini?" — ulasan dengan kata kunci spesifik meningkatkan brand recall di pencarian lokal.',
+        'body'     => 'Kirim pesan WhatsApp ke setiap pelanggan yang selesai dilayani: "Halo, terima kasih sudah mempercayakan cucian ke {{brand_name}}! Boleh share pengalaman di Google Maps? Ceritakan soal kebersihan, kecepatan, atau keramahan tim kami — calon pelanggan lain sangat terbantu dengan ulasan deskriptif seperti itu."',
     ],
 
     'sentiment_quality' => [
         'priority' => 'tinggi',
-        'title'    => 'Perbaiki Kualitas Layanan yang Dikeluhkan',
-        'body'     => 'Rating rata-rata ulasan terbaru {{brand_name}} menunjukkan ketidakpuasan pelanggan. Identifikasi keluhan berulang dan buat action plan 30 hari: standar waktu pengerjaan, pengecekan kualitas sebelum serah terima, dan prosedur follow-up kepuasan pelanggan.',
+        'title'    => 'Audit dan Tindak Lanjuti Keluhan Terbaru',
+        'body'     => 'Baca ulang 10–20 ulasan Google Maps {{brand_name}} yang memberi bintang ≤3. Catat tema keluhan berulang, lalu buat perbaikan konkret dalam 2 minggu: jadwal konfirmasi pengambilan cucian, pengecekan kualitas sebelum serah terima, dan telepon langsung ke pelanggan yang kecewa untuk tawaran kompensasi.',
     ],
 
     // ── Experience ────────────────────────────────────────────────────────────
