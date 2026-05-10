@@ -2,16 +2,28 @@
     "$schema": "https://getcomposer.org/schema.json",
     "name": "laravel/laravel",
     "type": "project",
-    "description": "The skeleton application for the Laravel framework.",
-    "keywords": ["laravel", "framework"],
+    "description": "Branding Builder — AI Brand Health Check spoke for the Nema platform.",
+    "keywords": ["laravel", "framework", "nema"],
     "license": "MIT",
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../nema-ui-kit",
+            "options": {
+                "symlink": true
+            }
+        }
+    ],
     "require": {
         "php": "^8.3",
         "anthropic-ai/sdk": "^0.8.0",
         "barryvdh/laravel-dompdf": "^3.1",
+        "guzzlehttp/guzzle": "^7.10",
         "laravel/framework": "^13.0",
         "laravel/tinker": "^3.0",
-        "maatwebsite/excel": "^3.1"
+        "livewire/livewire": "^4.3",
+        "livewire/volt": "^1.10",
+        "nema/ui-kit": "@dev"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",
@@ -39,7 +51,9 @@
             "@php -r \"file_exists('.env') || copy('.env.example', '.env');\"",
             "@php artisan key:generate",
             "@php artisan migrate --force",
-            "npm install",
+            "@php artisan db:seed --force",
+            "@php artisan vendor:publish --tag=nema-ui-kit --force",
+            "npm install --ignore-scripts",
             "npm run build"
         ],
         "dev": [
@@ -83,6 +97,6 @@
             "php-http/discovery": true
         }
     },
-    "minimum-stability": "stable",
+    "minimum-stability": "dev",
     "prefer-stable": true
 }

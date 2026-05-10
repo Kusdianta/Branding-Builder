@@ -7,10 +7,9 @@ return [
     | Third Party Services
     |--------------------------------------------------------------------------
     |
-    | This file is for storing the credentials for third party services such
-    | as Mailgun, Postmark, AWS and more. This file provides the de facto
-    | location for this type of information, allowing packages to have
-    | a conventional file to locate the various service credentials.
+    | Spoke-level credentials are loaded by VaultServiceProvider from the
+    | shared vault file (vault/branding-builder.json) at boot. The env()
+    | fallbacks below exist for local debugging when the vault is empty.
     |
     */
 
@@ -37,15 +36,11 @@ return [
 
     'anthropic' => [
         'key' => env('ANTHROPIC_API_KEY'),
+        'model' => env('ANTHROPIC_MODEL', 'claude-sonnet-4-6'),
     ],
 
-    'apify' => [
-    'token' => env('APIFY_API_TOKEN'),
-    ],
-
-    'rapidapi' => [
-    'key' => env('RAPIDAPI_KEY'),
+    'google' => [
+        'maps_api_key' => env('GOOGLE_MAPS_API_KEY'),
     ],
 
 ];
-    
