@@ -13,3 +13,7 @@ Volt::route('/', 'brand-audit-wizard')->name('home');
 Volt::route('/audit/{token}', 'brand-audit-wizard')->name('audit.show');
 
 Route::get('/audit/{token}/status', [AuditController::class, 'status'])->name('audit.status');
+
+Route::post('/audit/{token}/kit', [AuditController::class, 'generateKit'])->name('audit.kit.generate');
+
+Route::get('/audit/{token}/kit/download', [AuditController::class, 'downloadKit'])->name('audit.kit.download');
