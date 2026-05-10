@@ -707,7 +707,7 @@ new class extends Component {
                             $sbs     = $subBucketScores[$slug] ?? [];
                             $hasRecs = ($recsByPillar[$slug] ?? 0) > 0;
                         @endphp
-                        <div x-data="{ expandAll: false }">
+                        <div x-data="{ expandAll: false, open: {} }">
                         <x-nui-card>
                             <div class="flex items-center justify-between mb-4">
                                 <div class="flex items-center gap-3">
@@ -733,12 +733,12 @@ new class extends Component {
                                 <div class="flex flex-col mb-4" style="border-top: 1px solid var(--border-default);">
                                     @foreach ($sbs as $k => $v)
                                         @php $bd = is_array($scoreBreakdown[$slug][$k] ?? null) ? $scoreBreakdown[$slug][$k] : null; @endphp
-                                        <div x-data="{ open: false }" style="border-bottom: 1px solid var(--border-default);">
+                                        <div style="border-bottom: 1px solid var(--border-default);">
                                             <div class="flex justify-between items-center py-2">
                                                 <span style="font-size: 12px; color: var(--text-secondary);">{{ $subBucketLabels[$k] ?? $k }}</span>
                                                 <div style="display: flex; align-items: center; gap: 6px;">
                                                     @if ($bd !== null)
-                                                        <button type="button" @click="open = !open"
+                                                        <button type="button" @click="open['{{ $k }}'] = !open['{{ $k }}']"
                                                             style="width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--border-strong); background: var(--surface-muted); color: var(--text-tertiary); font-size: 10px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; line-height: 1; flex-shrink: 0;"
                                                             title="Lihat detail perhitungan">?</button>
                                                     @endif
@@ -746,7 +746,7 @@ new class extends Component {
                                                 </div>
                                             </div>
                                             @if ($bd !== null)
-                                                <div x-show="open || $parent.expandAll" x-cloak style="padding: 8px 12px 12px; background: var(--surface-muted); border-top: 1px solid var(--border-default); font-size: 11px; color: var(--text-secondary);">
+                                                <div x-show="open['{{ $k }}'] || expandAll" x-cloak style="padding: 8px 12px 12px; background: var(--surface-muted); border-top: 1px solid var(--border-default); font-size: 11px; color: var(--text-secondary);">
                                                     @php
                                                         $formula      = $bd['formula'] ?? 'unknown';
                                                         $rawInputs    = (array) ($bd['raw_inputs'] ?? []);
