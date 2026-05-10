@@ -847,6 +847,147 @@ new class extends Component {
                     </div>
                 @endif
 
+                {{-- ===== Ringkasan Brand Health ===== --}}
+                @if ($overallScore !== null && count($pillarScoreInts) > 0)
+                    @php
+                        $summaryPillarArr = $pillarScoreInts;
+                        arsort($summaryPillarArr);
+                        $highestSlug  = array_key_first($summaryPillarArr) ?? '';
+                        $lowestSlug   = array_key_last($summaryPillarArr) ?? '';
+                        $highestScore = $pillarScoreInts[$highestSlug] ?? null;
+                        $lowestScore  = $pillarScoreInts[$lowestSlug] ?? null;
+                        $highestLabel = $pillarMeta[$highestSlug]['label'] ?? $highestSlug;
+                        $lowestLabel  = $pillarMeta[$lowestSlug]['label'] ?? $lowestSlug;
+
+                        $summaryTierDescs = [
+                            'EXCELLENT' => 'Pertahankan momentum ini dengan konsistensi pada semua touchpoint.',
+                            'GOOD'      => 'Beberapa area kunci masih bisa dioptimalkan untuk mencapai level excellent.',
+                            'AVERAGE'   => 'Perbaikan sistematis pada area lemah akan memberikan dampak paling besar.',
+                            'BELOW AVG' => 'Prioritaskan perbaikan segera pada area dengan gap terbesar.',
+                            'CRITICAL'  => 'Mulai dengan membangun kehadiran digital dan konsistensi identitas brand.',
+                        ];
+                        $summaryTierKey  = trim((string) explode('—', (string) ($overallLabel ?? ''))[0]);
+                        $summaryTierDesc = $summaryTierDescs[$summaryTierKey] ?? '';
+
+                        $summaryPriorityOrder = ['tinggi' => 0, 'penting' => 1, 'opsional' => 2];
+                        $top3Recs = (array) $recommendations;
+                        usort($top3Recs, function (array $a, array $b) use ($summaryPriorityOrder): int {
+                            return ($summaryPriorityOrder[$a['priority'] ?? 'opsional'] ?? 2)
+                                <=> ($summaryPriorityOrder[$b['priority'] ?? 'opsional'] ?? 2);
+                        });
+                        $top3Recs = array_slice($top3Recs, 0, 3);
+                    @endphp
+
+                    <x-nui-card padding="lg" style="margin-top: 24px;">
+
+                        <h2 style="font-size: 24px; font-weight: 600; color: var(--text-primary); margin-bottom: 24px;">Ringkasan Brand Health</h2>
+
+                        {{-- Three-column metric strip --}}
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6" style="padding-bottom: 24px; border-bottom: 1px solid var(--border-default); margin-bottom: 24px;">
+                            <div>
+                                <p style="font-size: 12px; color: var(--text-tertiary); margin-bottom: 6px;">Skor Total</p>
+                                <div style="display: flex; align-items: baseline; gap: 6px; margin-bottom: 4px;">
+                                    <span style="font-size: 40px; font-weight: 700; color: {{ $tierColor($overallScore) }}; line-height: 1;">{{ $overallScore }}</span>
+                                    <span style="font-size: 13px; color: var(--text-tertiary);">/100</span>
+                                </div>
+                                <p style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">{{ $overallLabel }}</p>
+                            </div>
+
+                            <div>
+                                <p style="font-size: 12px; color: var(--text-tertiary); margin-bottom: 6px;">Kekuatan Utama</p>
+                                <p style="font-size: 15px; font-weight: 600; color: var(--chimera-600); margin-bottom: 4px;">{{ $highestLabel }}</p>
+                                <p style="font-size: 24px; font-weight: 700; color: var(--chimera-500); line-height: 1;">{{ $highestScore }}<span style="font-size: 13px; font-weight: 400; color: var(--text-tertiary);">/100</span></p>
+                            </div>
+
+                            <div>
+                                <p style="font-size: 12px; color: var(--text-tertiary); margin-bottom: 6px;">Area Pengembangan</p>
+                                <p style="font-size: 15px; font-weight: 600; color: var(--color-warning); margin-bottom: 4px;">{{ $lowestLabel }}</p>
+                                <p style="font-size: 24px; font-weight: 700; color: var(--color-warning); line-height: 1;">{{ $lowestScore }}<span style="font-size: 13px; font-weight: 400; color: var(--text-tertiary);">/100</span></p>
+                            </div>
+                        </div>
+
+                        {{-- Synthesis paragraph --}}
+                        <p style="font-size: 14px; color: var(--text-secondary); line-height: 1.75; padding-bottom: 24px; border-bottom: 1px solid var(--border-default); margin-bottom: 24px;">
+                            <strong style="color: var(--text-primary);">{{ $brandName }}</strong> menunjukkan profil brand dengan tier <strong>{{ $overallLabel }}</strong>.
+                            Kekuatan terbesar berada pada pilar <strong>{{ $highestLabel }}</strong> ({{ $highestScore }}/100),
+                            sementara <strong>{{ $lowestLabel }}</strong> ({{ $lowestScore }}/100) menjadi area dengan potensi pengembangan terbesar.
+                            @if ($summaryTierDesc) {{ $summaryTierDesc }} @endif
+                        </p>
+
+                        {{-- Top 3 priority recommendations --}}
+                        @if (count($top3Recs) > 0)
+                            <div style="padding-bottom: 24px; border-bottom: 1px solid var(--border-default); margin-bottom: 0;">
+                                <h3 style="font-size: 15px; font-weight: 600; color: var(--text-primary); margin-bottom: 16px;">3 Tindakan Prioritas</h3>
+                                <ol style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 14px;">
+                                    @foreach ($top3Recs as $ri => $rec)
+                                        @php
+                                            $rp      = $rec['priority'] ?? 'opsional';
+                                            $rpClr   = match ($rp) {
+                                                'tinggi'  => 'var(--color-danger)',
+                                                'penting' => 'var(--color-warning)',
+                                                default   => 'var(--text-tertiary)',
+                                            };
+                                            $rpLabel = match ($rp) {
+                                                'tinggi'  => 'Tinggi',
+                                                'penting' => 'Penting',
+                                                default   => 'Opsional',
+                                            };
+                                        @endphp
+                                        <li style="display: flex; align-items: flex-start; gap: 12px;">
+                                            <span style="font-size: 20px; font-weight: 700; color: var(--chimera-500); line-height: 1.2; flex-shrink: 0; width: 24px;">{{ $ri + 1 }}</span>
+                                            <div>
+                                                <span style="display: inline-block; font-size: 11px; font-weight: 500; color: {{ $rpClr }}; background: var(--surface-muted); border-radius: var(--radius-pill); padding: 2px 10px; border: 1px solid {{ $rpClr }}; margin-bottom: 4px;">{{ $rpLabel }}</span>
+                                                <p style="font-size: 14px; font-weight: 500; color: var(--text-primary); margin: 0;">{{ $rec['title'] ?? '' }}</p>
+                                            </div>
+                                        </li>
+                                    @endforeach
+                                </ol>
+                            </div>
+                        @endif
+
+                        {{-- CTA row --}}
+                        <div class="flex justify-between items-center flex-wrap gap-3" style="margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--border-default);">
+                            <a href="{{ route('home') }}"
+                               style="font-size: 14px; color: var(--chimera-600); text-decoration: none;"
+                               onmouseover="this.style.textDecoration='underline'"
+                               onmouseout="this.style.textDecoration='none'">
+                                ← Analisis brand lain
+                            </a>
+
+                            @if ($activationKitPath && $sessionToken)
+                                <a
+                                    href="{{ route('audit.kit.download', ['token' => $sessionToken]) }}"
+                                    class="nui-btn-primary rounded-pill"
+                                    style="display: inline-flex; align-items: center; gap: 8px; padding: 10px 24px; font-size: 14px; font-weight: 600;"
+                                >
+                                    <i class="ti ti-download"></i>
+                                    Download Activation Kit (PDF) ↓
+                                </a>
+                            @elseif ($kitGenerating)
+                                <span style="display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--border-default); border-radius: var(--radius-pill); padding: 10px 24px; font-size: 14px; font-weight: 500; color: var(--text-secondary); background: var(--surface-muted);">
+                                    <span style="width: 14px; height: 14px; border: 2px solid var(--chimera-200); border-top-color: var(--chimera-500); border-radius: 50%; display: inline-block; animation: baw-spin .8s linear infinite;"></span>
+                                    Membuat activation kit...
+                                </span>
+                            @else
+                                <button
+                                    type="button"
+                                    wire:click="generateKit"
+                                    wire:loading.attr="disabled"
+                                    wire:target="generateKit"
+                                    class="nui-btn-primary rounded-pill"
+                                    style="display: inline-flex; align-items: center; gap: 8px; padding: 10px 24px; font-size: 14px; font-weight: 600;"
+                                >
+                                    <span wire:loading.remove wire:target="generateKit">
+                                        <i class="ti ti-file-text"></i> Download Activation Kit (PDF) ↓
+                                    </span>
+                                    <span wire:loading wire:target="generateKit">Memulai...</span>
+                                </button>
+                            @endif
+                        </div>
+
+                    </x-nui-card>
+                @endif
+
             @endif
         </div>
     @endif
