@@ -29,6 +29,7 @@ class BrandAudit extends Model
         'touchpoints',
         'status',
         'pillar_scores',
+        'sub_bucket_scores',
         'overall_score',
         'overall_label',
         'key_findings',
@@ -41,13 +42,14 @@ class BrandAudit extends Model
     protected function casts(): array
     {
         return [
-            'touchpoints' => 'array',
-            'pillar_scores' => 'array',
-            'overall_score' => 'integer',
-            'key_findings' => 'array',
-            'recommendations' => 'array',
-            'evidence' => 'array',
-            'expires_at' => 'datetime',
+            'touchpoints'       => 'array',
+            'pillar_scores'     => 'array',
+            'sub_bucket_scores' => 'array',
+            'overall_score'     => 'integer',
+            'key_findings'      => 'array',
+            'recommendations'   => 'array',
+            'evidence'          => 'array',
+            'expires_at'        => 'datetime',
         ];
     }
 
