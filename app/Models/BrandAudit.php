@@ -36,6 +36,7 @@ class BrandAudit extends Model
         'recommendations',
         'evidence',
         'error_message',
+        'activation_kit_path',
         'expires_at',
     ];
 
