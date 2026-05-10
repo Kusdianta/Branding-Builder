@@ -13,8 +13,9 @@
     $overallScore  = $audit->overall_score;
     $overallLabel  = $audit->overall_label ?: '—';
     $pillarScores  = (array) ($audit->pillar_scores ?? []);
-    $subBuckets    = (array) ($audit->sub_bucket_scores ?? []);
-    $findings      = (array) ($audit->key_findings ?? []);
+    $subBuckets     = (array) ($audit->sub_bucket_scores ?? []);
+    $scoreBreakdown = (array) ($audit->score_breakdown ?? []);
+    $findings       = (array) ($audit->key_findings ?? []);
     $recommends    = (array) ($audit->recommendations ?? []);
 
     // Reverse lookup: bucket slug -> pillar slug, used for grouping recommendations.
@@ -184,6 +185,7 @@
         $evidence     = is_array($data) ? (array) ($data['evidence'] ?? []) : [];
         $reasoning    = is_array($data) ? (string) ($data['reasoning'] ?? '') : '';
         $bucketScores = (array) ($subBuckets[$slug] ?? []);
+        $bdByBucket   = (array) ($scoreBreakdown[$slug] ?? []);
         $pillarLabel  = $pillarLabels[$slug] ?? $slug;
     @endphp
 
@@ -214,10 +216,59 @@
         <h3 style="font-size: 11px; color: #5A6259; margin-bottom: 8px;">Rincian Sub-Bucket</h3>
         <table style="border: 1px solid rgba(15,20,17,0.08); margin-bottom: 18px;">
             @foreach ($bucketScores as $k => $v)
-                <tr style="border-bottom: 1px solid rgba(15,20,17,0.08);">
-                    <td style="padding: 6px 12px; font-size: 9px; color: #5A6259; width: 70%;">{{ $subBucketLabels[$k] ?? $k }}</td>
-                    <td style="padding: 6px 12px; font-size: 10px; font-weight: bold; color: #0F1411; text-align: right;">{{ $v }}</td>
+                @php
+                    $bd        = is_array($bdByBucket[$k] ?? null) ? $bdByBucket[$k] : null;
+                    $formula   = $bd['formula'] ?? null;
+                    $hasDetail = $bd !== null;
+                @endphp
+                <tr style="border-bottom: {{ $hasDetail ? 'none' : '1px solid rgba(15,20,17,0.08)' }};">
+                    <td style="padding: 6px 12px 4px; font-size: 9px; color: #5A6259; width: 70%;">{{ $subBucketLabels[$k] ?? $k }}</td>
+                    <td style="padding: 6px 12px 4px; font-size: 10px; font-weight: bold; color: #0F1411; text-align: right;">{{ $v }}</td>
                 </tr>
+                @if ($hasDetail)
+                    @php
+                        $rawInputs    = (array) ($bd['raw_inputs'] ?? []);
+                        $tierTable    = (array) ($bd['tier_table'] ?? []);
+                        $llmReasoning = (string) ($bd['llm_reasoning'] ?? '');
+                        $limitations  = (array) ($bd['limitations'] ?? []);
+
+                        if ($formula === 'llm_judgment') {
+                            $inputLine = implode(' · ', (array) ($rawInputs['context_provided'] ?? []));
+                        } else {
+                            $parts = [];
+                            foreach ($rawInputs as $rk => $rv) {
+                                if ($rk === 'source') continue;
+                                $parts[] = $rk . ': ' . (is_bool($rv) ? ($rv ? 'Ya' : 'Tidak') : $rv);
+                            }
+                            $inputLine = implode(' · ', $parts);
+                        }
+                    @endphp
+                    <tr style="border-bottom: 1px solid rgba(15,20,17,0.08);">
+                        <td colspan="2" style="padding: 0 12px 8px; font-size: 8px; color: #5A6259; background: #F7F9F5;">
+                            <span style="font-weight: bold;">Berdasarkan: </span>{{ $inputLine }}
+
+                            @if ($formula === 'deterministic_threshold' && count($tierTable) > 0)
+                                <table style="margin-top: 4px; font-size: 8px; border-collapse: collapse; width: auto;">
+                                    @foreach ($tierTable as $tier)
+                                        @php $isMatch = (bool) ($tier['matched'] ?? false); @endphp
+                                        <tr style="background: {{ $isMatch ? '#3D8948' : 'transparent' }}; color: {{ $isMatch ? '#FFFFFF' : '#5A6259' }};">
+                                            <td style="padding: 2px 10px 2px 0;">{{ $tier['range'] }}</td>
+                                            <td style="padding: 2px 10px; text-align: right; font-weight: {{ $isMatch ? 'bold' : 'normal' }};">{{ $tier['points'] }} pt</td>
+                                        </tr>
+                                    @endforeach
+                                </table>
+                            @endif
+
+                            @if ($formula === 'llm_judgment' && $llmReasoning !== '')
+                                <p style="margin: 4px 0 2px; line-height: 1.55; color: #0F1411; font-size: 8px;">{{ $llmReasoning }}</p>
+                            @endif
+
+                            @if (count($limitations) > 0)
+                                <p style="margin: 3px 0 0; font-style: italic; color: #8A9088; font-size: 7px;">Keterbatasan: {{ implode('; ', $limitations) }}</p>
+                            @endif
+                        </td>
+                    </tr>
+                @endif
             @endforeach
         </table>
     @endif
