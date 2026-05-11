@@ -181,6 +181,24 @@ final class InstagramProfileAuditService
                 $this->persistStatus($audit, 'credentials_stale');
                 return 'done-handling';
 
+            case 'interstitial_blocked':
+                // W7.1 item 7: Bloks login-chooser interstitial redirected
+                // away from the profile URL even after the worker's
+                // dismiss + re-navigate retry. Operator action is the same
+                // as login_wall_hit (re-bootstrap credential), so we use
+                // the same retry-once-with-different-credential pattern;
+                // the diagnostic detail string is what carries the
+                // distinction into Filament logs and operator dashboards.
+                $this->reportCredentialStale(
+                    $credentialId,
+                    'interstitial_blocked: ' . ($e->detail ?? 'Bloks chooser redirect'),
+                );
+                if (! $isLastAttempt) {
+                    return 'retry';
+                }
+                $this->persistStatus($audit, 'credentials_stale');
+                return 'done-handling';
+
             case 'rate_limited':
                 $this->persistStatus($audit, 'rate_limited');
                 return 'done-handling';

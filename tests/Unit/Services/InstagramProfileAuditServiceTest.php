@@ -339,6 +339,91 @@ class InstagramProfileAuditServiceTest extends TestCase
     }
 
     #[Test]
+    public function it_retries_on_interstitial_blocked_with_different_credential(): void
+    {
+        // W7.1 item 7 wiring: the new error code from the worker should
+        // be treated like login_wall_hit — mark the credential stale,
+        // try once more with a different credential, succeed.
+        $audit = $this->makeAudit();
+
+        $this->hub->expects($this->exactly(2))
+            ->method('getNextCredential')
+            ->willReturnOnConsecutiveCalls(
+                [
+                    'id'              => '01j_CRED_A',
+                    'platform'        => 'instagram',
+                    'username'        => 'staleone',
+                    'password'        => null,
+                    'session_cookies' => [['name' => 'sessionid', 'value' => '1']],
+                ],
+                [
+                    'id'              => '01j_CRED_B',
+                    'platform'        => 'instagram',
+                    'username'        => 'freshone',
+                    'password'        => null,
+                    'session_cookies' => [['name' => 'sessionid', 'value' => '2']],
+                ],
+            );
+
+        $this->hub->expects($this->once())
+            ->method('reportCredentialStatus')
+            ->with('01j_CRED_A', 'requires_2fa', $this->stringContains('interstitial_blocked'));
+
+        $this->worker->expects($this->exactly(2))
+            ->method('auditInstagramProfile')
+            ->willReturnOnConsecutiveCalls(
+                $this->throwException(new ProfileAuditException(
+                    errorCode: 'interstitial_blocked',
+                    httpStatus: 400,
+                    detail: 'Bloks chooser redirect; re-bootstrap required',
+                )),
+                $this->makeProfileAuditResult(),
+            );
+
+        $this->claude->method('analyzeInstagramProfile')
+            ->willReturn(['executive_summary' => 'OK after retry']);
+
+        $this->makeService()->audit($audit);
+
+        $audit->refresh();
+        $this->assertSame('done', $audit->instagram_audit_status);
+    }
+
+    #[Test]
+    public function it_marks_credentials_stale_when_interstitial_blocked_on_all_attempts(): void
+    {
+        $audit = $this->makeAudit();
+
+        $this->hub->expects($this->exactly(2))
+            ->method('getNextCredential')
+            ->willReturnOnConsecutiveCalls(
+                [
+                    'id' => '01j_A', 'platform' => 'instagram', 'username' => 'u', 'password' => null,
+                    'session_cookies' => [['name' => 'x', 'value' => '1']],
+                ],
+                [
+                    'id' => '01j_B', 'platform' => 'instagram', 'username' => 'u', 'password' => null,
+                    'session_cookies' => [['name' => 'x', 'value' => '2']],
+                ],
+            );
+
+        $this->hub->expects($this->exactly(2))->method('reportCredentialStatus');
+
+        $this->worker->expects($this->exactly(2))
+            ->method('auditInstagramProfile')
+            ->willThrowException(new ProfileAuditException(
+                errorCode: 'interstitial_blocked',
+                httpStatus: 400,
+                detail: null,
+            ));
+
+        $this->makeService()->audit($audit);
+
+        $audit->refresh();
+        $this->assertSame('credentials_stale', $audit->instagram_audit_status);
+    }
+
+    #[Test]
     public function it_marks_profile_not_found(): void
     {
         $audit = $this->makeAudit();
