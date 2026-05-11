@@ -37,6 +37,10 @@ return [
     'anthropic' => [
         'key' => env('ANTHROPIC_API_KEY'),
         'model' => env('ANTHROPIC_MODEL', 'claude-sonnet-4-6'),
+        // Separate from `model` so Naufal can upgrade the Phase 7-B IG analysis
+        // call to e.g. claude-opus-4-7 via vault (_shared.json -> analysis.model)
+        // without touching the deterministic / pillar-scorer model.
+        'model_analysis' => env('ANTHROPIC_MODEL_ANALYSIS', env('ANTHROPIC_MODEL', 'claude-sonnet-4-6')),
     ],
 
     'google' => [
@@ -47,6 +51,15 @@ return [
         'url'     => env('NEMA_WORKER_URL'),
         'api_key' => env('NEMA_WORKER_API_KEY'),
         'timeout' => (float) env('NEMA_WORKER_TIMEOUT', 10.0),
+    ],
+
+    // Hub internal API (Phase 7-B): fetch IG credentials, report status back.
+    // Both keys are overridden by VaultServiceProvider when _shared.json carries
+    // a `hub` block. Env values are local-dev fallbacks.
+    'hub' => [
+        'url'             => env('HUB_URL', 'http://nema-hub.test'),
+        'inbound_api_key' => env('HUB_INBOUND_API_KEY', ''),
+        'timeout'         => (float) env('HUB_TIMEOUT', 10.0),
     ],
 
 ];

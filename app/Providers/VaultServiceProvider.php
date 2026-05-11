@@ -89,6 +89,31 @@ class VaultServiceProvider extends ServiceProvider
                 ]);
             }
 
+            // Hub block — Phase 7-B credentials fetch + status callbacks.
+            // `inbound_api_key` is the SAME bearer the worker uses for callbacks;
+            // sharing it lets branding-builder reuse the existing hub.inbound
+            // middleware with zero Hub-side changes.
+            $hub = (array) ($data['hub'] ?? []);
+            if ($hub !== []) {
+                if (! empty($hub['url'])) {
+                    config(['services.hub.url' => (string) $hub['url']]);
+                }
+                if (array_key_exists('inbound_api_key', $hub)) {
+                    config(['services.hub.inbound_api_key' => (string) $hub['inbound_api_key']]);
+                }
+                if (isset($hub['timeout'])) {
+                    config(['services.hub.timeout' => (float) $hub['timeout']]);
+                }
+            }
+
+            // Analysis-model override (Phase 7-B). Falls through to scorer model
+            // when absent — keeps the door open for swapping to opus-4-7 later
+            // without a code change.
+            $analysis = (array) ($data['analysis'] ?? []);
+            if (! empty($analysis['model'])) {
+                config(['services.anthropic.model_analysis' => (string) $analysis['model']]);
+            }
+
             return;
         }
 
