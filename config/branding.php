@@ -141,4 +141,136 @@ return [
         'mime_allow'    => ['image/jpeg', 'image/png', 'image/webp'],
     ],
 
+    /*
+    | Generic suffixes stripped by BrandSearchQuery::normalizeBrandStem() before
+    | the brand name is sent to Google Autocomplete. Also used by
+    | SearchRecallScorer to disqualify residual tokens from being treated as
+    | "variants" (e.g. "less worry laundry" — "laundry" is not a variant signal).
+    | Match is case-insensitive, word-boundary, longest-first.
+    */
+    'brand_stems' => [
+        'generic_suffixes' => [
+            'dry cleaning',
+            'dry clean',
+            'wash and wear',
+            'wash & wear',
+            'laundry',
+            'laundromat',
+            'wash',
+            'washery',
+            'cuci',
+            'kiloan',
+            'express',
+            'premium',
+            'professional',
+            'service',
+            'services',
+            'kring',
+            'lounge',
+            'shop',
+            'store',
+        ],
+    ],
+
+    /*
+    | Seed list of Indonesian location indicators used by LocationDetector.
+    | Compounds (multi-word) are matched as substrings, longest-first, so they
+    | take precedence over their unigram parts.
+    | Singles are matched with word boundaries.
+    | Coverage rule of thumb: Jabodetabek-and-around at the neighborhood level,
+    | plus all 38 provincial capitals, plus unambiguous single-word provinces.
+    | Ambiguous province stems ("jawa", "kalimantan", "sumatera", "sulawesi",
+    | "nusa") are intentionally absent — only their full bigrams are included.
+    */
+    'location_tokens' => [
+        'compounds' => [
+            // Jakarta sub-neighborhoods
+            'lebak bulus',
+            'pondok indah',
+            'pondok kelapa',
+            'pondok kopi',
+            'pondok labu',
+            'pondok bambu',
+            'blok m',
+            'kebayoran baru',
+            'kebayoran lama',
+            'kelapa gading',
+            'pulo gadung',
+            'taman mini',
+            'kebon jeruk',
+            'duren tiga',
+            'menteng dalam',
+            'mangga dua',
+            'tanjung priok',
+            'sunter agung',
+            'kuningan timur',
+            'kuningan barat',
+            // Jakarta cardinal districts
+            'jakarta selatan',
+            'jakarta utara',
+            'jakarta barat',
+            'jakarta timur',
+            'jakarta pusat',
+            // Tangerang dev clusters that show up in laundry autocomplete
+            'park serpong',
+            'gading serpong',
+            'bsd city',
+            'alam sutera',
+            'bintaro jaya',
+            // Provinces (full bigrams only)
+            'jawa timur',
+            'jawa barat',
+            'jawa tengah',
+            'kalimantan barat',
+            'kalimantan timur',
+            'kalimantan selatan',
+            'kalimantan utara',
+            'kalimantan tengah',
+            'sumatera barat',
+            'sumatera utara',
+            'sumatera selatan',
+            'sulawesi tenggara',
+            'sulawesi tengah',
+            'sulawesi utara',
+            'sulawesi selatan',
+            'sulawesi barat',
+            'nusa tenggara timur',
+            'nusa tenggara barat',
+            'maluku utara',
+            'papua barat',
+            'papua tengah',
+            'papua selatan',
+            'papua pegunungan',
+            'kepulauan riau',
+            'kepulauan bangka belitung',
+            'daerah istimewa yogyakarta',
+            'dki jakarta',
+        ],
+        'singles' => [
+            // Jakarta neighborhoods (high signal for laundry context)
+            'kemang', 'tebet', 'jagakarsa', 'cilandak', 'cipete',
+            'menteng', 'sudirman', 'thamrin', 'kuningan', 'senayan',
+            'gading', 'pluit', 'ancol', 'kemayoran', 'cipinang',
+            'matraman', 'cengkareng', 'kembangan', 'meruya', 'puri',
+            'fatmawati', 'mampang', 'pancoran', 'tendean', 'casablanca',
+            'rasuna', 'cawang',
+            // Greater-Jakarta cities
+            'bekasi', 'depok', 'tangerang', 'serpong', 'cibinong',
+            'cibubur', 'cinere', 'sawangan', 'cimanggis', 'ciputat',
+            // Provincial capitals
+            'jakarta', 'bandung', 'semarang', 'yogyakarta', 'surabaya',
+            'denpasar', 'medan', 'padang', 'pekanbaru', 'palembang',
+            'jambi', 'bengkulu', 'lampung', 'pangkalpinang',
+            'serang', 'mataram', 'kupang', 'pontianak',
+            'palangkaraya', 'banjarmasin', 'samarinda',
+            'manado', 'palu', 'makassar', 'kendari', 'gorontalo', 'mamuju',
+            'ambon', 'sofifi', 'jayapura', 'manokwari',
+            'sorong', 'merauke',
+            // Unambiguous single-word province names
+            'aceh', 'riau', 'banten', 'bali',
+            // Generic administrative-unit indicators
+            'kota', 'kabupaten', 'kelurahan', 'kecamatan',
+        ],
+    ],
+
 ];
