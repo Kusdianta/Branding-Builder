@@ -9,6 +9,7 @@ use App\Models\ScoringRubric;
 use App\Services\Fetchers\GoogleMapsReviewsFetcher;
 use App\Services\Fetchers\TouchpointPresenceDetector;
 use App\Services\Fetchers\WebsiteFetcher;
+use App\Services\InstagramProfileAuditService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -16,16 +17,24 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Log;
+use Throwable;
 
 class AnalyzeBrand implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public int $timeout = 30;
+    /**
+     * Timeout accommodates Phase 7-B Instagram profile audit phase:
+     * worker scrape 25-45s + Claude analysis 15-25s + existing pillar
+     * scoring overhead. Total observed audit time should land 60-90s
+     * for IG-enabled audits; we set 180s headroom to absorb tail-latency
+     * on Anthropic API or worker browser launch without spurious kills.
+     */
+    public int $timeout = 180;
 
     public function __construct(public readonly string $auditId) {}
 
-    public function handle(): void
+    public function handle(InstagramProfileAuditService $instagramAudit): void
     {
         $audit = BrandAudit::findOrFail($this->auditId);
         $audit->update(['status' => BrandAudit::STATUS_ANALYZING]);
@@ -102,6 +111,25 @@ class AnalyzeBrand implements ShouldQueue
                 AggregateAuditJob::dispatch($auditId);
             })
             ->dispatch();
+
+        // Phase 7-B: IG profile audit runs SYNCHRONOUSLY in this job.
+        // Pillar batch above is async (other workers pick it up); the IG
+        // audit is single-credential / single-worker-call work that holds
+        // this job for ~45-75s. Never throws — every failure mode is
+        // persisted as instagram_audit_status on the row by the service.
+        // v1 design; async parallelization is a 7-B.1 optimization.
+        try {
+            $instagramAudit->audit($audit);
+        } catch (Throwable $e) {
+            // Defence in depth — service contracts swallow all errors, but
+            // if something slips through we never want the pillar batch's
+            // AggregateAuditJob to be blocked by an IG exception.
+            Log::error('AnalyzeBrand: IG audit threw despite service guarantee', [
+                'audit_id' => $this->auditId,
+                'class'    => $e::class,
+                'error'    => $e->getMessage(),
+            ]);
+        }
     }
 
     // ── Private fetchers ──────────────────────────────────────────────────────
