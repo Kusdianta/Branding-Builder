@@ -253,6 +253,7 @@ new class extends Component {
             'review_count_tier'   => 'Jumlah Review',
             'keyword_saturation'  => 'Kata Kunci',
             'sentiment_quality'   => 'Sentimen',
+            'search_recall'       => 'Search Recall',
             // digital-presence
             'has_gmaps'           => 'Google Maps',
             'has_instagram'       => 'Instagram',
@@ -751,20 +752,38 @@ new class extends Component {
                                                         $formula      = $bd['formula'] ?? 'unknown';
                                                         $rawInputs    = (array) ($bd['raw_inputs'] ?? []);
                                                         $tierTable    = (array) ($bd['tier_table'] ?? []);
+                                                        $signals      = (array) ($bd['signals'] ?? []);
+                                                        $suggestions  = (array) ($rawInputs['suggestions'] ?? []);
                                                         $llmReasoning = (string) ($bd['llm_reasoning'] ?? '');
                                                         $limitations  = (array) ($bd['limitations'] ?? []);
+                                                        $signalLabels = [
+                                                            'brand_recognition' => 'Pengenalan Brand',
+                                                            'geographic_spread' => 'Sebaran Lokasi',
+                                                            'variant_coverage'  => 'Variasi Pencarian',
+                                                        ];
 
                                                         if ($formula === 'llm_judgment') {
                                                             $inputLine = implode(', ', (array) ($rawInputs['context_provided'] ?? []));
+                                                        } elseif ($formula === 'deterministic_signals') {
+                                                            $inputLine = sprintf(
+                                                                'brand_stem: %s · sumber: %s',
+                                                                (string) ($rawInputs['brand_stem'] ?? '—'),
+                                                                (string) ($rawInputs['source'] ?? 'Google Autocomplete'),
+                                                            );
                                                         } else {
                                                             $parts = [];
                                                             foreach ($rawInputs as $rk => $rv) {
-                                                                if ($rk === 'source') continue;
+                                                                if (in_array($rk, ['source', 'suggestions', 'suggestion_count', 'brand_name', 'brand_stem', 'fetched_at'], true)) continue;
                                                                 $parts[] = $rk . ': ' . (is_bool($rv) ? ($rv ? 'Ya' : 'Tidak') : $rv);
                                                             }
                                                             $inputLine = implode(' · ', $parts);
                                                         }
                                                     @endphp
+
+                                                    @if ($k === 'search_recall')
+                                                        <p style="margin: 0 0 6px; line-height: 1.55;">Frekuensi dan variasi brand muncul di hasil autocomplete pencarian.</p>
+                                                    @endif
+
                                                     <p style="margin: 0 0 6px;"><strong>Berdasarkan:</strong> {{ $inputLine }}</p>
 
                                                     @if ($formula === 'deterministic_threshold' && count($tierTable) > 0)
@@ -777,6 +796,37 @@ new class extends Component {
                                                                 </tr>
                                                             @endforeach
                                                         </table>
+                                                    @endif
+
+                                                    @if ($formula === 'deterministic_signals' && count($signals) > 0)
+                                                        <table style="width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 6px;">
+                                                            @foreach ($signals as $sigKey => $sig)
+                                                                @php
+                                                                    $sigScore  = (int) ($sig['score'] ?? 0);
+                                                                    $sigCap    = (int) ($sig['cap'] ?? 0);
+                                                                    $sigDetail = (string) ($sig['detail'] ?? '');
+                                                                    $isFull    = $sigCap > 0 && $sigScore >= $sigCap;
+                                                                @endphp
+                                                                <tr style="background: {{ $isFull ? 'var(--chimera-500)' : 'transparent' }}; color: {{ $isFull ? '#FFFFFF' : 'inherit' }};">
+                                                                    <td style="padding: 3px 8px; vertical-align: top;">{{ $signalLabels[$sigKey] ?? $sigKey }}</td>
+                                                                    <td style="padding: 3px 8px; text-align: right; font-weight: {{ $isFull ? '600' : 'normal' }}; white-space: nowrap;">{{ $sigScore }} / {{ $sigCap }} pt</td>
+                                                                </tr>
+                                                                @if ($sigDetail !== '')
+                                                                    <tr>
+                                                                        <td colspan="2" style="padding: 0 8px 4px; font-size: 10px; color: var(--text-tertiary); line-height: 1.5;">{{ $sigDetail }}</td>
+                                                                    </tr>
+                                                                @endif
+                                                            @endforeach
+                                                        </table>
+
+                                                        @if (count($suggestions) > 0)
+                                                            <p style="margin: 4px 0 2px; font-weight: 600; color: var(--text-secondary);">Top {{ count($suggestions) }} hasil autocomplete:</p>
+                                                            <ol style="margin: 0 0 6px 18px; padding: 0; font-size: 10px; color: var(--text-secondary); line-height: 1.55;">
+                                                                @foreach ($suggestions as $sug)
+                                                                    <li>{{ $sug }}</li>
+                                                                @endforeach
+                                                            </ol>
+                                                        @endif
                                                     @endif
 
                                                     @if ($formula === 'llm_judgment' && $llmReasoning !== '')

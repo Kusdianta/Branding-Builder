@@ -229,15 +229,28 @@
                     @php
                         $rawInputs    = (array) ($bd['raw_inputs'] ?? []);
                         $tierTable    = (array) ($bd['tier_table'] ?? []);
+                        $signals      = (array) ($bd['signals'] ?? []);
+                        $suggestions  = (array) ($rawInputs['suggestions'] ?? []);
                         $llmReasoning = (string) ($bd['llm_reasoning'] ?? '');
                         $limitations  = (array) ($bd['limitations'] ?? []);
+                        $signalLabels = [
+                            'brand_recognition' => 'Pengenalan Brand',
+                            'geographic_spread' => 'Sebaran Lokasi',
+                            'variant_coverage'  => 'Variasi Pencarian',
+                        ];
 
                         if ($formula === 'llm_judgment') {
                             $inputLine = implode(' · ', (array) ($rawInputs['context_provided'] ?? []));
+                        } elseif ($formula === 'deterministic_signals') {
+                            $inputLine = sprintf(
+                                'brand_stem: %s · sumber: %s',
+                                (string) ($rawInputs['brand_stem'] ?? '—'),
+                                (string) ($rawInputs['source'] ?? 'Google Autocomplete'),
+                            );
                         } else {
                             $parts = [];
                             foreach ($rawInputs as $rk => $rv) {
-                                if ($rk === 'source') continue;
+                                if (in_array($rk, ['source', 'suggestions', 'suggestion_count', 'brand_name', 'brand_stem', 'fetched_at'], true)) continue;
                                 $parts[] = $rk . ': ' . (is_bool($rv) ? ($rv ? 'Ya' : 'Tidak') : $rv);
                             }
                             $inputLine = implode(' · ', $parts);
@@ -245,6 +258,10 @@
                     @endphp
                     <tr style="border-bottom: 1px solid rgba(15,20,17,0.08);">
                         <td colspan="2" style="padding: 0 12px 8px; font-size: 8px; color: #5A6259; background: #F7F9F5;">
+                            @if ($k === 'search_recall')
+                                <p style="margin: 0 0 4px; line-height: 1.55; color: #5A6259; font-size: 8px;">Frekuensi dan variasi brand muncul di hasil autocomplete pencarian.</p>
+                            @endif
+
                             <span style="font-weight: bold;">Berdasarkan: </span>{{ $inputLine }}
 
                             @if ($formula === 'deterministic_threshold' && count($tierTable) > 0)
@@ -257,6 +274,37 @@
                                         </tr>
                                     @endforeach
                                 </table>
+                            @endif
+
+                            @if ($formula === 'deterministic_signals' && count($signals) > 0)
+                                <table style="margin-top: 4px; font-size: 8px; border-collapse: collapse; width: 100%;">
+                                    @foreach ($signals as $sigKey => $sig)
+                                        @php
+                                            $sigScore  = (int) ($sig['score'] ?? 0);
+                                            $sigCap    = (int) ($sig['cap'] ?? 0);
+                                            $sigDetail = (string) ($sig['detail'] ?? '');
+                                            $isFull    = $sigCap > 0 && $sigScore >= $sigCap;
+                                        @endphp
+                                        <tr style="background: {{ $isFull ? '#3D8948' : 'transparent' }}; color: {{ $isFull ? '#FFFFFF' : '#5A6259' }};">
+                                            <td style="padding: 2px 10px 2px 0;">{{ $signalLabels[$sigKey] ?? $sigKey }}</td>
+                                            <td style="padding: 2px 10px; text-align: right; font-weight: {{ $isFull ? 'bold' : 'normal' }}; white-space: nowrap;">{{ $sigScore }} / {{ $sigCap }} pt</td>
+                                        </tr>
+                                        @if ($sigDetail !== '')
+                                            <tr>
+                                                <td colspan="2" style="padding: 0 10px 2px 0; font-size: 7px; color: #8A9088; line-height: 1.5;">{{ $sigDetail }}</td>
+                                            </tr>
+                                        @endif
+                                    @endforeach
+                                </table>
+
+                                @if (count($suggestions) > 0)
+                                    <p style="margin: 4px 0 2px; font-weight: bold; font-size: 8px; color: #5A6259;">Top {{ count($suggestions) }} hasil autocomplete:</p>
+                                    <ol style="margin: 0 0 4px 14px; padding: 0; font-size: 7px; color: #5A6259; line-height: 1.4;">
+                                        @foreach ($suggestions as $sug)
+                                            <li>{{ $sug }}</li>
+                                        @endforeach
+                                    </ol>
+                                @endif
                             @endif
 
                             @if ($formula === 'llm_judgment' && $llmReasoning !== '')

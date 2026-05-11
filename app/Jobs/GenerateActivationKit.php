@@ -45,6 +45,7 @@ class GenerateActivationKit implements ShouldQueue
                     'review_count_tier'     => 'Jumlah Review',
                     'keyword_saturation'    => 'Kata Kunci',
                     'sentiment_quality'     => 'Sentimen',
+                    'search_recall'         => 'Search Recall',
                     'has_gmaps'             => 'Google Maps',
                     'has_instagram'         => 'Instagram',
                     'has_website'           => 'Website',
