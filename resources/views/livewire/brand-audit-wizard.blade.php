@@ -45,6 +45,10 @@ new class extends Component {
     public bool    $kitGenerating      = false;
     public array   $scoreBreakdown     = [];
 
+    // Phase 7-C BB15: Instagram audit data for dashboard rendering.
+    public array   $instagramAudit       = [];
+    public ?string $instagramAuditStatus = null;
+
     // Modal
     public bool    $showModal   = false;
     public ?string $modalPillar = null;
@@ -109,6 +113,9 @@ new class extends Component {
         $this->errorMessage      = $audit->error_message;
         $this->activationKitPath = $audit->activation_kit_path;
         $this->scoreBreakdown    = $audit->score_breakdown ?? [];
+
+        $this->instagramAudit       = (array) ($audit->instagram_audit ?? []);
+        $this->instagramAuditStatus = $audit->instagram_audit_status;
 
         // Stop showing the spinner once the file has actually landed.
         if ($this->activationKitPath) {
@@ -858,6 +865,12 @@ new class extends Component {
                         </div>
                     @endforeach
                 </div>
+
+                {{-- ===== Phase 7-C BB15: Audit Profil Instagram ===== --}}
+                @include('livewire._instagram-audit-section', [
+                    'instagramAudit'       => $instagramAudit,
+                    'instagramAuditStatus' => $instagramAuditStatus,
+                ])
 
                 {{-- ===== Temuan Utama ===== --}}
                 @if (count($keyFindings) > 0)
