@@ -14,6 +14,7 @@ use App\Models\ScoringRubric;
 use App\Services\Scoring\DigitalPresenceScorer;
 use App\Services\Scoring\RecallScorer;
 use App\Services\Scoring\SearchRecallScorer;
+use Illuminate\Support\Facades\Log;
 use Nema\WorkerClient\DTO\InstagramProfileAudit;
 use RuntimeException;
 
@@ -25,7 +26,18 @@ class ClaudeService
      *  profile_pic (1) + screenshot (1) + first 6 post thumbnails (6) = 8. */
     private const ANALYSIS_THUMBNAIL_LIMIT = 6;
 
-    private const ANALYSIS_MAX_TOKENS = 6144;
+    /**
+     * W7.1 item 11 (2026-05-12): bumped from 6144 → 10240 after live
+     * Phase 7-B smoke against @lessworry.id (rich worker payload: 2,930
+     * followers + 163 posts + 6 captions + 6 highlights) truncated
+     * mid-sentence at ~19.5K chars / ~6500 tokens. Indonesian-heavy
+     * consultative analysis is more token-dense than English; the prompt
+     * also asks for 5 priority_recommendations + 5-7 quick_wins + 3-5
+     * content pillars + full scorecard + bio analysis + name SEO etc.
+     * 10240 leaves comfortable headroom; cost at $15/1M output tokens
+     * is ~$0.15 per analysis at the new ceiling (vs ~$0.09 prior).
+     */
+    private const ANALYSIS_MAX_TOKENS = 10240;
 
     private const ANALYSIS_TEMPERATURE = 0.2;
 
@@ -147,6 +159,19 @@ class ClaudeService
             $lastRaw = $raw;
             $cleaned = $this->stripFences($raw);
             $decoded = json_decode($cleaned, true);
+
+            // W7.1 item 11: surface max_tokens truncation explicitly so
+            // operators see the cause when json_decode fails. Anthropic
+            // SDK exposes ``stop_reason`` on the response — anything
+            // other than 'end_turn' is worth logging.
+            $stopReason = $response->stopReason ?? null;
+            if (is_string($stopReason) && $stopReason !== 'end_turn') {
+                Log::warning('ClaudeService::analyzeInstagramProfile non-terminal stop reason', [
+                    'attempt'     => $attempt,
+                    'stop_reason' => $stopReason,
+                    'raw_length'  => strlen($raw),
+                ]);
+            }
 
             if (! is_array($decoded)) {
                 continue; // retry — parse failure (only retry trigger after W7.1 item 8)
