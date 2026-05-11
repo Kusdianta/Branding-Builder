@@ -14,6 +14,8 @@ use App\Models\ScoringRubric;
 use App\Services\Scoring\DigitalPresenceScorer;
 use App\Services\Scoring\RecallScorer;
 use App\Services\Scoring\SearchRecallScorer;
+use Nema\WorkerClient\DTO\InstagramProfileAudit;
+use RuntimeException;
 
 class ClaudeService
 {
@@ -80,6 +82,28 @@ class ClaudeService
             ScoringRubric::PILLAR_DIGITAL  => $this->scoreDigital($inputs),
             default                         => $this->scoreLlmPillar($pillarSlug, $inputs),
         };
+    }
+
+    /**
+     * Phase 7-B: structured apikprimadya-style analysis of an Instagram
+     * profile audit captured by the worker. Returns the canonical JSON
+     * payload persisted to brand_audits.instagram_audit.
+     *
+     * Stub signature landed in BB10 so InstagramProfileAuditService can be
+     * unit-tested with createMock(); the full prompt + parser is delivered
+     * in BB11.
+     *
+     * @return array<string,mixed>
+     */
+    public function analyzeInstagramProfile(
+        InstagramProfileAudit $auditData,
+        string $brandName,
+        string $serviceType,
+    ): array {
+        throw new RuntimeException(
+            'ClaudeService::analyzeInstagramProfile is not yet implemented; '
+            . 'BB11 fills the prompt + parser. Mock this method in tests.',
+        );
     }
 
     /**

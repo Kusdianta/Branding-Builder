@@ -29,7 +29,7 @@ use RuntimeException;
  * Auth: Bearer token from config('services.hub.inbound_api_key'). 10s timeout
  * by default; Hub is local LAN so no transient-failure retries.
  */
-final class HubCredentialsClient
+class HubCredentialsClient
 {
     private ClientInterface $http;
 
