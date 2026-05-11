@@ -408,6 +408,11 @@
     @endforeach
 @endif
 
+{{-- ========================== IG PROFILE AUDIT SECTION (Phase 7-C BB14) ========================== --}}
+{{-- Gated to instagram_audit_status='done' inside the partial; renders
+     nothing for skipped/failed states until BB16 adds the banner. --}}
+@include('pdf._instagram-audit', ['audit' => $audit])
+
 {{-- ========================== AUDIT REFERENCE FOOTER ========================== --}}
 <div style="page-break-before: always;"></div>
 <h3 style="font-size: 11px; color: #5A6259; margin-bottom: 6px;">Detail Audit</h3>
