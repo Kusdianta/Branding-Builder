@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "9e7b8ffd2f676ca16a698f262f649157",
+    "content-hash": "3ee079d867cd210667fe96c06919e519",
     "packages": [
         {
             "name": "anthropic-ai/sdk",
@@ -2639,7 +2639,7 @@
             "dist": {
                 "type": "path",
                 "url": "../nema-ui-kit",
-                "reference": "0c73eb44a509e73cea0ed047207cb40bc0a43745"
+                "reference": "80b99b0859250bd6ce0fde518af330fe8575d160"
             },
             "require": {
                 "illuminate/support": "^11.0|^12.0|^13.0",
@@ -2663,6 +2663,52 @@
                 "proprietary"
             ],
             "description": "Shared Blade layout, components, design tokens, and fonts for the Nema platform",
+            "transport-options": {
+                "symlink": true,
+                "relative": true
+            }
+        },
+        {
+            "name": "nema/worker-client",
+            "version": "dev-main",
+            "dist": {
+                "type": "path",
+                "url": "../nema-worker-client",
+                "reference": "657bb8feb97cd650334d1e1c360d54cc879dab49"
+            },
+            "require": {
+                "guzzlehttp/guzzle": "^7.0",
+                "illuminate/support": "^11.0|^12.0|^13.0",
+                "php": "^8.2"
+            },
+            "require-dev": {
+                "phpunit/phpunit": "^10.0|^11.0"
+            },
+            "type": "library",
+            "extra": {
+                "laravel": {
+                    "providers": [
+                        "Nema\\WorkerClient\\NemaWorkerServiceProvider"
+                    ],
+                    "aliases": {
+                        "NemaWorker": "Nema\\WorkerClient\\Facades\\NemaWorker"
+                    }
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "Nema\\WorkerClient\\": "src/"
+                }
+            },
+            "autoload-dev": {
+                "psr-4": {
+                    "Nema\\WorkerClient\\Tests\\": "tests/"
+                }
+            },
+            "license": [
+                "MIT"
+            ],
+            "description": "PHP client for the Nema shared FastAPI worker (autocomplete, scraping, keyword data).",
             "transport-options": {
                 "symlink": true,
                 "relative": true
@@ -8947,7 +8993,8 @@
     "aliases": [],
     "minimum-stability": "dev",
     "stability-flags": {
-        "nema/ui-kit": 20
+        "nema/ui-kit": 20,
+        "nema/worker-client": 20
     },
     "prefer-stable": true,
     "prefer-lowest": false,

@@ -12,6 +12,13 @@
             "options": {
                 "symlink": true
             }
+        },
+        {
+            "type": "path",
+            "url": "../nema-worker-client",
+            "options": {
+                "symlink": true
+            }
         }
     ],
     "require": {
@@ -23,7 +30,8 @@
         "laravel/tinker": "^3.0",
         "livewire/livewire": "^4.3",
         "livewire/volt": "^1.10",
-        "nema/ui-kit": "@dev"
+        "nema/ui-kit": "@dev",
+        "nema/worker-client": "@dev"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",
