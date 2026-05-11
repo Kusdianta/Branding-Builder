@@ -38,6 +38,8 @@ class BrandAudit extends Model
         'error_message',
         'activation_kit_path',
         'score_breakdown',
+        'instagram_audit',
+        'instagram_audit_status',
         'expires_at',
     ];
 
@@ -52,6 +54,7 @@ class BrandAudit extends Model
             'key_findings'      => 'array',
             'recommendations'   => 'array',
             'evidence'          => 'array',
+            'instagram_audit'   => 'array',
             'expires_at'        => 'datetime',
         ];
     }
