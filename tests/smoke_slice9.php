@@ -65,7 +65,7 @@ if (isset($bd['rating_tier']['formula']) && $bd['rating_tier']['formula'] === 'd
 if (! empty($bd['rating_tier']['tier_table'])) {
     $matched = array_filter($bd['rating_tier']['tier_table'], fn ($t) => $t['matched'] ?? false);
     if (count($matched) === 1 && reset($matched)['range'] === '≥4.8') {
-        $pass('rating_tier matched correct tier (≥4.8 → 35pt)');
+        $pass('rating_tier matched correct tier (≥4.8 → 25pt after Phase 6-partial rebalance)');
     } else {
         $fail('rating_tier matched wrong tier');
     }
@@ -73,8 +73,8 @@ if (! empty($bd['rating_tier']['tier_table'])) {
     $fail('rating_tier missing tier_table');
 }
 
-if (($bd['rating_tier']['score'] ?? null) === 35) {
-    $pass('rating_tier score = 35');
+if (($bd['rating_tier']['score'] ?? null) === 25) {
+    $pass('rating_tier score = 25 (was 35 pre-rebalance)');
 } else {
     $fail('rating_tier score wrong: ' . ($bd['rating_tier']['score'] ?? 'null'));
 }

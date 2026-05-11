@@ -13,6 +13,7 @@ use App\Exceptions\UnknownPillarException;
 use App\Models\ScoringRubric;
 use App\Services\Scoring\DigitalPresenceScorer;
 use App\Services\Scoring\RecallScorer;
+use App\Services\Scoring\SearchRecallScorer;
 
 class ClaudeService
 {
@@ -51,8 +52,9 @@ class ClaudeService
 
     private string $model;
 
-    public function __construct()
-    {
+    public function __construct(
+        private readonly SearchRecallScorer $searchRecallScorer,
+    ) {
         $apiKey = (string) config('services.anthropic.key', '');
         if ($apiKey === '') {
             throw MissingAnthropicKeyException::create();
@@ -119,16 +121,30 @@ class ClaudeService
     /** @param array<string,mixed> $inputs */
     private function scoreRecall(array $inputs): PillarScore
     {
-        $base      = (new RecallScorer())->score($inputs);
-        $narrative = $this->fetchNarrative(ScoringRubric::PILLAR_RECALL, $inputs, $base->subBucketScores);
+        // Review-based sub-buckets (caps 25 + 15 + 15 + 10 = 65)
+        $base = (new RecallScorer())->score($inputs);
+
+        // Autocomplete-based search_recall sub-bucket (cap 35) layered on top.
+        $brandName    = (string) ($inputs['brand_name'] ?? '');
+        $searchResult = $this->searchRecallScorer->score($brandName);
+
+        $subBuckets                  = $base->subBucketScores;
+        $subBuckets['search_recall'] = $searchResult['score'];
+
+        $breakdown                  = $base->scoreBreakdown;
+        $breakdown['search_recall'] = $searchResult['breakdown'];
+
+        $totalScore = max(0, min(100, array_sum($subBuckets)));
+
+        $narrative = $this->fetchNarrative(ScoringRubric::PILLAR_RECALL, $inputs, $subBuckets);
 
         return new PillarScore(
             pillarSlug:      $base->pillarSlug,
-            score:           $base->score,
+            score:           $totalScore,
             evidence:        $narrative['evidence'],
             reasoning:       $narrative['reasoning'],
-            subBucketScores: $base->subBucketScores,
-            scoreBreakdown:  $base->scoreBreakdown,
+            subBucketScores: $subBuckets,
+            scoreBreakdown:  $breakdown,
         );
     }
 

@@ -45,10 +45,11 @@ return [
             'transparansi_harga'  => ['cap' => 10, 'type' => 'llm'],
         ],
         ScoringRubric::PILLAR_RECALL => [
-            'rating_tier'        => ['cap' => 35, 'type' => 'deterministic'],
-            'review_count_tier'  => ['cap' => 25, 'type' => 'deterministic'],
-            'keyword_saturation' => ['cap' => 25, 'type' => 'deterministic'],
-            'sentiment_quality'  => ['cap' => 15, 'type' => 'deterministic'],
+            'rating_tier'        => ['cap' => 25, 'type' => 'deterministic'],
+            'review_count_tier'  => ['cap' => 15, 'type' => 'deterministic'],
+            'keyword_saturation' => ['cap' => 15, 'type' => 'deterministic'],
+            'sentiment_quality'  => ['cap' => 10, 'type' => 'deterministic'],
+            'search_recall'      => ['cap' => 35, 'type' => 'deterministic'],
         ],
         ScoringRubric::PILLAR_EXPERIENCE => [
             'base'                   => ['cap' => 30, 'type' => 'base'],

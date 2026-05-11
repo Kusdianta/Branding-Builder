@@ -8,13 +8,16 @@ use App\DTO\PillarScore;
 use App\Models\ScoringRubric;
 
 /**
- * Deterministic scorer for the Brand Recall pillar.
+ * Deterministic scorer for the Brand Recall pillar's review-based signals.
  *
- * Sub-buckets (total cap 100):
- *   rating_tier        35  — overall Google star rating tier
- *   review_count_tier  25  — volume of Google reviews
- *   keyword_saturation 25  — share of sampled reviews containing ≥1 positive keyword
- *   sentiment_quality  15  — avg star rating of sampled reviews
+ * Sub-buckets covered here (caps after Phase 6-partial rebalance, total 65):
+ *   rating_tier        25  — overall Google star rating tier
+ *   review_count_tier  15  — volume of Google reviews
+ *   keyword_saturation 15  — share of sampled reviews containing ≥1 positive keyword
+ *   sentiment_quality  10  — avg star rating of sampled reviews
+ *
+ * The remaining 35 points come from the autocomplete-based "search_recall"
+ * sub-bucket emitted by SearchRecallScorer and merged in by ClaudeService.
  */
 final class RecallScorer
 {
@@ -45,7 +48,9 @@ final class RecallScorer
             'sentiment_quality'  => $sentScore,
         ];
 
-        $total = max(0, min(100, array_sum($subBuckets)));
+        // Cap at 65 — search_recall (35 more pts) is layered on later by
+        // ClaudeService::scoreRecall so the full pillar caps at 100.
+        $total = max(0, min(65, array_sum($subBuckets)));
 
         $breakdown = [
             'rating_tier'        => $this->ratingBreakdown($rating, $ratingScore),
@@ -67,11 +72,11 @@ final class RecallScorer
     private function calcRatingScore(float $rating): int
     {
         return match (true) {
-            $rating >= 4.8 => 35,
-            $rating >= 4.5 => 28,
-            $rating >= 4.0 => 20,
-            $rating >= 3.5 => 12,
-            $rating >= 3.0 => 6,
+            $rating >= 4.8 => 25,
+            $rating >= 4.5 => 20,
+            $rating >= 4.0 => 14,
+            $rating >= 3.5 => 8,
+            $rating >= 3.0 => 4,
             default        => 0,
         };
     }
@@ -79,11 +84,12 @@ final class RecallScorer
     private function calcCountScore(int $count): int
     {
         return match (true) {
-            $count > 200  => 25,
-            $count >= 101 => 20,
-            $count >= 51  => 15,
-            $count >= 11  => 10,
-            $count >= 1   => 5,
+            $count >= 500 => 15,
+            $count >= 200 => 12,
+            $count >= 100 => 9,
+            $count >= 50  => 5,
+            $count >= 11  => 3,
+            $count >= 1   => 1,
             default       => 0,
         };
     }
@@ -114,7 +120,17 @@ final class RecallScorer
         }
 
         $ratio = $hitsCount / $total;
-        return [min(25, (int) round($ratio * 5) * 5), $hitsCount, $total];
+        $pct   = $ratio * 100;
+        $score = match (true) {
+            $pct >= 90 => 15,
+            $pct >= 70 => 12,
+            $pct >= 50 => 9,
+            $pct >= 30 => 6,
+            $pct >= 10 => 3,
+            default    => 0,
+        };
+
+        return [$score, $hitsCount, $total];
     }
 
     /**
@@ -131,10 +147,10 @@ final class RecallScorer
         $avg = array_sum(array_column($reviews, 'rating')) / $total;
 
         $score = match (true) {
-            $avg >= 4.8 => 15,
-            $avg >= 4.5 => 12,
-            $avg >= 4.0 => 8,
-            $avg >= 3.5 => 4,
+            $avg >= 4.8 => 10,
+            $avg >= 4.5 => 8,
+            $avg >= 4.0 => 5,
+            $avg >= 3.5 => 3,
             default     => 0,
         };
 
@@ -147,19 +163,19 @@ final class RecallScorer
         $noData = $rating <= 0.0;
         return [
             'score'      => $score,
-            'cap'        => 35,
+            'cap'        => 25,
             'raw_inputs' => ['rating' => $noData ? null : $rating, 'source' => 'Google Maps Places API'],
             'formula'    => 'deterministic_threshold',
             'tier_table' => [
-                ['range' => '≥4.8',           'points' => 35, 'matched' => $rating >= 4.8],
-                ['range' => '4.5–4.7',        'points' => 28, 'matched' => $rating >= 4.5 && $rating < 4.8],
-                ['range' => '4.0–4.4',        'points' => 20, 'matched' => $rating >= 4.0 && $rating < 4.5],
-                ['range' => '3.5–3.9',        'points' => 12, 'matched' => $rating >= 3.5 && $rating < 4.0],
-                ['range' => '3.0–3.4',        'points' => 6,  'matched' => $rating >= 3.0 && $rating < 3.5],
+                ['range' => '≥4.8',           'points' => 25, 'matched' => $rating >= 4.8],
+                ['range' => '4.5–4.7',        'points' => 20, 'matched' => $rating >= 4.5 && $rating < 4.8],
+                ['range' => '4.0–4.4',        'points' => 14, 'matched' => $rating >= 4.0 && $rating < 4.5],
+                ['range' => '3.5–3.9',        'points' => 8,  'matched' => $rating >= 3.5 && $rating < 4.0],
+                ['range' => '3.0–3.4',        'points' => 4,  'matched' => $rating >= 3.0 && $rating < 3.5],
                 ['range' => '<3.0',           'points' => 0,  'matched' => ! $noData && $rating < 3.0],
                 ['range' => 'Tidak tersedia', 'points' => 0,  'matched' => $noData],
             ],
-            'explanation_id' => 'rating_tier_v1',
+            'explanation_id' => 'rating_tier_v2',
         ];
     }
 
@@ -168,18 +184,19 @@ final class RecallScorer
     {
         return [
             'score'      => $score,
-            'cap'        => 25,
+            'cap'        => 15,
             'raw_inputs' => ['review_count' => $count, 'source' => 'Google Maps Places API'],
             'formula'    => 'deterministic_threshold',
             'tier_table' => [
-                ['range' => '>200',    'points' => 25, 'matched' => $count > 200],
-                ['range' => '101–200', 'points' => 20, 'matched' => $count >= 101 && $count <= 200],
-                ['range' => '51–100',  'points' => 15, 'matched' => $count >= 51 && $count <= 100],
-                ['range' => '11–50',   'points' => 10, 'matched' => $count >= 11 && $count <= 50],
-                ['range' => '1–10',    'points' => 5,  'matched' => $count >= 1 && $count <= 10],
+                ['range' => '≥500',    'points' => 15, 'matched' => $count >= 500],
+                ['range' => '200–499', 'points' => 12, 'matched' => $count >= 200 && $count < 500],
+                ['range' => '100–199', 'points' => 9,  'matched' => $count >= 100 && $count < 200],
+                ['range' => '50–99',   'points' => 5,  'matched' => $count >= 50  && $count < 100],
+                ['range' => '11–49',   'points' => 3,  'matched' => $count >= 11  && $count < 50],
+                ['range' => '1–10',    'points' => 1,  'matched' => $count >= 1   && $count < 11],
                 ['range' => '0',       'points' => 0,  'matched' => $count === 0],
             ],
-            'explanation_id' => 'review_count_tier_v1',
+            'explanation_id' => 'review_count_tier_v2',
         ];
     }
 
@@ -189,7 +206,7 @@ final class RecallScorer
         $hitPct = $total > 0 ? round($hitsCount / $total * 100, 1) : 0.0;
         return [
             'score'      => $score,
-            'cap'        => 25,
+            'cap'        => 15,
             'raw_inputs' => [
                 'sampled_reviews' => $total,
                 'keyword_hits'    => $hitsCount,
@@ -198,14 +215,14 @@ final class RecallScorer
             'formula'    => 'deterministic_threshold',
             'tier_table' => [
                 ['range' => '0–9%',   'points' => 0,  'matched' => $score === 0 && $total > 0],
-                ['range' => '10–29%', 'points' => 5,  'matched' => $score === 5],
-                ['range' => '30–49%', 'points' => 10, 'matched' => $score === 10],
-                ['range' => '50–69%', 'points' => 15, 'matched' => $score === 15],
-                ['range' => '70–89%', 'points' => 20, 'matched' => $score === 20],
-                ['range' => '≥90%',   'points' => 25, 'matched' => $score === 25],
+                ['range' => '10–29%', 'points' => 3,  'matched' => $score === 3],
+                ['range' => '30–49%', 'points' => 6,  'matched' => $score === 6],
+                ['range' => '50–69%', 'points' => 9,  'matched' => $score === 9],
+                ['range' => '70–89%', 'points' => 12, 'matched' => $score === 12],
+                ['range' => '≥90%',   'points' => 15, 'matched' => $score === 15],
                 ['range' => 'Tidak ada data', 'points' => 0, 'matched' => $total === 0],
             ],
-            'explanation_id' => 'keyword_saturation_v1',
+            'explanation_id' => 'keyword_saturation_v2',
         ];
     }
 
@@ -215,7 +232,7 @@ final class RecallScorer
         $noData = $sampleSize === 0;
         return [
             'score'      => $score,
-            'cap'        => 15,
+            'cap'        => 10,
             'raw_inputs' => [
                 'avg_rating'  => $noData ? null : $avgRating,
                 'sample_size' => $sampleSize,
@@ -223,14 +240,14 @@ final class RecallScorer
             ],
             'formula'    => 'deterministic_threshold',
             'tier_table' => [
-                ['range' => '≥4.8',           'points' => 15, 'matched' => $avgRating >= 4.8 && ! $noData],
-                ['range' => '4.5–4.7',        'points' => 12, 'matched' => $avgRating >= 4.5 && $avgRating < 4.8],
-                ['range' => '4.0–4.4',        'points' => 8,  'matched' => $avgRating >= 4.0 && $avgRating < 4.5],
-                ['range' => '3.5–3.9',        'points' => 4,  'matched' => $avgRating >= 3.5 && $avgRating < 4.0],
+                ['range' => '≥4.8',           'points' => 10, 'matched' => $avgRating >= 4.8 && ! $noData],
+                ['range' => '4.5–4.7',        'points' => 8,  'matched' => $avgRating >= 4.5 && $avgRating < 4.8],
+                ['range' => '4.0–4.4',        'points' => 5,  'matched' => $avgRating >= 4.0 && $avgRating < 4.5],
+                ['range' => '3.5–3.9',        'points' => 3,  'matched' => $avgRating >= 3.5 && $avgRating < 4.0],
                 ['range' => '<3.5',           'points' => 0,  'matched' => ! $noData && $avgRating < 3.5],
                 ['range' => 'Tidak ada data', 'points' => 0,  'matched' => $noData],
             ],
-            'explanation_id' => 'sentiment_quality_v1',
+            'explanation_id' => 'sentiment_quality_v2',
         ];
     }
 }
