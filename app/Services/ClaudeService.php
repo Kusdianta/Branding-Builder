@@ -149,12 +149,23 @@ class ClaudeService
             $decoded = json_decode($cleaned, true);
 
             if (! is_array($decoded)) {
-                continue; // retry — parse failure
+                continue; // retry — parse failure (only retry trigger after W7.1 item 8)
             }
+
+            // W7.1 item 8: normalize before validation. Unwrap nested-
+            // wrapping (Claude sometimes puts everything under 'analysis'
+            // or similar) + backfill any missing top-level keys with
+            // shape-appropriate empty defaults and an auto-backfill note
+            // appended to limitations[]. This drops the retry rate on
+            // schema-key omissions to zero — only genuine parse failures
+            // (caught above) trigger retry.
+            $decoded = $this->normalizeAnalysisResponse($decoded);
 
             $missing = $this->missingAnalysisKeys($decoded);
             if ($missing !== []) {
-                continue; // retry — schema violation
+                // Should be unreachable post-normalize; defensive guard
+                // for future schema additions that miss a defaults entry.
+                continue;
             }
 
             $decoded               = $this->computeOverallScore($decoded);
@@ -294,9 +305,18 @@ CARA OUTPUT
 - IKUTI schema persis di bawah — JANGAN tambah field di luar schema, JANGAN hilangkan field yang ada di schema.
 - JANGAN sertakan `analyzed_at` di output Anda; field itu akan diisi server.
 
+CRITICAL OUTPUT CONSTRAINT: Output MUST contain ALL 11 top-level keys as direct siblings of the root object: executive_summary, profile_branding, content_analysis, engagement_analysis, growth_positioning, content_gaps, priority_recommendations, quick_wins, competitive_positioning, scorecard, limitations. NONE of these may be nested under another key (e.g. do NOT wrap them inside `{"analysis": {...}}` or `{"result": {...}}`). Even if a section has no data to populate, output the key with its appropriate empty value (string "" or empty array []) and add a specific limitations[] entry naming what was missing. The 11 keys are non-negotiable — output that omits any one of them will be rejected.
+
 SCHEMA OUTPUT (wajib persis — tipe per field di sini hanya petunjuk, jangan literal disalin):
 
 {$schemaBlock}
+
+ANTI-POLA YANG HARUS DIHINDARI:
+- Membungkus seluruh struktur di dalam satu key (mis. semua isi di dalam 'analysis' atau 'result' atau 'data')
+- Menambahkan analyzed_at di output Anda (server yang mengisi)
+- Menghilangkan key wajib karena data tidak ada — wajib pakai struktur kosong + limitations note (lihat Prinsip 7)
+- Menambah key di luar 11 yang ditentukan
+- Menyalin literal pattern `<string>` atau `<...>` dari schema sebagai nilai — schema hanya panduan tipe, bukan nilai literal
 TEXT;
     }
 
@@ -567,16 +587,25 @@ SYS;
         return $missing;
     }
 
-    /** @return array<string,mixed> */
-    private function fallbackAnalysis(string $reason, string $rawText): array
+    /**
+     * Shape-appropriate empty defaults for each top-level analysis key.
+     * Single source of truth for the 11-key schema — referenced by both
+     * the normalizer (W7.1 item 8, fills in missing keys) and the
+     * terminal fallback (when both LLM attempts fail).
+     *
+     * Keep in sync with renderOutputSchemaBlock() above. Adding a new
+     * top-level analysis key requires updating: the schema block, this
+     * defaults map, and missingAnalysisKeys()'s required-list.
+     *
+     * @return array<string,mixed>
+     */
+    private function emptyAnalysisDefaults(): array
     {
         return [
-            'executive_summary' => $rawText !== ''
-                ? $rawText
-                : 'Analisis IG belum dapat dijalankan karena ' . $reason,
+            'executive_summary' => '',
             'profile_branding' => [
-                'bio_analysis'         => ['current_bio' => '', 'strengths' => [], 'weaknesses' => [], 'recommended_bio' => ''],
-                'name_field_seo'       => ['current' => '', 'assessment' => '', 'recommended' => ''],
+                'bio_analysis'          => ['current_bio' => '', 'strengths' => [], 'weaknesses' => [], 'recommended_bio' => ''],
+                'name_field_seo'        => ['current' => '', 'assessment' => '', 'recommended' => ''],
                 'highlights_assessment' => '',
             ],
             'content_analysis' => [
@@ -611,9 +640,135 @@ SYS;
                 'growth_potential'              => ['score' => 0, 'grade' => 'F'],
                 'overall'                       => ['score' => 0, 'grade' => 'F'],
             ],
-            'analyzed_at' => (new \DateTimeImmutable())->format(\DateTimeInterface::ATOM),
-            'limitations' => [$reason],
+            'limitations' => [],
         ];
+    }
+
+    /**
+     * W7.1 item 8: normalize Claude's response before schema validation.
+     *
+     * Two recovery passes are layered:
+     *
+     * 1. **Unwrap nested wrapping.** Claude sometimes returns the entire
+     *    analysis structure wrapped under a single root key (commonly
+     *    "analysis" / "result" / "data"). :func:`maybeUnwrapNestedAnalysis`
+     *    detects this when 5+ of the 11 expected top-level keys appear at
+     *    the inner level and lifts the inner object to the root.
+     *
+     * 2. **Backfill missing top-level keys.** For each of the 11 required
+     *    keys absent from the (post-unwrap) payload, fill in the shape-
+     *    appropriate empty value from :func:`emptyAnalysisDefaults` and
+     *    append a specific entry to ``limitations[]`` so the caller can
+     *    surface "auto-backfilled" diagnostics to the audit operator.
+     *
+     * After this normalizer, ``missingAnalysisKeys()`` returns ``[]`` on
+     * any input that successfully passed ``json_decode``. The retry path
+     * in :func:`analyzeInstagramProfile` is therefore reserved for genuine
+     * parse failures, not schema-key omissions.
+     *
+     * @param  array<string,mixed>  $payload
+     * @return array<string,mixed>
+     */
+    private function normalizeAnalysisResponse(array $payload): array
+    {
+        $payload = $this->maybeUnwrapNestedAnalysis($payload);
+
+        $defaults       = $this->emptyAnalysisDefaults();
+        $autoBackfilled = [];
+
+        foreach ($defaults as $key => $defaultValue) {
+            if (! array_key_exists($key, $payload)) {
+                $payload[$key]    = $defaultValue;
+                $autoBackfilled[] = $key;
+            }
+        }
+
+        // Defensive: scorecard.overall is a UI-required leaf; if Claude
+        // omitted it from an otherwise-present scorecard, ensure the
+        // placeholder is present so the server-side recompute has a
+        // target slot to overwrite.
+        if (
+            is_array($payload['scorecard'] ?? null)
+            && ! isset($payload['scorecard']['overall'])
+        ) {
+            $payload['scorecard']['overall'] = ['score' => 0, 'grade' => 'F'];
+        }
+
+        if ($autoBackfilled !== []) {
+            $limitations = is_array($payload['limitations'] ?? null) ? $payload['limitations'] : [];
+            foreach ($autoBackfilled as $key) {
+                $limitations[] = sprintf(
+                    "Auto-backfilled missing top-level key '%s' — Claude output omitted this section.",
+                    $key,
+                );
+            }
+            $payload['limitations'] = $limitations;
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Detect the "single root key wrapping the analysis structure"
+     * deviation (e.g. ``{"analysis": {...}}`` or ``{"result": {...}}``)
+     * and lift the inner object to the root.
+     *
+     * The match threshold is intentionally 5 of the 11 expected keys —
+     * lower would risk false-positive unwrapping of a legitimate nested
+     * shape (e.g. a payload that only happens to have one top-level key
+     * matching "executive_summary"), higher would miss the case where
+     * Claude wrapped the structure but omitted some inner keys itself
+     * (the backfill pass below handles those after unwrap).
+     *
+     * @param  array<string,mixed>  $payload
+     * @return array<string,mixed>
+     */
+    private function maybeUnwrapNestedAnalysis(array $payload): array
+    {
+        if (count($payload) !== 1) {
+            return $payload;
+        }
+
+        $inner = reset($payload);
+        if (! is_array($inner)) {
+            return $payload;
+        }
+
+        $expectedKeys = [
+            'executive_summary',
+            'profile_branding',
+            'content_analysis',
+            'engagement_analysis',
+            'growth_positioning',
+            'content_gaps',
+            'priority_recommendations',
+            'quick_wins',
+            'competitive_positioning',
+            'scorecard',
+            'limitations',
+        ];
+
+        $matchCount = 0;
+        foreach ($expectedKeys as $key) {
+            if (array_key_exists($key, $inner)) {
+                $matchCount++;
+            }
+        }
+
+        return $matchCount >= 5 ? $inner : $payload;
+    }
+
+    /** @return array<string,mixed> */
+    private function fallbackAnalysis(string $reason, string $rawText): array
+    {
+        $payload = $this->emptyAnalysisDefaults();
+        $payload['executive_summary'] = $rawText !== ''
+            ? $rawText
+            : 'Analisis IG belum dapat dijalankan karena ' . $reason;
+        $payload['limitations']       = [$reason];
+        $payload['analyzed_at']       = (new \DateTimeImmutable())->format(\DateTimeInterface::ATOM);
+
+        return $payload;
     }
 
     /** @return array<string,mixed> */
