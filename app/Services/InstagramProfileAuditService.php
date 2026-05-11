@@ -6,11 +6,13 @@ namespace App\Services;
 
 use App\Models\BrandAudit;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use Nema\WorkerClient\DTO\InstagramProfileAudit;
 use Nema\WorkerClient\Exceptions\ProfileAuditException;
 use Nema\WorkerClient\Exceptions\WorkerAuthException;
 use Nema\WorkerClient\Exceptions\WorkerNotAvailableException;
 use Nema\WorkerClient\NemaWorkerClient;
+use RuntimeException;
 use Throwable;
 
 /**
@@ -221,6 +223,14 @@ final class InstagramProfileAuditService
 
     private function analyzeAndPersist(BrandAudit $audit, InstagramProfileAudit $result): void
     {
+        // BB13: persist the worker's visual assets (profile pic, screenshot,
+        // top-6 post thumbnails) to disk + build the _meta sub-record that
+        // gives Phase 7-C's PDF + dashboard renderers the structured profile
+        // facts they need for the header card and the followers=0 degraded-
+        // data trigger. The Claude analysis output covers the prose; _meta
+        // covers the numeric + visual context.
+        $meta = $this->persistInstagramAssets($audit, $result);
+
         try {
             $analysis = $this->claude->analyzeInstagramProfile(
                 $result,
@@ -228,6 +238,7 @@ final class InstagramProfileAuditService
                 (string) $audit->service_type,
                 $audit->city !== null && $audit->city !== '' ? (string) $audit->city : null,
             );
+            $analysis['_meta'] = $meta;
             $audit->update([
                 'instagram_audit_status' => 'done',
                 'instagram_audit'        => $analysis,
@@ -240,6 +251,109 @@ final class InstagramProfileAuditService
             ]);
             $this->persistFailure($audit, 'claude_analysis_failed: ' . $e->getMessage());
         }
+    }
+
+    /**
+     * BB13: persist the worker payload's visual assets + return a structured
+     * profile-metadata record for the PDF + dashboard renderers.
+     *
+     * Files land on the ``local`` disk (storage/app/private/) under
+     * ``audits/{audit_id}/instagram/`` so they're private by default
+     * (never web-served, only readable from server-side render paths).
+     *
+     * Schema-safe attachment: returns the record so the caller can attach
+     * it under the ``_meta`` key of the persisted ``instagram_audit`` JSON.
+     * Underscore-prefixed keys are forbidden in Claude's output by the
+     * ANTI-POLA prompt callout (W7.1 item 8), so there's no collision
+     * risk with the analysis structure.
+     *
+     * Defensive: each base64 decode is wrapped — a malformed payload
+     * (RuntimeException from the DTO accessor) skips that single file
+     * without breaking the rest of the persist. ``profile_pic_path``,
+     * ``screenshot_path``, and the per-index ``post_thumbnail_paths``
+     * entries stay null when their source was empty or invalid.
+     *
+     * @return array<string,mixed>
+     */
+    private function persistInstagramAssets(BrandAudit $audit, InstagramProfileAudit $result): array
+    {
+        $basePath = "audits/{$audit->id}/instagram";
+        $disk     = Storage::disk('local');
+
+        $meta = [
+            'username'             => $result->username,
+            'name'                 => $result->profile->name,
+            'bio'                  => $result->profile->bio,
+            'external_url'         => $result->profile->externalUrl,
+            'followers'            => $result->profile->followers,
+            'following'            => $result->profile->following,
+            'posts_count'          => $result->profile->postsCount,
+            'is_verified'          => $result->profile->isVerified,
+            'is_business'          => $result->profile->isBusiness,
+            'is_private'           => $result->isPrivate,
+            'captured_at'          => $result->capturedAt->format(\DateTimeInterface::ATOM),
+            'duration_ms'          => $result->durationMs,
+            'profile_pic_path'     => null,
+            'screenshot_path'      => null,
+            'post_thumbnail_paths' => [],
+            'highlight_names'      => array_map(
+                static fn ($h) => $h->name,
+                $result->highlights,
+            ),
+        ];
+
+        // Profile pic — worker captures as JPEG (httpx fetch of the IG CDN
+        // avatar URL, which IG serves as image/jpeg).
+        $picBase64 = $result->profile->profilePicBase64;
+        if ($picBase64 !== '') {
+            $bytes = base64_decode($picBase64, true);
+            if ($bytes !== false && $bytes !== '') {
+                $path = "{$basePath}/profile_pic.jpg";
+                $disk->put($path, $bytes);
+                $meta['profile_pic_path'] = $path;
+            }
+        }
+
+        // Grid screenshot — worker captures as PNG via page.screenshot.
+        if ($result->screenshotBase64 !== '') {
+            try {
+                $bytes = $result->screenshotBytes();
+                if ($bytes !== '') {
+                    $path = "{$basePath}/screenshot.png";
+                    $disk->put($path, $bytes);
+                    $meta['screenshot_path'] = $path;
+                }
+            } catch (RuntimeException) {
+                // Malformed base64 — diagnostic only, skip.
+            }
+        }
+
+        // Top-6 post thumbnails — worker captures as PNG via element
+        // bounding-box screenshot. Cap matches the audit's caption-fetch
+        // limit (anti-ban discipline) so we never persist more thumbnails
+        // than we have analysed.
+        $thumbPaths = [];
+        foreach (array_slice($result->recentPosts, 0, 6) as $idx => $post) {
+            if ($post->thumbnailBase64 === '') {
+                continue;
+            }
+            try {
+                $bytes = $post->thumbnailBytes();
+                if ($bytes === '') {
+                    continue;
+                }
+                $path = "{$basePath}/posts/{$idx}.png";
+                $disk->put($path, $bytes);
+                $thumbPaths[$idx] = $path;
+            } catch (RuntimeException) {
+                // Malformed base64 on a single thumbnail — skip this one,
+                // continue with the rest.
+                continue;
+            }
+        }
+        $meta['post_thumbnail_paths'] = $thumbPaths;
+
+        return $meta;
     }
 
     /** @return array<string,mixed>|null */

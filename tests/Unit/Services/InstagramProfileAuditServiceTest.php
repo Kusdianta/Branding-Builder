@@ -11,6 +11,7 @@ use App\Services\IgUsernameExtractor;
 use App\Services\InstagramProfileAuditService;
 use DateTimeImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Storage;
 use Nema\WorkerClient\DTO\Highlight;
 use Nema\WorkerClient\DTO\InstagramProfileAudit;
 use Nema\WorkerClient\DTO\ProfileMetadata;
@@ -40,6 +41,11 @@ class InstagramProfileAuditServiceTest extends TestCase
         $this->hub       = $this->createMock(HubCredentialsClient::class);
         $this->claude    = $this->createMock(ClaudeService::class);
         $this->extractor = new IgUsernameExtractor();
+
+        // BB13: image persistence writes to the 'local' disk during the
+        // happy path. Fake it so tests don't pollute storage/app/private
+        // and assertions can probe file existence.
+        Storage::fake('local');
     }
 
     private function makeService(): InstagramProfileAuditService
@@ -126,6 +132,171 @@ class InstagramProfileAuditServiceTest extends TestCase
         $audit->refresh();
         $this->assertSame('done', $audit->instagram_audit_status);
         $this->assertSame('Stub OK', $audit->instagram_audit['executive_summary']);
+    }
+
+    // -- BB13: image persistence + _meta sub-key --------------------------
+
+    #[Test]
+    public function it_persists_visual_assets_and_attaches_meta_to_instagram_audit(): void
+    {
+        $audit = $this->makeAudit();
+
+        // 1×1 PNG (smallest valid PNG, ~67 bytes) + 1×1 JPEG (smallest valid
+        // JPEG, ~125 bytes). Wrapping them in base64 lets the strict
+        // base64_decode + screenshotBytes() / thumbnailBytes() paths
+        // succeed and the files actually land on the fake disk.
+        $pngBytes  = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=');
+        $jpegBytes = base64_decode('/9j/4AAQSkZJRgABAQEAYABgAAD//gA7Q1JFQVRPUjogZ2QtanBlZyB2MS4wICh1c2luZyBJSkcgSlBFRyB2NjIpLCBxdWFsaXR5ID0gOTAK/9sAQwADAgIDAgIDAwMDBAMDBAUIBQUEBAUKBwcGCAwKDAwLCgsLDQ4SEA0OEQ4LCxAWEBETFBUVFQwPFxgWFBgSFBUU/9sAQwEDBAQFBAUJBQUJFA0LDRQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU/8AAEQgAAQABAwEiAAIRAQMRAf/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/aAAwDAQACEQMRAD8A/v8oooooA//Z');
+
+        $this->hub->expects($this->once())
+            ->method('getNextCredential')
+            ->willReturn([
+                'id'              => '01j_CRED',
+                'platform'        => 'instagram',
+                'username'        => 'naufalk',
+                'session_cookies' => [['name' => 'sessionid', 'value' => 'abc']],
+            ]);
+        $this->worker->expects($this->once())
+            ->method('auditInstagramProfile')
+            ->willReturn(new InstagramProfileAudit(
+                username: 'lessworry.id',
+                capturedAt: new DateTimeImmutable('2026-05-11T10:00:00Z'),
+                isPrivate: false,
+                profile: new ProfileMetadata(
+                    name: 'Less Worry | Laundry Bebas Worry',
+                    bio: 'Laundry Terlengkap di Satu Tempat',
+                    externalUrl: 'https://lessworry.id',
+                    followers: 2930,
+                    following: 27,
+                    postsCount: 163,
+                    isVerified: true,
+                    isBusiness: true,
+                    profilePicBase64: base64_encode($jpegBytes),
+                ),
+                profilePicFetchError: null,
+                screenshotBase64: base64_encode($pngBytes),
+                recentPosts: [
+                    new RecentPost('A1', 'https://instagram.com/lessworry.id/p/A1/', 'image', base64_encode($pngBytes), 'caption A', '2 hari'),
+                    new RecentPost('B2', 'https://instagram.com/lessworry.id/p/B2/', 'reel',  base64_encode($pngBytes), 'caption B', '5 hari'),
+                ],
+                highlights: [new Highlight('Promo', 'cov'), new Highlight('Testimoni', 'cov2')],
+                durationMs: 35000,
+            ));
+        $this->claude->expects($this->once())
+            ->method('analyzeInstagramProfile')
+            ->willReturn([
+                'executive_summary' => 'Real analysis from Claude',
+                'scorecard'         => ['overall' => ['score' => 5.1, 'grade' => 'C']],
+            ]);
+
+        $this->makeService()->audit($audit);
+
+        $audit->refresh();
+        $this->assertSame('done', $audit->instagram_audit_status);
+
+        // Files persisted under storage/app/private/audits/{id}/instagram/
+        $base = "audits/{$audit->id}/instagram";
+        Storage::disk('local')->assertExists("{$base}/profile_pic.jpg");
+        Storage::disk('local')->assertExists("{$base}/screenshot.png");
+        Storage::disk('local')->assertExists("{$base}/posts/0.png");
+        Storage::disk('local')->assertExists("{$base}/posts/1.png");
+
+        // _meta attached to the analysis payload with full worker context.
+        $meta = $audit->instagram_audit['_meta'] ?? null;
+        $this->assertIsArray($meta);
+        $this->assertSame('lessworry.id', $meta['username']);
+        $this->assertSame('Less Worry | Laundry Bebas Worry', $meta['name']);
+        $this->assertSame('Laundry Terlengkap di Satu Tempat', $meta['bio']);
+        $this->assertSame('https://lessworry.id', $meta['external_url']);
+        $this->assertSame(2930, $meta['followers']);
+        $this->assertSame(27, $meta['following']);
+        $this->assertSame(163, $meta['posts_count']);
+        $this->assertTrue($meta['is_verified']);
+        $this->assertTrue($meta['is_business']);
+        $this->assertFalse($meta['is_private']);
+        $this->assertSame("{$base}/profile_pic.jpg", $meta['profile_pic_path']);
+        $this->assertSame("{$base}/screenshot.png", $meta['screenshot_path']);
+        $this->assertSame(
+            [0 => "{$base}/posts/0.png", 1 => "{$base}/posts/1.png"],
+            $meta['post_thumbnail_paths'],
+        );
+        $this->assertSame(['Promo', 'Testimoni'], $meta['highlight_names']);
+
+        // Claude's analysis payload is preserved verbatim alongside _meta.
+        $this->assertSame('Real analysis from Claude', $audit->instagram_audit['executive_summary']);
+    }
+
+    #[Test]
+    public function it_skips_malformed_visual_payloads_without_failing_the_audit(): void
+    {
+        $audit = $this->makeAudit();
+
+        $this->hub->expects($this->once())
+            ->method('getNextCredential')
+            ->willReturn([
+                'id'              => '01j_CRED',
+                'platform'        => 'instagram',
+                'session_cookies' => [['name' => 'sessionid', 'value' => 'abc']],
+            ]);
+
+        // Mix of malformed and valid payloads — defensive path: malformed
+        // entries are silently skipped, valid ones still land on disk.
+        $pngBytes = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=');
+
+        $this->worker->expects($this->once())
+            ->method('auditInstagramProfile')
+            ->willReturn(new InstagramProfileAudit(
+                username: 'broken.profile',
+                capturedAt: new DateTimeImmutable('2026-05-11T10:00:00Z'),
+                isPrivate: false,
+                profile: new ProfileMetadata(
+                    name: 'Broken',
+                    bio: '',
+                    externalUrl: '',
+                    followers: 0,
+                    following: 0,
+                    postsCount: 0,
+                    isVerified: false,
+                    isBusiness: false,
+                    // Profile pic empty → skipped.
+                    profilePicBase64: '',
+                ),
+                profilePicFetchError: 'profile pic fetch failed: TimeoutException',
+                // Screenshot malformed (underscore not valid in standard
+                // base64) → strict decode fails, file skipped.
+                screenshotBase64: 'not_valid_base64!',
+                recentPosts: [
+                    // Empty thumbnail → skipped.
+                    new RecentPost('A1', 'https://instagram.com/broken.profile/p/A1/', 'image', '', null, null),
+                    // Valid → persisted.
+                    new RecentPost('B2', 'https://instagram.com/broken.profile/p/B2/', 'reel',  base64_encode($pngBytes), null, null),
+                ],
+                highlights: [],
+                durationMs: 12000,
+            ));
+        $this->claude->expects($this->once())
+            ->method('analyzeInstagramProfile')
+            ->willReturn(['executive_summary' => 'Sparse analysis']);
+
+        $this->makeService()->audit($audit);
+
+        $audit->refresh();
+        $this->assertSame('done', $audit->instagram_audit_status);
+
+        $base = "audits/{$audit->id}/instagram";
+        Storage::disk('local')->assertMissing("{$base}/profile_pic.jpg");
+        Storage::disk('local')->assertMissing("{$base}/screenshot.png");
+        Storage::disk('local')->assertMissing("{$base}/posts/0.png");
+        Storage::disk('local')->assertExists("{$base}/posts/1.png");
+
+        $meta = $audit->instagram_audit['_meta'];
+        $this->assertNull($meta['profile_pic_path']);
+        $this->assertNull($meta['screenshot_path']);
+        // Only the valid thumbnail at index 1 made it.
+        $this->assertSame([1 => "{$base}/posts/1.png"], $meta['post_thumbnail_paths']);
+        // Numeric metadata is preserved for the followers=0 banner trigger.
+        $this->assertSame(0, $meta['followers']);
+        $this->assertSame(0, $meta['posts_count']);
     }
 
     // -- no IG url path ----------------------------------------------------
