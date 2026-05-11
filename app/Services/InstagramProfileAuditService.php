@@ -208,6 +208,7 @@ final class InstagramProfileAuditService
                 $result,
                 (string) $audit->brand_name,
                 (string) $audit->service_type,
+                $audit->city !== null && $audit->city !== '' ? (string) $audit->city : null,
             );
             $audit->update([
                 'instagram_audit_status' => 'done',
