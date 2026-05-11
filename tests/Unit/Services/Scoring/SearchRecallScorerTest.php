@@ -104,7 +104,7 @@ class SearchRecallScorerTest extends TestCase
     // ─── Geographic spread (cap 15) ────────────────────────────────────────────
 
     #[Test]
-    public function geographic_spread_scores_15_with_five_or_more_location_suggestions(): void
+    public function geographic_spread_scores_15_with_five_or_more_unique_locations(): void
     {
         $result = $this->scorer->scoreFromSuggestions(
             brandName: 'foo',
@@ -117,11 +117,31 @@ class SearchRecallScorerTest extends TestCase
         );
 
         $this->assertSame(15, $result['breakdown']['signals']['geographic_spread']['score']);
-        $this->assertSame(5, $result['breakdown']['signals']['geographic_spread']['count']);
+        $this->assertSame(5,  $result['breakdown']['signals']['geographic_spread']['unique_count']);
     }
 
     #[Test]
-    public function geographic_spread_scores_10_with_three_or_four_location_suggestions(): void
+    public function geographic_spread_dedupes_repeated_locations_to_unique_count(): void
+    {
+        // Two suggestions per location → suggestion_count is 4, but UNIQUE
+        // location count is 2 → 5 pts, not the 10 a suggestion-count would give.
+        $result = $this->scorer->scoreFromSuggestions(
+            brandName: 'foo',
+            stem: 'foo',
+            suggestions: [
+                'foo tebet', 'foo kemang',
+                'foo laundry tebet', 'foo laundry kemang',
+            ],
+            fetchedAt: '2026-05-11T00:00:00+00:00',
+        );
+
+        $this->assertSame(5, $result['breakdown']['signals']['geographic_spread']['score']);
+        $this->assertSame(2, $result['breakdown']['signals']['geographic_spread']['unique_count']);
+        $this->assertSame(4, $result['breakdown']['signals']['geographic_spread']['suggestion_count']);
+    }
+
+    #[Test]
+    public function geographic_spread_scores_10_with_three_or_four_unique_locations(): void
     {
         $result = $this->scorer->scoreFromSuggestions(
             brandName: 'foo',
@@ -131,11 +151,11 @@ class SearchRecallScorerTest extends TestCase
         );
 
         $this->assertSame(10, $result['breakdown']['signals']['geographic_spread']['score']);
-        $this->assertSame(3, $result['breakdown']['signals']['geographic_spread']['count']);
+        $this->assertSame(3,  $result['breakdown']['signals']['geographic_spread']['unique_count']);
     }
 
     #[Test]
-    public function geographic_spread_scores_5_with_one_or_two_location_suggestions(): void
+    public function geographic_spread_scores_5_with_one_or_two_unique_locations(): void
     {
         $result = $this->scorer->scoreFromSuggestions(
             brandName: 'foo',
@@ -145,11 +165,11 @@ class SearchRecallScorerTest extends TestCase
         );
 
         $this->assertSame(5, $result['breakdown']['signals']['geographic_spread']['score']);
-        $this->assertSame(1, $result['breakdown']['signals']['geographic_spread']['count']);
+        $this->assertSame(1, $result['breakdown']['signals']['geographic_spread']['unique_count']);
     }
 
     #[Test]
-    public function geographic_spread_scores_0_with_no_location_suggestions(): void
+    public function geographic_spread_scores_0_with_no_locations(): void
     {
         $result = $this->scorer->scoreFromSuggestions(
             brandName: 'foo',
@@ -159,7 +179,7 @@ class SearchRecallScorerTest extends TestCase
         );
 
         $this->assertSame(0, $result['breakdown']['signals']['geographic_spread']['score']);
-        $this->assertSame(0, $result['breakdown']['signals']['geographic_spread']['count']);
+        $this->assertSame(0, $result['breakdown']['signals']['geographic_spread']['unique_count']);
     }
 
     // ─── Variant coverage (cap 5) ──────────────────────────────────────────────
@@ -222,7 +242,15 @@ class SearchRecallScorerTest extends TestCase
         $this->assertSame(0,  $signals['brand_recognition']['first_match_position']);
 
         $this->assertSame(15, $signals['geographic_spread']['score'], 'geographic_spread');
-        $this->assertGreaterThanOrEqual(5, $signals['geographic_spread']['count']);
+        // 5 unique locations: lebak bulus, kemang, park serpong, tebet, jagakarsa
+        $this->assertSame(5, $signals['geographic_spread']['unique_count']);
+        $this->assertEqualsCanonicalizing(
+            ['lebak bulus', 'kemang', 'park serpong', 'tebet', 'jagakarsa'],
+            $signals['geographic_spread']['unique_locations'],
+        );
+        // Suggestion count is HIGHER than unique count because tebet & jagakarsa
+        // each appear in two suggestions — the unique metric correctly dedupes.
+        $this->assertSame(7, $signals['geographic_spread']['suggestion_count']);
 
         $this->assertSame(5, $signals['variant_coverage']['score'], 'variant_coverage');
         $this->assertContains('artinya', $signals['variant_coverage']['variants']);

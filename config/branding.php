@@ -181,6 +181,10 @@ return [
     | plus all 38 provincial capitals, plus unambiguous single-word provinces.
     | Ambiguous province stems ("jawa", "kalimantan", "sumatera", "sulawesi",
     | "nusa") are intentionally absent — only their full bigrams are included.
+    |
+    | Compound locations: extend as new audits surface multi-word venue names
+    | (e.g. "park serpong", "gading serpong") that would otherwise tokenize
+    | incorrectly and leak fragments into variant_coverage as false positives.
     */
     'location_tokens' => [
         'compounds' => [

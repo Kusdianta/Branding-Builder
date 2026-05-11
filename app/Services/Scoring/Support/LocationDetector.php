@@ -23,24 +23,41 @@ final class LocationDetector
      */
     public function containsLocation(string $text): bool
     {
-        $text = mb_strtolower($text);
+        return $this->matchedLocations($text) !== [];
+    }
+
+    /**
+     * Return every distinct seeded location found in $text.
+     * Compound seeds are matched first and their matched characters are
+     * consumed so the unigram pass doesn't double-count their parts
+     * (e.g. "park serpong" alone, never "serpong" too).
+     *
+     * @return list<string>
+     */
+    public function matchedLocations(string $text): array
+    {
+        $haystack = mb_strtolower($text);
+        $found    = [];
 
         foreach ($this->compoundsLongestFirst() as $loc) {
-            if ($loc !== '' && str_contains($text, $loc)) {
-                return true;
+            if ($loc === '' || ! str_contains($haystack, $loc)) {
+                continue;
             }
+            $found[$loc] = true;
+            // Consume so the unigram pass below ignores the substring.
+            $haystack = str_replace($loc, ' ', $haystack);
         }
 
         foreach ($this->singles() as $loc) {
             if ($loc === '') {
                 continue;
             }
-            if (preg_match('/\b' . preg_quote($loc, '/') . '\b/u', $text) === 1) {
-                return true;
+            if (preg_match('/\b' . preg_quote($loc, '/') . '\b/u', $haystack) === 1) {
+                $found[$loc] = true;
             }
         }
 
-        return false;
+        return array_keys($found);
     }
 
     /**

@@ -153,39 +153,61 @@ final class SearchRecallScorer
     }
 
     /**
+     * Geographic spread measures BREADTH of locations the brand is associated
+     * with — not query density. Two suggestions for the same neighborhood count
+     * once. Score is keyed on the size of the unique location set across all
+     * branded suggestions.
+     *
      * @param  list<string>  $normalized
-     * @return array{score:int, cap:int, count:int, matches:list<string>, detail:string}
+     * @return array{score:int, cap:int, unique_count:int, unique_locations:list<string>, suggestion_count:int, detail:string}
      */
     private function scoreGeographicSpread(string $stem, array $normalized): array
     {
-        $matches = [];
+        $uniqueLocations = [];
+        $matchedSuggestions = 0;
+
         foreach ($normalized as $suggestion) {
             if (! $this->suggestionContainsStem($stem, $suggestion)) {
                 continue;
             }
-            if ($this->locationDetector->containsLocation($suggestion)) {
-                $matches[] = $suggestion;
+
+            $found = $this->locationDetector->matchedLocations($suggestion);
+            if ($found === []) {
+                continue;
+            }
+
+            $matchedSuggestions++;
+            foreach ($found as $loc) {
+                $uniqueLocations[$loc] = true;
             }
         }
 
-        $count = count($matches);
+        $uniqueLocations = array_keys($uniqueLocations);
+        $uniqueCount     = count($uniqueLocations);
+
         $score = match (true) {
-            $count >= 5 => 15,
-            $count >= 3 => 10,
-            $count >= 1 => 5,
-            default     => 0,
+            $uniqueCount >= 5 => 15,
+            $uniqueCount >= 3 => 10,
+            $uniqueCount >= 1 => 5,
+            default           => 0,
         };
 
-        $detail = $count === 0
+        $detail = $uniqueCount === 0
             ? 'Tidak ada saran autocomplete yang menggabungkan brand stem dengan lokasi.'
-            : sprintf('%d saran autocomplete berbasis lokasi: %s', $count, implode(', ', $matches));
+            : sprintf(
+                '%d lokasi unik di %d saran autocomplete: %s',
+                $uniqueCount,
+                $matchedSuggestions,
+                implode(', ', $uniqueLocations),
+            );
 
         return [
-            'score'   => $score,
-            'cap'     => 15,
-            'count'   => $count,
-            'matches' => $matches,
-            'detail'  => $detail,
+            'score'            => $score,
+            'cap'              => 15,
+            'unique_count'     => $uniqueCount,
+            'unique_locations' => $uniqueLocations,
+            'suggestion_count' => $matchedSuggestions,
+            'detail'           => $detail,
         ];
     }
 
@@ -234,17 +256,21 @@ final class SearchRecallScorer
 
     /**
      * Brand stem is "in" a suggestion when:
-     *   - the lowercased stem appears as a substring (the common case for
-     *     auto-complete, which prepends the typed query verbatim), OR
+     *   - the lowercased stem appears as a word-bounded substring (handles the
+     *     common case where Google Autocomplete prepends the typed query
+     *     verbatim), OR
      *   - more than 70% of the stem's whitespace tokens appear individually
      *     with word boundaries (handles re-ordering / minor punctuation).
+     *
+     * Word boundaries protect against future short or generic brand stems
+     * (e.g. "wash", "clean") from matching every laundry-adjacent suggestion.
      */
     private function suggestionContainsStem(string $stem, string $suggestion): bool
     {
         if ($stem === '' || $suggestion === '') {
             return false;
         }
-        if (str_contains($suggestion, $stem)) {
+        if (preg_match('/\b' . preg_quote($stem, '/') . '\b/u', $suggestion) === 1) {
             return true;
         }
 
@@ -284,7 +310,7 @@ final class SearchRecallScorer
                 'formula' => 'deterministic_signals',
                 'signals' => [
                     'brand_recognition' => ['score' => 0, 'cap' => 15, 'first_match_position' => null, 'detail' => $reason],
-                    'geographic_spread' => ['score' => 0, 'cap' => 15, 'count' => 0, 'matches' => [], 'detail' => $reason],
+                    'geographic_spread' => ['score' => 0, 'cap' => 15, 'unique_count' => 0, 'unique_locations' => [], 'suggestion_count' => 0, 'detail' => $reason],
                     'variant_coverage'  => ['score' => 0, 'cap' => 5,  'variants' => [], 'detail' => $reason],
                 ],
                 'limitations' => [
