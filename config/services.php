@@ -43,4 +43,10 @@ return [
         'maps_api_key' => env('GOOGLE_MAPS_API_KEY'),
     ],
 
+    'nema_worker' => [
+        'url'     => env('NEMA_WORKER_URL'),
+        'api_key' => env('NEMA_WORKER_API_KEY'),
+        'timeout' => (float) env('NEMA_WORKER_TIMEOUT', 10.0),
+    ],
+
 ];

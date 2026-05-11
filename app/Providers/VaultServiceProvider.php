@@ -13,6 +13,8 @@ class VaultServiceProvider extends ServiceProvider
 {
     private const VAULT_FILENAME = 'branding-builder.json';
 
+    private const SHARED_FILENAME = '_shared.json';
+
     /**
      * Map of vault keys to dotted config paths.
      * Tolerates the legacy "ANTHROPHIC_API_KEY" typo present in dev vault.
@@ -39,6 +41,58 @@ class VaultServiceProvider extends ServiceProvider
 
             config([$configPath => $value]);
         }
+
+        $this->loadSharedVault();
+    }
+
+    /**
+     * Read workspace-shared vault (vault/_shared.json) and merge worker.* into
+     * services.nema_worker.* so NemaWorkerServiceProvider can resolve the client.
+     * Values in _shared.json are stored plaintext by design (shared across spokes
+     * that may not share APP_KEY).
+     */
+    private function loadSharedVault(): void
+    {
+        $candidates = [
+            '/run/secrets/_shared.json',
+            base_path('../vault/'.self::SHARED_FILENAME),
+        ];
+
+        foreach ($candidates as $path) {
+            if (! file_exists($path)) {
+                continue;
+            }
+
+            $raw = @file_get_contents($path);
+            if ($raw === false) {
+                continue;
+            }
+
+            try {
+                /** @var array<string,mixed> $data */
+                $data = json_decode($raw, true, 16, JSON_THROW_ON_ERROR);
+            } catch (\JsonException $e) {
+                Log::error('[branding-builder] vault/_shared.json is not valid JSON', [
+                    'path' => $path,
+                    'error' => $e->getMessage(),
+                ]);
+
+                return;
+            }
+
+            $worker = (array) ($data['worker'] ?? []);
+            if ($worker !== []) {
+                config([
+                    'services.nema_worker.url'     => $worker['url']     ?? null,
+                    'services.nema_worker.api_key' => $worker['api_key'] ?? null,
+                    'services.nema_worker.timeout' => (float) ($worker['timeout'] ?? 10.0),
+                ]);
+            }
+
+            return;
+        }
+
+        Log::debug('[branding-builder] vault/_shared.json not found; worker config will be empty.');
     }
 
     /** @return array<string,mixed> */
