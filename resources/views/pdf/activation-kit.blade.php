@@ -435,6 +435,12 @@
      nothing for skipped/failed states until BB16 adds the banner. --}}
 @include('pdf._instagram-audit', ['audit' => $audit])
 
+{{-- ========================== GMAPS REVIEWS SECTION (Phase 8 BB28) ========================== --}}
+{{-- Gated to gmaps_reviews_status inside the partial; renders status
+     banner for non-done states (incl. legacy_places_api_only sentinel
+     from BB30) and full review table + penalty payload for done. --}}
+@include('pdf._gmaps-reviews', ['audit' => $audit])
+
 {{-- ========================== AUDIT REFERENCE FOOTER ========================== --}}
 <div style="page-break-before: always;"></div>
 <h3 style="font-size: 11px; color: #5A6259; margin-bottom: 6px;">Detail Audit</h3>
