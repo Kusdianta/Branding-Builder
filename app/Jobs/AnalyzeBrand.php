@@ -74,18 +74,22 @@ class AnalyzeBrand implements ShouldQueue
     private function seedAuditSteps(): void
     {
         $steps = [
-            // Track A (pillars)
-            ['key' => 'fetch_gmaps',       'track' => 'a',     'order' => 1],
-            ['key' => 'score_recall',      'track' => 'a',     'order' => 2],
-            ['key' => 'score_digital',     'track' => 'a',     'order' => 3],
-            ['key' => 'score_konsistensi', 'track' => 'a',     'order' => 4],
-            ['key' => 'score_experience',  'track' => 'a',     'order' => 5],
-            ['key' => 'aggregate_pillars', 'track' => 'a',     'order' => 6],
+            // Track A (pillars) — BB27 inserted fetch_gmaps_reviews
+            // between Places-API metadata and pillar scoring, and
+            // apply_experience_penalties after the pillar loop.
+            ['key' => 'fetch_gmaps',                'track' => 'a',     'order' => 1],
+            ['key' => 'fetch_gmaps_reviews',        'track' => 'a',     'order' => 2],
+            ['key' => 'score_recall',               'track' => 'a',     'order' => 3],
+            ['key' => 'score_digital',              'track' => 'a',     'order' => 4],
+            ['key' => 'score_konsistensi',          'track' => 'a',     'order' => 5],
+            ['key' => 'score_experience',           'track' => 'a',     'order' => 6],
+            ['key' => 'apply_experience_penalties', 'track' => 'a',     'order' => 7],
+            ['key' => 'aggregate_pillars',          'track' => 'a',     'order' => 8],
             // Track B (Instagram)
-            ['key' => 'ig_scrape',         'track' => 'b',     'order' => 7],
-            ['key' => 'ig_analysis',       'track' => 'b',     'order' => 8],
+            ['key' => 'ig_scrape',                  'track' => 'b',     'order' => 9],
+            ['key' => 'ig_analysis',                'track' => 'b',     'order' => 10],
             // Final
-            ['key' => 'generate_pdf',      'track' => 'final', 'order' => 9],
+            ['key' => 'generate_pdf',               'track' => 'final', 'order' => 11],
         ];
 
         foreach ($steps as $s) {
