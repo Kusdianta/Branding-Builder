@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Jobs\AnalyzeBrand;
+use App\Models\AuditStep;
 use App\Models\BrandAudit;
 use Illuminate\Support\Str;
 use Livewire\Volt\Component;
@@ -48,6 +49,10 @@ new class extends Component {
     // Phase 7-C BB15: Instagram audit data for dashboard rendering.
     public array   $instagramAudit       = [];
     public ?string $instagramAuditStatus = null;
+
+    // BB21: per-step progress for the live loading view. Each entry:
+    // ['key', 'track', 'status', 'order', 'elapsed_s', 'detail']
+    public array   $auditSteps = [];
 
     // Modal
     public bool    $showModal   = false;
@@ -116,6 +121,20 @@ new class extends Component {
 
         $this->instagramAudit       = (array) ($audit->instagram_audit ?? []);
         $this->instagramAuditStatus = $audit->instagram_audit_status;
+
+        // BB21: load audit_steps for live loading view.
+        $this->auditSteps = AuditStep::where('brand_audit_id', $audit->id)
+            ->orderBy('order')
+            ->get()
+            ->map(fn ($s) => [
+                'key'       => $s->step_key,
+                'track'     => $s->track,
+                'status'    => $s->status,
+                'order'     => $s->order,
+                'elapsed_s' => $s->elapsedSeconds(),
+                'detail'    => $s->detail,
+            ])
+            ->all();
 
         // Stop showing the spinner once the file has actually landed.
         if ($this->activationKitPath) {
@@ -576,33 +595,100 @@ new class extends Component {
         </section>
     @endif
 
-    {{-- ===== STEP 2: ANALYZING ===== --}}
+    {{-- ===== STEP 2: ANALYZING (BB21 live progress) ===== --}}
     @if ($step === 'analyzing')
-        <div @if (! in_array($auditStatus, ['done', 'failed'])) wire:poll.3000ms="pollStatus" @endif>
-            <div class="max-w-md mx-auto text-center py-16">
-                <div class="flex justify-center mb-6">
-                    <div class="baw-spinner"></div>
-                </div>
-                <h2 style="font-size: 22px; font-weight: 600; color: var(--text-primary);">
-                    Menganalisis brand <em>{{ $brandName }}</em>...
+        @php
+            $stepLabels = [
+                'fetch_gmaps'        => 'Mengambil ulasan Google Maps',
+                'score_recall'       => 'Skoring Brand Recall',
+                'score_digital'      => 'Skoring Digital Presence',
+                'score_konsistensi'  => 'Skoring Brand Konsistensi',
+                'score_experience'   => 'Skoring Brand Experience',
+                'aggregate_pillars'  => 'Agregasi pilar + rekomendasi',
+                'ig_scrape'          => 'Scraping profil Instagram',
+                'ig_analysis'        => 'Analisis Instagram dengan AI',
+                'generate_pdf'       => 'Generate activation kit PDF',
+            ];
+            $trackLabels = [
+                'a'     => 'Track A · Pilar Brand',
+                'b'     => 'Track B · Instagram',
+                'final' => 'Final',
+            ];
+            $groupedSteps = [];
+            foreach ($auditSteps as $s) {
+                $groupedSteps[$s['track']][] = $s;
+            }
+            $stepIcon = static fn (string $st): string => match ($st) {
+                'done'    => '✓',
+                'running' => '⏳',
+                'failed'  => '✗',
+                default   => '○',
+            };
+            $stepClr = static fn (string $st): string => match ($st) {
+                'done'    => 'var(--color-success)',
+                'running' => 'var(--chimera-600)',
+                'failed'  => 'var(--color-danger)',
+                default   => 'var(--text-tertiary)',
+            };
+        @endphp
+        <div @if (! in_array($auditStatus, ['done', 'failed'])) wire:poll.2000ms="pollStatus" @endif class="max-w-3xl mx-auto py-12">
+            <div class="text-center mb-10">
+                <h2 style="font-size: 24px; font-weight: 600; color: var(--text-primary);">
+                    Menganalisis brand <em>{{ $brandName }}</em>
                 </h2>
                 <p style="font-size: 14px; color: var(--text-secondary); margin-top: 8px;">
-                    Proses ini memakan 30–60 detik. Halaman ini otomatis diperbarui.
+                    Track A (pilar brand) dan Track B (Instagram) berjalan paralel. Halaman ini otomatis update setiap 2 detik.
                 </p>
-                <div class="mt-10 flex flex-col gap-3 text-left max-w-xs mx-auto">
-                    @foreach ([
-                        'Mengambil ulasan Google Maps',
-                        'Menganalisis kehadiran digital',
-                        'Menghitung Brand Recall & Experience',
-                        'Menyusun rekomendasi',
-                    ] as $lbl)
-                        <div class="flex items-center gap-3" style="font-size: 13px; color: var(--text-secondary);">
-                            <span class="baw-dot"></span>
-                            {{ $lbl }}
-                        </div>
-                    @endforeach
-                </div>
             </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                @foreach (['a', 'b'] as $trackKey)
+                    <x-nui-card>
+                        <p style="font-size: 11px; font-weight: 600; color: var(--text-tertiary); letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 12px;">
+                            {{ $trackLabels[$trackKey] ?? $trackKey }}
+                        </p>
+                        @forelse ($groupedSteps[$trackKey] ?? [] as $s)
+                            <div class="flex items-center justify-between py-2" style="border-bottom: 1px solid var(--border-default);">
+                                <div class="flex items-center gap-3">
+                                    <span style="font-size: 16px; color: {{ $stepClr($s['status']) }}; min-width: 18px; display: inline-block; text-align: center;">{{ $stepIcon($s['status']) }}</span>
+                                    <span style="font-size: 13px; color: {{ $s['status'] === 'pending' ? 'var(--text-tertiary)' : 'var(--text-primary)' }};">
+                                        {{ $stepLabels[$s['key']] ?? $s['key'] }}
+                                    </span>
+                                </div>
+                                @if ($s['elapsed_s'] !== null)
+                                    <span style="font-size: 11px; color: var(--text-tertiary); font-variant-numeric: tabular-nums;">{{ $s['elapsed_s'] }}s</span>
+                                @endif
+                            </div>
+                        @empty
+                            <p style="font-size: 13px; color: var(--text-tertiary);">(menunggu jadwal)</p>
+                        @endforelse
+                    </x-nui-card>
+                @endforeach
+            </div>
+
+            @if (! empty($groupedSteps['final']))
+                <div class="mt-6">
+                    <x-nui-card>
+                        <p style="font-size: 11px; font-weight: 600; color: var(--text-tertiary); letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 12px;">
+                            {{ $trackLabels['final'] }}
+                        </p>
+                        @foreach ($groupedSteps['final'] as $s)
+                            <div class="flex items-center justify-between py-2">
+                                <div class="flex items-center gap-3">
+                                    <span style="font-size: 16px; color: {{ $stepClr($s['status']) }}; min-width: 18px; display: inline-block; text-align: center;">{{ $stepIcon($s['status']) }}</span>
+                                    <span style="font-size: 13px; color: {{ $s['status'] === 'pending' ? 'var(--text-tertiary)' : 'var(--text-primary)' }};">
+                                        {{ $stepLabels[$s['key']] ?? $s['key'] }}
+                                        @if ($s['status'] === 'pending') <span style="color: var(--text-tertiary); font-size: 11px;">(menunggu kedua track selesai)</span> @endif
+                                    </span>
+                                </div>
+                                @if ($s['elapsed_s'] !== null)
+                                    <span style="font-size: 11px; color: var(--text-tertiary); font-variant-numeric: tabular-nums;">{{ $s['elapsed_s'] }}s</span>
+                                @endif
+                            </div>
+                        @endforeach
+                    </x-nui-card>
+                </div>
+            @endif
         </div>
     @endif
 
