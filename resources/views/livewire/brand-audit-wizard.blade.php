@@ -50,6 +50,10 @@ new class extends Component {
     public array   $instagramAudit       = [];
     public ?string $instagramAuditStatus = null;
 
+    // Phase 8 BB29: GMaps reviews data for dashboard rendering.
+    public array   $gmapsReviews         = [];
+    public ?string $gmapsReviewsStatus   = null;
+
     // BB21: per-step progress for the live loading view. Each entry:
     // ['key', 'track', 'status', 'order', 'elapsed_s', 'detail']
     public array   $auditSteps = [];
@@ -121,6 +125,11 @@ new class extends Component {
 
         $this->instagramAudit       = (array) ($audit->instagram_audit ?? []);
         $this->instagramAuditStatus = $audit->instagram_audit_status;
+
+        // Phase 8 BB29: GMaps reviews data for the new "Ulasan
+        // Pelanggan" dashboard section.
+        $this->gmapsReviews         = (array) ($audit->gmaps_reviews ?? []);
+        $this->gmapsReviewsStatus   = $audit->gmaps_reviews_status;
 
         // BB21: load audit_steps for live loading view.
         $this->auditSteps = AuditStep::where('brand_audit_id', $audit->id)
@@ -980,6 +989,13 @@ new class extends Component {
                     'instagramAudit'       => $instagramAudit,
                     'instagramAuditStatus' => $instagramAuditStatus,
                 ])
+
+                {{-- ===== Phase 8 BB29: Ulasan Pelanggan (Google Maps) ===== --}}
+                @include('livewire._gmaps-reviews-section', ['audit' => (object) [
+                    'gmaps_reviews_status' => $gmapsReviewsStatus,
+                    'gmaps_reviews'        => $gmapsReviews,
+                    'score_breakdown'      => $scoreBreakdown,
+                ]])
 
                 {{-- ===== Temuan Utama ===== --}}
                 @if (count($keyFindings) > 0)
