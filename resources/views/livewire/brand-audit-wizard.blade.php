@@ -831,16 +831,18 @@ new class extends Component {
                                         <div style="border-bottom: 1px solid var(--border-default);">
                                             <div class="flex justify-between items-center py-2">
                                                 <span style="font-size: 12px; color: var(--text-secondary);">{{ $subBucketLabels[$k] ?? $k }}</span>
-                                                <div style="display: flex; align-items: center; gap: 6px;">
-                                                    @if ($bd !== null)
-                                                        <button type="button" @click="open['{{ $k }}'] = !open['{{ $k }}']"
-                                                            style="width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--border-strong); background: var(--surface-muted); color: var(--text-tertiary); font-size: 10px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; line-height: 1; flex-shrink: 0;"
-                                                            title="Lihat detail perhitungan">?</button>
-                                                    @endif
-                                                    <span style="font-size: 13px; font-weight: 500; color: var(--text-primary);">{{ $v }}</span>
-                                                </div>
+                                                <span style="font-size: 13px; font-weight: 500; color: var(--text-primary);">{{ $v }}</span>
                                             </div>
                                             @if ($bd !== null)
+                                                {{-- BB23: Cara Perhitungan toggle button — replaces the prior "?" button.
+                                                     Clicking the row itself expands the breakdown content. expandAll
+                                                     still works because the x-show below ORs against it. --}}
+                                                <button type="button"
+                                                    @click="open['{{ $k }}'] = !open['{{ $k }}']"
+                                                    style="width: 100%; display: flex; align-items: center; gap: 6px; padding: 4px 0 8px; background: none; border: none; cursor: pointer; font-size: 10px; font-weight: 600; color: var(--chimera-700); letter-spacing: 0.3px; text-transform: uppercase; text-align: left;">
+                                                    <span x-text="(open['{{ $k }}'] || expandAll) ? '▾' : '▸'"></span>
+                                                    Cara Perhitungan
+                                                </button>
                                                 <div x-show="open['{{ $k }}'] || expandAll" x-cloak style="padding: 8px 12px 12px; background: var(--surface-muted); border-top: 1px solid var(--border-default); font-size: 11px; color: var(--text-secondary);">
                                                     @php
                                                         $formula      = $bd['formula'] ?? 'unknown';
@@ -874,9 +876,7 @@ new class extends Component {
                                                         }
                                                     @endphp
 
-                                                    {{-- BB17: Cara Perhitungan header — transparency about how this score was derived. --}}
-                                                    <p style="margin: 0 0 6px; font-size: 10px; font-weight: 600; color: var(--chimera-700); letter-spacing: 0.3px; text-transform: uppercase;">▸ Cara Perhitungan</p>
-
+                                                    {{-- BB23: header moved out to the toggle button above. --}}
                                                     @php
                                                         $formulaLabel = match ($formula) {
                                                             'deterministic_threshold' => 'Threshold tier-based (deterministik)',
