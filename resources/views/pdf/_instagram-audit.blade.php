@@ -23,10 +23,70 @@
     $igStatus  = (string) ($audit->instagram_audit_status ?? '');
     $igAudit   = (array) ($audit->instagram_audit ?? []);
 
-    // BB14 gate: render only on done; BB16 adds the partial-state banner.
-    if ($igStatus !== 'done' || $igAudit === []) {
-        return;
+    // BB16: banner state computed before the section gate. For non-done
+    // statuses we render only the section header + banner; for done with
+    // auto-backfill or followers=0, we render the banner above the
+    // normal section content.
+    //
+    // Status enum translations + banner severity (amber=warning,
+    // grey=info, red=failure). Done-with-warning paths use amber.
+    $statusBannerMap = [
+        'pending'                   => ['severity' => 'info',    'title' => 'Audit Instagram masih dalam proses', 'body' => 'Halaman akan diperbarui otomatis setelah audit selesai.'],
+        'no_instagram_url_provided' => ['severity' => 'info',    'title' => 'Audit Instagram dilewati', 'body' => 'URL Instagram tidak diisi di form audit. Untuk mendapatkan analisis Instagram, ulangi audit dengan mengisi field Instagram.'],
+        'no_credentials_available'  => ['severity' => 'warning', 'title' => 'Audit Instagram tidak dapat dijalankan', 'body' => 'Tidak ada kredensial worker Instagram yang aktif di sistem. Operator perlu menambahkan kredensial via /admin/worker-credentials di Hub.'],
+        'credentials_stale'         => ['severity' => 'warning', 'title' => 'Audit Instagram gagal — sesi operator kedaluwarsa', 'body' => 'Kredensial Instagram operator sudah kedaluwarsa dan tidak diterima oleh Instagram. Operator perlu memperbarui session via Cookie-Editor lalu jalankan audit ulang.'],
+        'rate_limited'              => ['severity' => 'warning', 'title' => 'Audit Instagram di-rate-limit', 'body' => 'Worker membatasi audit 1× per username per 5 menit. Coba jalankan audit ulang dalam beberapa menit.'],
+        'profile_not_found'         => ['severity' => 'warning', 'title' => 'Username Instagram tidak ditemukan', 'body' => 'Profile Instagram dengan handle yang dimasukkan tidak ditemukan. Periksa kembali ejaan username dan URL.'],
+        'audit_failed'              => ['severity' => 'failure', 'title' => 'Audit Instagram gagal karena error teknis', 'body' => 'Terjadi error tidak terduga di pipeline audit. Periksa logs untuk detail dan jalankan audit ulang.'],
+    ];
+
+    $banner = null;
+    if ($igStatus !== 'done') {
+        $banner = $statusBannerMap[$igStatus] ?? null;
+        // BB14 contract preserved: no IG audit at all → render nothing.
+        // The bottom-summary footer is enough context for the operator;
+        // a banner inside the document for "we never tried" adds noise.
+        if ($banner === null) {
+            return;
+        }
+    } else {
+        // Done path: detect partial-data symptoms.
+        $limitationsRaw = (array) ($igAudit['limitations'] ?? []);
+        $hasAutoBackfill = false;
+        foreach ($limitationsRaw as $lim) {
+            if (is_string($lim) && str_starts_with($lim, 'Auto-backfilled missing top-level key')) {
+                $hasAutoBackfill = true;
+                break;
+            }
+        }
+        $metaForBanner = (array) ($igAudit['_meta'] ?? []);
+        $hasZeroFollowers = (int) ($metaForBanner['followers'] ?? 0) === 0 && (int) ($metaForBanner['posts_count'] ?? 0) === 0;
+
+        if ($hasAutoBackfill || $hasZeroFollowers) {
+            $banner = [
+                'severity' => 'warning',
+                'title'    => 'Audit Instagram tersaji dengan data terbatas',
+                'body'     => $hasZeroFollowers
+                    ? 'Worker tidak berhasil mengekstrak data follower/post — analisis berbasis profile shell saja, akurasi keseluruhan rendah. Penyebab umum: cookie operator terlalu lemah atau IP terdeteksi anti-bot.'
+                    : 'Sebagian section di audit Instagram di-auto-backfill karena Claude tidak mengembalikan semua field. Konten tetap tersaji namun beberapa rekomendasi mungkin kurang lengkap dari biasanya.',
+            ];
+        }
     }
+
+    // Skip the full section render entirely for non-done statuses; the
+    // banner above is the only payload the document needs.
+    if ($igStatus !== 'done' || $igAudit === []) {
+        $renderFullSection = false;
+    } else {
+        $renderFullSection = true;
+    }
+
+    // Banner palette.
+    $bannerColors = [
+        'info'    => ['border' => '#5A6259', 'bg' => '#F7F9F5', 'text' => '#0F1411', 'titleClr' => '#5A6259'],
+        'warning' => ['border' => '#C97A1B', 'bg' => '#FEF3DC', 'text' => '#0F1411', 'titleClr' => '#C97A1B'],
+        'failure' => ['border' => '#C24E3A', 'bg' => '#FBE6E1', 'text' => '#0F1411', 'titleClr' => '#C24E3A'],
+    ];
 
     $meta       = (array) ($igAudit['_meta'] ?? []);
     $analyzedAt = (string) ($igAudit['analyzed_at'] ?? '');
@@ -121,14 +181,33 @@
     <tr>
         <td style="width: 70%;">
             <p style="font-size: 8px; color: #8A9088; margin: 0; letter-spacing: 0.5px;">AUDIT PROFIL INSTAGRAM</p>
-            <h2 style="font-size: 22px; color: #0F1411; margin: 4px 0 0 0;">@{{ $meta['username'] ?? '—' }}</h2>
+            <h2 style="font-size: 22px; color: #0F1411; margin: 4px 0 0 0;">
+                @if (! empty($meta['username']))
+                    @{{ $meta['username'] }}
+                @else
+                    Instagram
+                @endif
+            </h2>
         </td>
         <td style="width: 30%; text-align: right; vertical-align: bottom;">
-            <p style="font-size: 9px; color: #8A9088; margin: 0;">Diaudit</p>
-            <p style="font-size: 10px; color: #5A6259; margin: 2px 0 0 0;">{{ $analyzedAtLabel }}</p>
+            @if ($renderFullSection)
+                <p style="font-size: 9px; color: #8A9088; margin: 0;">Diaudit</p>
+                <p style="font-size: 10px; color: #5A6259; margin: 2px 0 0 0;">{{ $analyzedAtLabel }}</p>
+            @endif
         </td>
     </tr>
 </table>
+
+{{-- ========================== STATUS / DEGRADED-DATA BANNER ========================== --}}
+@if ($banner !== null)
+    @php $bClrs = $bannerColors[$banner['severity']] ?? $bannerColors['info']; @endphp
+    <div style="border: 1px solid {{ $bClrs['border'] }}; border-left: 4px solid {{ $bClrs['border'] }}; background: {{ $bClrs['bg'] }}; padding: 14px 18px; border-radius: 6px; margin-bottom: 18px;">
+        <p style="font-size: 12px; font-weight: bold; color: {{ $bClrs['titleClr'] }}; margin: 0 0 6px 0;">⚠ {{ $banner['title'] }}</p>
+        <p style="font-size: 10px; color: {{ $bClrs['text'] }}; margin: 0; line-height: 1.6;">{{ $banner['body'] }}</p>
+    </div>
+@endif
+
+@if ($renderFullSection)
 
 {{-- ========================== PROFILE HEADER CARD ========================== --}}
 <div style="background: #F0F4EE; border: 1px solid rgba(15,20,17,0.08); border-radius: 12px; padding: 18px 20px; margin-bottom: 18px;">
@@ -524,3 +603,5 @@
         @endforeach
     </ul>
 @endif
+
+@endif {{-- /renderFullSection --}}
