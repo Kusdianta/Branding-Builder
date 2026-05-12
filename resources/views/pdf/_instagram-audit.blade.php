@@ -591,6 +591,10 @@
             </tr>
         </tbody>
     </table>
+    {{-- BB17: scorecard transparency — how the 7 sub-scores were derived. --}}
+    <p style="font-size: 8px; color: #8A9088; margin: 0 0 16px; font-style: italic; line-height: 1.55;">
+        ▸ <strong>Cara Perhitungan:</strong> Sumber — hasil scrape worker (profile + 12 post + 6 caption + 6 highlight) + analisis Claude Sonnet 4.6. Formula — penilaian LLM 0–10 berdasarkan rubrik kalibrasi pasar laundry Indonesia (9–10 best-in-class, 7–8 solid, 5–6 baseline, 3–4 gap signifikan, 0–2 absen). Overall dihitung server-side sebagai rata-rata sederhana dari 7 sub-skor.
+    </p>
 @endif
 
 {{-- Limitations --}}

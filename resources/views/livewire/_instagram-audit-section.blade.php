@@ -293,7 +293,10 @@
                     </div>
                 @endforeach
             </div>
-            <p style="font-size: 11px; color: var(--text-tertiary); margin-top: 12px; font-style: italic;">Overall dihitung server-side sebagai rata-rata sederhana dari 7 sub-skor</p>
+            {{-- BB17: scorecard transparency. --}}
+            <p style="font-size: 11px; color: var(--text-tertiary); margin-top: 12px; line-height: 1.55; font-style: italic;">
+                ▸ <strong style="font-weight: 600;">Cara Perhitungan:</strong> Sumber — hasil scrape worker (profile + 12 post + 6 caption + 6 highlight) + analisis Claude Sonnet 4.6. Formula — penilaian LLM 0–10 berdasarkan rubrik kalibrasi pasar laundry Indonesia (9–10 best-in-class, 7–8 solid, 5–6 baseline, 3–4 gap signifikan, 0–2 absen). Overall dihitung server-side sebagai rata-rata sederhana dari 7 sub-skor.
+            </p>
         </x-nui-card>
     @endif
 

@@ -257,7 +257,29 @@
                         }
                     @endphp
                     <tr style="border-bottom: 1px solid rgba(15,20,17,0.08);">
-                        <td colspan="2" style="padding: 0 12px 8px; font-size: 8px; color: #5A6259; background: #F7F9F5;">
+                        <td colspan="2" style="padding: 6px 12px 8px; font-size: 8px; color: #5A6259; background: #F7F9F5;">
+                            {{-- BB17: Cara Perhitungan header — transparency about how this score was derived. --}}
+                            <p style="margin: 0 0 4px; font-size: 8px; font-weight: bold; color: #326D3A; letter-spacing: 0.3px; text-transform: uppercase;">▸ Cara Perhitungan</p>
+
+                            @php
+                                $formulaLabel = match ($formula) {
+                                    'deterministic_threshold' => 'Threshold tier-based (deterministik)',
+                                    'deterministic_signals'   => 'Signal-based weighted (deterministik)',
+                                    'llm_judgment'            => 'Penilaian LLM (Claude)',
+                                    default                   => 'Lainnya',
+                                };
+                                $sourceLabel = match ($k) {
+                                    'rating_tier', 'review_count_tier', 'keyword_saturation', 'sentiment_quality' => 'Google Maps reviews',
+                                    'search_recall' => 'Google Autocomplete',
+                                    'has_gmaps', 'has_instagram', 'has_website', 'has_wa', 'has_tiktok' => 'Touchpoint input form',
+                                    'review_bonus' => 'Google Maps review count threshold',
+                                    'kehadiran_digital', 'konsistensi_visual', 'kelengkapan_layanan', 'transparansi_harga' => 'Penilaian visual + URL touchpoint',
+                                    'base', 'bonus_ekspres', 'bonus_antar_jemput', 'bonus_variasi_layanan', 'bonus_sop_keluhan', 'bonus_price_list', 'penalty_keterlambatan', 'penalty_pakaian_hilang', 'penalty_no_response_wa' => 'Penilaian LLM dari konteks brand',
+                                    default => 'Konteks brand',
+                                };
+                            @endphp
+                            <p style="margin: 0 0 4px; line-height: 1.55; font-size: 8px;"><span style="font-weight: bold;">Sumber: </span>{{ $sourceLabel }} · <span style="font-weight: bold;">Formula: </span>{{ $formulaLabel }}</p>
+
                             @if ($k === 'search_recall')
                                 <p style="margin: 0 0 4px; line-height: 1.55; color: #5A6259; font-size: 8px;">Frekuensi dan variasi brand muncul di hasil autocomplete pencarian.</p>
                             @endif
