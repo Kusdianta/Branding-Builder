@@ -18,6 +18,21 @@ use App\Models\ScoringRubric;
  *
  * The remaining 35 points come from the autocomplete-based "search_recall"
  * sub-bucket emitted by SearchRecallScorer and merged in by ClaudeService.
+ *
+ * Phase 8 BB25: the scorer accepts an optional ``full_reviews`` input
+ * (the Phase 8 W8 GMaps reviews scrape, up to 30 reviews vs Places API's
+ * 5-cap). When present and non-empty, full_reviews replaces
+ * sampled_reviews as the corpus driving keyword saturation and
+ * sentiment quality. The score_breakdown raw_inputs gain a
+ * ``sample_source`` flag so downstream renderers can show
+ * "30 ulasan (full scrape)" vs "5 ulasan (Places API)" honestly.
+ *
+ * Tier tables stay unchanged — they were already volume-tolerant
+ * (review_count_tier already handles up to ≥500). The hit_rate_pct
+ * tier table (kwBreakdown) was tuned to 5-sample populations and
+ * intentionally remains so; with ~30-review corpora most brands will
+ * land 1-2 tiers lower, which is the more honest signal Phase 8 is
+ * after.
  */
 final class RecallScorer
 {
@@ -27,19 +42,32 @@ final class RecallScorer
      *     review_count: int,
      *     keyword_hits: array<string,mixed>,
      *     sampled_reviews: list<array{text: string, rating: float}>,
+     *     full_reviews?: list<array{text: string, rating: float}>,
      * } $inputs
      */
     public function score(array $inputs): PillarScore
     {
         $clusters       = (array) config('branding.recall_keyword_clusters', []);
         $sampledReviews = (array) ($inputs['sampled_reviews'] ?? []);
+        $fullReviews    = (array) ($inputs['full_reviews'] ?? []);
         $rating         = (float) $inputs['rating'];
         $count          = (int) $inputs['review_count'];
 
+        // BB25: prefer full_reviews when the GMaps W8 scraper returned
+        // a non-empty corpus. Falls back to the Places API 5-sample
+        // when full_reviews is absent or empty (BB30 legacy audits).
+        if ($fullReviews !== []) {
+            $reviewCorpus = $fullReviews;
+            $sampleSource = 'gmaps_scrape';
+        } else {
+            $reviewCorpus = $sampledReviews;
+            $sampleSource = $sampledReviews === [] ? 'none' : 'places_api_sample';
+        }
+
         $ratingScore                  = $this->calcRatingScore($rating);
         $countScore                   = $this->calcCountScore($count);
-        [$kwScore, $kwHits, $kwTotal] = $this->keywordSaturation($sampledReviews, $clusters);
-        [$sentScore, $sentAvg]        = $this->sentimentQuality($sampledReviews);
+        [$kwScore, $kwHits, $kwTotal] = $this->keywordSaturation($reviewCorpus, $clusters);
+        [$sentScore, $sentAvg]        = $this->sentimentQuality($reviewCorpus);
 
         // BB18: keyword_saturation → review_keyword_quality. The old name
         // implied "keyword density across our review samples" — actually
@@ -61,8 +89,8 @@ final class RecallScorer
         $breakdown = [
             'rating_tier'            => $this->ratingBreakdown($rating, $ratingScore),
             'review_count_tier'      => $this->countBreakdown($count, $countScore),
-            'review_keyword_quality' => $this->kwBreakdown($kwScore, $kwHits, $kwTotal),
-            'sentiment_quality'      => $this->sentBreakdown($sentScore, $sentAvg, count($sampledReviews)),
+            'review_keyword_quality' => $this->kwBreakdown($kwScore, $kwHits, $kwTotal, $sampleSource),
+            'sentiment_quality'      => $this->sentBreakdown($sentScore, $sentAvg, count($reviewCorpus), $sampleSource),
         ];
 
         return new PillarScore(
@@ -207,7 +235,7 @@ final class RecallScorer
     }
 
     /** @return array<string,mixed> */
-    private function kwBreakdown(int $score, int $hitsCount, int $total): array
+    private function kwBreakdown(int $score, int $hitsCount, int $total, string $sampleSource = 'places_api_sample'): array
     {
         $hitPct = $total > 0 ? round($hitsCount / $total * 100, 1) : 0.0;
         return [
@@ -217,6 +245,7 @@ final class RecallScorer
                 'sampled_reviews' => $total,
                 'keyword_hits'    => $hitsCount,
                 'hit_rate_pct'    => $hitPct,
+                'sample_source'   => $sampleSource,
             ],
             'formula'    => 'deterministic_threshold',
             'tier_table' => [
@@ -233,16 +262,19 @@ final class RecallScorer
     }
 
     /** @return array<string,mixed> */
-    private function sentBreakdown(int $score, float $avgRating, int $sampleSize): array
+    private function sentBreakdown(int $score, float $avgRating, int $sampleSize, string $sampleSource = 'places_api_sample'): array
     {
         $noData = $sampleSize === 0;
         return [
             'score'      => $score,
             'cap'        => 10,
             'raw_inputs' => [
-                'avg_rating'  => $noData ? null : $avgRating,
-                'sample_size' => $sampleSize,
-                'source'      => 'Google Maps Places API',
+                'avg_rating'    => $noData ? null : $avgRating,
+                'sample_size'   => $sampleSize,
+                'source'        => $sampleSource === 'gmaps_scrape'
+                    ? 'Google Maps full-corpus scrape (Phase 8 W8)'
+                    : 'Google Maps Places API',
+                'sample_source' => $sampleSource,
             ],
             'formula'    => 'deterministic_threshold',
             'tier_table' => [
