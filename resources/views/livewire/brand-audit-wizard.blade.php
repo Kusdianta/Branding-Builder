@@ -258,7 +258,8 @@ new class extends Component {
             // brand-recall
             'rating_tier'         => 'Rating',
             'review_count_tier'   => 'Jumlah Review',
-            'keyword_saturation'  => 'Kata Kunci',
+            'keyword_saturation'  => 'Kata Kunci Positif di Ulasan', // BB18 alias for old rows
+            'review_keyword_quality' => 'Kata Kunci Positif di Ulasan',
             'sentiment_quality'   => 'Sentimen',
             'search_recall'       => 'Search Recall',
             // digital-presence
@@ -798,7 +799,7 @@ new class extends Component {
                                                             default                   => 'Lainnya',
                                                         };
                                                         $sourceLabel = match ($k) {
-                                                            'rating_tier', 'review_count_tier', 'keyword_saturation', 'sentiment_quality' => 'Google Maps reviews',
+                                                            'rating_tier', 'review_count_tier', 'keyword_saturation', 'review_keyword_quality', 'sentiment_quality' => 'Google Maps reviews',
                                                             'search_recall' => 'Google Autocomplete',
                                                             'has_gmaps', 'has_instagram', 'has_website', 'has_wa', 'has_tiktok' => 'Touchpoint input form',
                                                             'review_bonus' => 'Google Maps review count threshold',

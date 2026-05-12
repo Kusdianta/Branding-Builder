@@ -269,7 +269,7 @@
                                     default                   => 'Lainnya',
                                 };
                                 $sourceLabel = match ($k) {
-                                    'rating_tier', 'review_count_tier', 'keyword_saturation', 'sentiment_quality' => 'Google Maps reviews',
+                                    'rating_tier', 'review_count_tier', 'keyword_saturation', 'review_keyword_quality', 'sentiment_quality' => 'Google Maps reviews',
                                     'search_recall' => 'Google Autocomplete',
                                     'has_gmaps', 'has_instagram', 'has_website', 'has_wa', 'has_tiktok' => 'Touchpoint input form',
                                     'review_bonus' => 'Google Maps review count threshold',

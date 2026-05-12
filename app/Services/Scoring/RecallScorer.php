@@ -41,11 +41,17 @@ final class RecallScorer
         [$kwScore, $kwHits, $kwTotal] = $this->keywordSaturation($sampledReviews, $clusters);
         [$sentScore, $sentAvg]        = $this->sentimentQuality($sampledReviews);
 
+        // BB18: keyword_saturation → review_keyword_quality. The old name
+        // implied "keyword density across our review samples" — actually
+        // misleading; the metric is the share of sampled reviews that
+        // include ≥1 positive keyword (harum, bersih, etc.). The new name
+        // matches the more honest "Kata Kunci Positif di Ulasan" label.
+        // True branded-search-share measure is filed as Phase 8 backlog.
         $subBuckets = [
-            'rating_tier'        => $ratingScore,
-            'review_count_tier'  => $countScore,
-            'keyword_saturation' => $kwScore,
-            'sentiment_quality'  => $sentScore,
+            'rating_tier'            => $ratingScore,
+            'review_count_tier'      => $countScore,
+            'review_keyword_quality' => $kwScore,
+            'sentiment_quality'      => $sentScore,
         ];
 
         // Cap at 65 — search_recall (35 more pts) is layered on later by
@@ -53,10 +59,10 @@ final class RecallScorer
         $total = max(0, min(65, array_sum($subBuckets)));
 
         $breakdown = [
-            'rating_tier'        => $this->ratingBreakdown($rating, $ratingScore),
-            'review_count_tier'  => $this->countBreakdown($count, $countScore),
-            'keyword_saturation' => $this->kwBreakdown($kwScore, $kwHits, $kwTotal),
-            'sentiment_quality'  => $this->sentBreakdown($sentScore, $sentAvg, count($sampledReviews)),
+            'rating_tier'            => $this->ratingBreakdown($rating, $ratingScore),
+            'review_count_tier'      => $this->countBreakdown($count, $countScore),
+            'review_keyword_quality' => $this->kwBreakdown($kwScore, $kwHits, $kwTotal),
+            'sentiment_quality'      => $this->sentBreakdown($sentScore, $sentAvg, count($sampledReviews)),
         ];
 
         return new PillarScore(
@@ -222,7 +228,7 @@ final class RecallScorer
                 ['range' => '≥90%',   'points' => 15, 'matched' => $score === 15],
                 ['range' => 'Tidak ada data', 'points' => 0, 'matched' => $total === 0],
             ],
-            'explanation_id' => 'keyword_saturation_v2',
+            'explanation_id' => 'review_keyword_quality_v2',
         ];
     }
 

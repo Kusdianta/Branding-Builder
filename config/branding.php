@@ -47,7 +47,7 @@ return [
         ScoringRubric::PILLAR_RECALL => [
             'rating_tier'        => ['cap' => 25, 'type' => 'deterministic'],
             'review_count_tier'  => ['cap' => 15, 'type' => 'deterministic'],
-            'keyword_saturation' => ['cap' => 15, 'type' => 'deterministic'],
+            'review_keyword_quality' => ['cap' => 15, 'type' => 'deterministic'],
             'sentiment_quality'  => ['cap' => 10, 'type' => 'deterministic'],
             'search_recall'      => ['cap' => 35, 'type' => 'deterministic'],
         ],

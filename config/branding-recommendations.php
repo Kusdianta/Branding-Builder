@@ -50,7 +50,7 @@ return [
         'body'     => 'Minta setiap pelanggan puas meninggalkan ulasan di Google Maps {{brand_name}}. Kirim link ulasan via WhatsApp setelah pesanan selesai — target minimal 50 ulasan untuk meningkatkan visibilitas pencarian lokal secara signifikan.',
     ],
 
-    'keyword_saturation' => [
+    'review_keyword_quality' => [
         'priority' => 'penting',
         'title'    => 'Arahkan Pelanggan Menulis Ulasan Spesifik',
         'body'     => 'Kirim pesan WhatsApp ke setiap pelanggan yang selesai dilayani: "Halo, terima kasih sudah mempercayakan cucian ke {{brand_name}}! Boleh share pengalaman di Google Maps? Ceritakan soal kebersihan, kecepatan, atau keramahan tim kami — calon pelanggan lain sangat terbantu dengan ulasan deskriptif seperti itu."',

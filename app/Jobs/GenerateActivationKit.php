@@ -43,7 +43,8 @@ class GenerateActivationKit implements ShouldQueue
                 'subBucketLabels' => [
                     'rating_tier'           => 'Rating',
                     'review_count_tier'     => 'Jumlah Review',
-                    'keyword_saturation'    => 'Kata Kunci',
+                    'keyword_saturation'    => 'Kata Kunci Positif di Ulasan', // BB18: legacy alias for old audit rows
+                    'review_keyword_quality' => 'Kata Kunci Positif di Ulasan',
                     'sentiment_quality'     => 'Sentimen',
                     'search_recall'         => 'Search Recall',
                     'has_gmaps'             => 'Google Maps',
