@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers;
 
 use App\Jobs\GenerateActivationKit;
+use App\Models\AuditStep;
 use App\Models\BrandAudit;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Storage;
@@ -16,6 +17,25 @@ class AuditController extends Controller
     {
         $audit = BrandAudit::where('session_token', $token)->firstOrFail();
 
+        // BB22: include per-step progress so external clients can build
+        // their own live dashboards without scraping Livewire state. The
+        // wizard view itself uses Livewire wire:poll, but this endpoint
+        // gives a stable JSON contract for ops/monitoring.
+        $steps = AuditStep::where('brand_audit_id', $audit->id)
+            ->orderBy('order')
+            ->get()
+            ->map(fn ($s) => [
+                'key'          => $s->step_key,
+                'track'        => $s->track,
+                'status'       => $s->status,
+                'order'        => $s->order,
+                'started_at'   => $s->started_at?->toIso8601String(),
+                'completed_at' => $s->completed_at?->toIso8601String(),
+                'elapsed_s'    => $s->elapsedSeconds(),
+                'detail'       => $s->detail,
+            ])
+            ->all();
+
         return response()->json([
             'status'              => $audit->status,
             'overall_score'       => $audit->overall_score,
@@ -24,7 +44,9 @@ class AuditController extends Controller
                     $slug => is_array($data) ? ($data['score'] ?? null) : null,
                 ])
                 ->toArray(),
-            'activation_kit_path' => $audit->activation_kit_path,
+            'activation_kit_path'    => $audit->activation_kit_path,
+            'instagram_audit_status' => $audit->instagram_audit_status,
+            'steps'                  => $steps,
         ]);
     }
 
