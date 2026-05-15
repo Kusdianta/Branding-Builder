@@ -42,6 +42,8 @@ class BrandAudit extends Model
         'instagram_audit_status',
         'gmaps_reviews',
         'gmaps_reviews_status',
+        'quick_wins',
+        'competitive_positioning',
         'expires_at',
     ];
 
@@ -56,9 +58,11 @@ class BrandAudit extends Model
             'key_findings'      => 'array',
             'recommendations'   => 'array',
             'evidence'          => 'array',
-            'instagram_audit'   => 'array',
-            'gmaps_reviews'     => 'array',
-            'expires_at'        => 'datetime',
+            'instagram_audit'         => 'array',
+            'gmaps_reviews'           => 'array',
+            'quick_wins'              => 'array',
+            'competitive_positioning' => 'array',
+            'expires_at'              => 'datetime',
         ];
     }
 
