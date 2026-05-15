@@ -23,3 +23,20 @@
 Homestead.json
 Homestead.yaml
 Thumbs.db
+
+# Tinker helper scripts used for ad-hoc DB inspection during dev
+# sessions (BB34 / Phase 9 era + earlier). Sensitive class — may
+# carry inline audit IDs, brand names, or query helpers. Never commit.
+_tinker_*.php
+
+# Filament-uploaded outlet photos written during local Brand Audit
+# wizard runs. Live in storage/app/public.
+/storage/app/public/outlet-photos
+
+# Claude Code per-project state (CLI plugin cache, hooks, agent
+# scratch). User-specific.
+/.claude/
+
+# W8.8: stray scratch files dropped by ad-hoc tinker invocations.
+status
+
