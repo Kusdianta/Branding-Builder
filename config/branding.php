@@ -116,20 +116,33 @@ return [
                 'telat', 'lambat', 'lama banget', 'kelamaan', 'nungguin', 'molor',
                 'ngaret', 'terlambat', 'delay', 'tidak tepat waktu', 'lewat jadwal',
                 'ditunda',
+                // BB50: English additions
+                'late', 'delayed', 'overdue', 'past deadline',
+                'took forever', 'way too slow', 'still not done',
             ],
             'lost'        => [
                 'tertukar', 'hilang', 'baju hilang', 'pakaian hilang', 'barang hilang',
                 'kehilangan',
+                // BB50: English additions
+                'lost', 'missing', 'missing item',
             ],
             'unresponsive' => [
                 'tidak direspons', 'tidak balas', 'no respon', 'susah dihubungi',
                 'ga dibalas', 'gak dibalas', 'tidak ada respon', 'slow respon',
                 'slow response', 'wa tidak dibalas',
+                // BB50: English additions
+                'no reply', 'no response', "didn't reply", "didn't answer",
+                'ignored my message', 'never got back to me',
+                'no follow-up', 'unresponsive', 'ghosted',
             ],
             'damage'      => [
                 'rusak', 'robek', 'cacat', 'luntur', 'pudar', 'menyusut', 'melar',
                 'sobek', 'kelunturan', 'bau aneh', 'bau tidak sedap', 'bau apek',
                 'masih kotor', 'tidak bersih',
+                // BB50: English additions
+                'damaged', 'ruined', 'destroyed', 'torn', 'shrunk',
+                'discolored', 'stained', 'no compensation',
+                "won't replace", "didn't replace",
             ],
         ],
     ],

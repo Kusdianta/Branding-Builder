@@ -54,7 +54,11 @@ final class ExperiencePenaltyDetector
                 'jam belum', 'jam belom', 'hari belum', 'hari belom',
                 'sudah seminggu', 'udah seminggu', 'sampai sekarang belum',
                 'tidak tepat waktu', 'gak tepat waktu', 'ga tepat waktu',
-                'overdue',
+                // BB50: English additions for English-language reviews
+                // (Bandung-area expat-targeted brands, tourist hotspots).
+                'overdue', 'late', 'delayed', 'past deadline',
+                'still not done', 'didn\'t deliver on time',
+                'missed the deadline', 'took forever', 'way too slow',
             ],
         ],
         'penalty_pakaian_hilang' => [
@@ -66,7 +70,15 @@ final class ExperiencePenaltyDetector
                 'pakaian hilang', 'baju hilang', 'celana hilang',
                 'tidak kembali', 'ga kembali', 'gak balik',
                 'rusak',
-                'missing item', 'lost',
+                // BB50: English additions. "no compensation" + "won't replace"
+                // were specifically observed in the Less Worry GMaps corpus
+                // ("My white shoes that i turned in for cleaning turned grey,
+                // ... No compensation at all.") that previously scored zero
+                // because the Indonesian-only corpus didn't catch English
+                // damage/loss complaints.
+                'missing item', 'lost', 'missing', 'damaged', 'ruined',
+                'destroyed', 'torn', 'shrunk', 'discolored', 'stained',
+                'no compensation', 'won\'t replace', 'didn\'t replace',
             ],
         ],
         'penalty_no_response_wa' => [
@@ -79,7 +91,11 @@ final class ExperiencePenaltyDetector
                 'tidak ada respon', 'tidak ada respond', 'gak ada respon',
                 'tidak responsif', 'gak responsif',
                 'wa tidak direspon', 'chat tidak dibalas',
-                'no reply', 'no response',
+                // BB50: English additions for English-language complaints
+                // about responsiveness on WhatsApp / DM channels.
+                'no reply', 'no response', 'didn\'t reply', 'didn\'t answer',
+                'ignored my message', 'never got back to me',
+                'no follow-up', 'unresponsive', 'ghosted',
             ],
         ],
     ];

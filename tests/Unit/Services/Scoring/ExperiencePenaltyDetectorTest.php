@@ -181,4 +181,97 @@ final class ExperiencePenaltyDetectorTest extends TestCase
         $this->assertSame(2, $result['reviews_skipped_short']);
         $this->assertSame(-2, $result['penalties']['penalty_keterlambatan']);
     }
+
+    // -----------------------------------------------------------------
+    // BB50: English-language penalty triggers. Bandung-area expat-targeted
+    // brands receive English reviews that the pre-BB50 Indonesian-only
+    // corpus silently dropped — the canonical example is the Less Worry
+    // GMaps review:
+    //   "My white shoes that i turned in for cleaning turned grey,
+    //    waited another week and it got worse. No compensation at all."
+    // which previously fired zero penalties despite being a clear
+    // damage + unresponsive complaint at 1 star.
+    // -----------------------------------------------------------------
+
+    public function test_english_damage_complaint_fires_pakaian_hilang_penalty(): void
+    {
+        // The Less Worry "white shoes" review verbatim. Two BB50
+        // patterns hit: 'no compensation' (damage cluster) AND the
+        // generic damage signal. Single review = single per-match
+        // delta of -3 against penalty_pakaian_hilang.
+        $reviews = [
+            [
+                'author' => 'Radia',
+                'rating_value' => 1,
+                'text' => 'My white shoes that i turned in for cleaning turned grey, '
+                    . 'waited another week and it got worse. No compensation at all.',
+            ],
+        ];
+
+        $result = $this->detector->detect($reviews);
+
+        $this->assertSame(-3, $result['penalties']['penalty_pakaian_hilang']);
+        $this->assertCount(1, $result['evidence']['penalty_pakaian_hilang']);
+        $this->assertSame('Radia', $result['evidence']['penalty_pakaian_hilang'][0]['author']);
+        $this->assertSame(1, $result['evidence']['penalty_pakaian_hilang'][0]['rating_value']);
+        $this->assertSame('no compensation', $result['evidence']['penalty_pakaian_hilang'][0]['matched_phrase']);
+    }
+
+    public function test_english_late_complaint_fires_keterlambatan_penalty(): void
+    {
+        $reviews = [
+            ['text' => 'Picked up my laundry late again, took forever to finish a small order.'],
+        ];
+
+        $result = $this->detector->detect($reviews);
+
+        $this->assertSame(-2, $result['penalties']['penalty_keterlambatan']);
+        $this->assertSame('late', $result['evidence']['penalty_keterlambatan'][0]['matched_phrase']);
+    }
+
+    public function test_english_unresponsive_complaint_fires_no_response_wa_penalty(): void
+    {
+        $reviews = [
+            ['text' => 'Sent multiple WhatsApp messages and got ignored my message every single time.'],
+        ];
+
+        $result = $this->detector->detect($reviews);
+
+        $this->assertSame(-2, $result['penalties']['penalty_no_response_wa']);
+        $this->assertSame('ignored my message', $result['evidence']['penalty_no_response_wa'][0]['matched_phrase']);
+    }
+
+    public function test_mixed_english_review_fires_multiple_penalties(): void
+    {
+        // A single review that hits all three penalty types in English
+        // — exercises the cross-penalty matching loop with the BB50
+        // English additions.
+        $reviews = [
+            [
+                'text' => 'They lost my shirt, were unresponsive on WA, and the order was overdue by three days.',
+            ],
+        ];
+
+        $result = $this->detector->detect($reviews);
+
+        $this->assertSame(-2, $result['penalties']['penalty_keterlambatan'],   'overdue should fire keterlambatan');
+        $this->assertSame(-3, $result['penalties']['penalty_pakaian_hilang'],  'lost should fire pakaian_hilang');
+        $this->assertSame(-2, $result['penalties']['penalty_no_response_wa'],  'unresponsive should fire no_response_wa');
+        $this->assertSame(-7, $result['total_penalty']);
+    }
+
+    public function test_indonesian_keywords_still_fire_after_bb50_extension(): void
+    {
+        // Regression guard: BB50 only ADDED English to the corpus. The
+        // Indonesian keywords from the pre-BB50 set must still match.
+        $reviews = [
+            ['text' => 'Pakaian saya hilang dan WA tidak dibalas selama 3 hari, sudah seminggu juga belum diselesaikan.'],
+        ];
+
+        $result = $this->detector->detect($reviews);
+
+        $this->assertSame(-2, $result['penalties']['penalty_keterlambatan']);
+        $this->assertSame(-3, $result['penalties']['penalty_pakaian_hilang']);
+        $this->assertSame(-2, $result['penalties']['penalty_no_response_wa']);
+    }
 }
