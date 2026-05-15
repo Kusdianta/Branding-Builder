@@ -803,6 +803,20 @@ new class extends Component {
                 </div>
 
                 {{-- ===== Pillar grid (single column) ===== --}}
+                @php
+                    // BB32: methodology copy explaining WHY each pillar gets its
+                    // weight and why each sub-bucket carries its specific cap.
+                    // Keyed on pillar slug; values match config/branding.php.
+                    // Sourced from config:
+                    //   pillar_weights — Konsistensi 35 / Recall 35 / Experience 20 / Digital 10
+                    //   pillar_sub_buckets — see config/branding.php:40-73
+                    $pillarMethodology = [
+                        'brand-konsistensi' => 'Brand Konsistensi (35% of overall score) measures how unified your brand identity is across digital touchpoints — the strongest predictor of long-term recall in customer interviews. Kehadiran Digital (40 pts) carries the highest weight because consistent presence across IG + Website + GMaps + WA + TikTok signals a real operating brand, not a side hustle. Konsistensi Visual (35 pts) judges whether logo, color, and tone hold together when a customer scans across channels. Kelengkapan Layanan (15 pts) and Transparansi Harga (10 pts) round out the score with specific operational signals.',
+                        'brand-recall' => 'Brand Recall (35% of overall score) measures how easily potential customers recognize your brand when searching for laundry services. Search Recall (35 pts) carries the highest weight because Google Autocomplete demand is the strongest proxy for true brand awareness in your area. Rating (25 pts) and Jumlah Review (15 pts) reflect cumulative social proof. Kata Kunci Positif di Ulasan (15 pts) and Sentimen (10 pts) measure qualitative reception drawn from up to 30 scraped GMaps reviews per audit.',
+                        'brand-experience' => 'Brand Experience (20% of overall score) measures the operational signals customers encounter when interacting with the brand. Every audit starts at a Dasar of 30 pts, with bonuses fired by LLM analysis of touchpoint copy: Variasi Layanan (+15), SOP Keluhan (+15), Antar Jemput (+12), Layanan Ekspres (+10), Daftar Harga (+10). Penalty deltas — Pakaian Hilang (−10), Keterlambatan (−8), No-Response WA (−8) — are deterministic, fired only when the GMaps review corpus contains explicit complaints.',
+                        'digital-presence' => 'Digital Presence (10% of overall score) measures how discoverable and complete your brand is across the channels customers actually check. Weights reflect platform impact for laundry SMBs: Google Maps (25 pts — discovery driver #1), Instagram (20 pts), Website (20 pts), WhatsApp Business (15 pts — direct order channel), TikTok (10 pts — emerging). A Bonus Review of up to 15 extra pts fires when the GMaps listing has accumulated meaningful review volume.',
+                    ];
+                @endphp
                 <div class="grid grid-cols-1 gap-6 mb-12">
                     @foreach ($pillarMeta as $slug => $meta)
                         @php
@@ -810,8 +824,8 @@ new class extends Component {
                             $pc      = $tierColor($ps);
                             $sbs     = $subBucketScores[$slug] ?? [];
                             $hasRecs = ($recsByPillar[$slug] ?? 0) > 0;
+                            $methodology = $pillarMethodology[$slug] ?? null;
                         @endphp
-                        <div x-data="{ expandAll: false, open: {} }">
                         <x-nui-card>
                             <div class="flex items-center justify-between mb-4">
                                 <div class="flex items-center gap-3">
@@ -827,13 +841,18 @@ new class extends Component {
                                 <div style="height: 100%; width: {{ $ps ?? 0 }}%; background: {{ $pc }}; border-radius: 999px;"></div>
                             </div>
 
-                            @if (count($sbs) > 0)
-                                <div class="flex justify-end mb-2">
-                                    <button type="button"
-                                        @click="expandAll = !expandAll"
-                                        x-text="expandAll ? 'Tutup semua detail ↑' : 'Lihat semua detail ↓'"
-                                        style="font-size: 12px; color: var(--chimera-700); background: none; border: none; cursor: pointer; padding: 0;"></button>
+                            {{-- BB32: "About this score" methodology block — explains the
+                                 weight allocation so the numbers below are interpretable
+                                 instead of opaque. Renders as muted annotation, not
+                                 primary content. --}}
+                            @if ($methodology !== null)
+                                <div style="margin-bottom: 16px; padding: 12px 14px; background: var(--surface-muted); border-left: 3px solid var(--chimera-200); border-radius: var(--radius-sm);">
+                                    <p style="font-size: 10px; font-weight: 600; color: var(--chimera-700); letter-spacing: 0.4px; text-transform: uppercase; margin: 0 0 6px;">About this score</p>
+                                    <p style="font-size: 12px; color: var(--text-secondary); line-height: 1.6; margin: 0;">{{ $methodology }}</p>
                                 </div>
+                            @endif
+
+                            @if (count($sbs) > 0)
                                 <div class="flex flex-col mb-4" style="border-top: 1px solid var(--border-default);">
                                     @foreach ($sbs as $k => $v)
                                         @php $bd = is_array($scoreBreakdown[$slug][$k] ?? null) ? $scoreBreakdown[$slug][$k] : null; @endphp
@@ -843,16 +862,12 @@ new class extends Component {
                                                 <span style="font-size: 13px; font-weight: 500; color: var(--text-primary);">{{ $v }}</span>
                                             </div>
                                             @if ($bd !== null)
-                                                {{-- BB23: Cara Perhitungan toggle button — replaces the prior "?" button.
-                                                     Clicking the row itself expands the breakdown content. expandAll
-                                                     still works because the x-show below ORs against it. --}}
-                                                <button type="button"
-                                                    @click="open['{{ $k }}'] = !open['{{ $k }}']"
-                                                    style="width: 100%; display: flex; align-items: center; gap: 6px; padding: 4px 0 8px; background: none; border: none; cursor: pointer; font-size: 10px; font-weight: 600; color: var(--chimera-700); letter-spacing: 0.3px; text-transform: uppercase; text-align: left;">
-                                                    <span x-text="(open['{{ $k }}'] || expandAll) ? '▾' : '▸'"></span>
-                                                    Cara Perhitungan
-                                                </button>
-                                                <div x-show="open['{{ $k }}'] || expandAll" x-cloak style="padding: 8px 12px 12px; background: var(--surface-muted); border-top: 1px solid var(--border-default); font-size: 11px; color: var(--text-secondary);">
+                                                {{-- BB32: BB17/BB23 dropdown reverted — sub-bucket breakdown
+                                                     renders inline so users see how the score is computed
+                                                     without needing to click. Per-pillar methodology lives
+                                                     in the "About this score" block above the sub-bucket
+                                                     list, demystifying weights without repeating data. --}}
+                                                <div style="padding: 8px 12px 12px; background: var(--surface-muted); border-top: 1px solid var(--border-default); font-size: 11px; color: var(--text-secondary);">
                                                     @php
                                                         $formula      = $bd['formula'] ?? 'unknown';
                                                         $rawInputs    = (array) ($bd['raw_inputs'] ?? []);
@@ -980,7 +995,6 @@ new class extends Component {
                                 </button>
                             @endif
                         </x-nui-card>
-                        </div>
                     @endforeach
                 </div>
 
