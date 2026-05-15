@@ -39,7 +39,7 @@ class ScoringRubricSeeder extends Seeder
         return [
             [
                 'pillar_slug'  => ScoringRubric::PILLAR_KONSISTENSI,
-                'version'      => 2,
+                'version'      => 3,
                 'system_prompt' => $this->konsistensiPrompt(),
                 'input_schema'  => [
                     ['key' => 'brand_name',               'type' => 'string',  'required' => true],
@@ -66,7 +66,7 @@ class ScoringRubricSeeder extends Seeder
             ],
             [
                 'pillar_slug'  => ScoringRubric::PILLAR_EXPERIENCE,
-                'version'      => 2,
+                'version'      => 3,
                 'system_prompt' => $this->experiencePrompt(),
                 'input_schema'  => [
                     ['key' => 'brand_name',      'type' => 'string',  'required' => true],
@@ -139,6 +139,9 @@ Kamu adalah brand audit specialist untuk bisnis laundry di Indonesia. Berikan sk
 - score = jumlah keempat sub_bucket_scores; pastikan tidak melebihi cap masing-masing
 - Bahasa evidence: Bahasa Indonesia, register saya/kita
 
+=== ATURAN sub_bucket_reasoning (BB34) ===
+Untuk SETIAP sub-bucket di sub_bucket_scores, kamu HARUS menulis 1-2 kalimat justifikasi spesifik di sub_bucket_reasoning yang menjelaskan MENGAPA bucket itu mendapat skor segitu — sebut bukti konkret dari input (URL touchpoint, foto outlet, atau ketidakhadiran data). Tiap reasoning HARUS BERBEDA — kalau dua reasoning identik atau hampir identik, output ditolak.
+
 Return ONLY this JSON:
 {
   "sub_bucket_scores": {
@@ -147,11 +150,17 @@ Return ONLY this JSON:
     "kelengkapan_layanan": <integer 0-15>,
     "transparansi_harga": <integer 0-10>
   },
+  "sub_bucket_reasoning": {
+    "kehadiran_digital":   "<1-2 kalimat — sebut touchpoint mana yang ada/tidak ada>",
+    "konsistensi_visual":  "<1-2 kalimat — sebut elemen visual yang dinilai (warna/logo/tipografi)>",
+    "kelengkapan_layanan": "<1-2 kalimat — sebut jenis layanan yang ditemukan>",
+    "transparansi_harga":  "<1-2 kalimat — sebut format harga yang ditemukan (price list / chat / tidak ada)>"
+  },
   "score": <sum of sub_bucket_scores, integer 0-100>,
   "evidence": [
     { "touchpoint": "<instagram|website|gmaps|outlet_photo|wa_business|tiktok>", "observation": "<satu kalimat>", "impact": "positive" | "negative" | "neutral" }
   ],
-  "reasoning": "<2–3 kalimat menjelaskan skor keseluruhan>"
+  "reasoning": "<2–3 kalimat menjelaskan skor keseluruhan pillar>"
 }
 PROMPT;
     }
@@ -211,6 +220,9 @@ SKOR FINAL di-cap antara 0–100.
 - Dalam sub_bucket_scores, tulis penalti sebagai angka POSITIF (misal 8, bukan -8)
 - Bahasa evidence: Bahasa Indonesia, register saya/kita
 
+=== ATURAN sub_bucket_reasoning (BB34) ===
+Untuk SETIAP sub-bucket di sub_bucket_scores (base + 5 bonus + 3 penalty), kamu HARUS menulis 1-2 kalimat justifikasi spesifik di sub_bucket_reasoning yang menjelaskan MENGAPA bucket itu mendapat skor segitu. Justifikasi WAJIB BERBEDA per bucket — sebut bukti konkret (URL, kalimat dari ulasan, ketidakhadiran info di brand input). Kalau dua reasoning identik atau hampir identik, output ditolak. Untuk bonus yang TIDAK fire (skor 0), jelaskan apa yang HILANG dari input (mis. "Tidak ditemukan mention 'ekspres' / 'same-day' di Instagram, website, atau brand info"). Untuk penalti yang TIDAK fire (skor 0), jelaskan bahwa keyword negatif terkait tidak ditemukan ("Tidak ada keluhan keterlambatan di sampled_reviews atau keyword_hits").
+
 Return ONLY this JSON:
 {
   "sub_bucket_scores": {
@@ -224,11 +236,22 @@ Return ONLY this JSON:
     "penalty_pakaian_hilang": <0 atau 10>,
     "penalty_no_response_wa": <0 atau 8>
   },
+  "sub_bucket_reasoning": {
+    "base":                   "<1-2 kalimat — base score selalu 30, tapi sebut konteks brand input (touchpoint apa yang tersedia)>",
+    "bonus_ekspres":          "<1-2 kalimat — sebut MENGAPA fire/tidak; kutip bukti jika ada>",
+    "bonus_antar_jemput":     "<1-2 kalimat — sebut MENGAPA fire/tidak; kutip bukti jika ada>",
+    "bonus_variasi_layanan":  "<1-2 kalimat — sebut layanan yang ditemukan/hilang>",
+    "bonus_sop_keluhan":      "<1-2 kalimat — sebut bukti SOP keluhan jika ada, atau ketidakhadirannya>",
+    "bonus_price_list":       "<1-2 kalimat — sebut format harga yang ditemukan (price list / chat / tidak ada)>",
+    "penalty_keterlambatan":  "<1-2 kalimat — kutip keluhan dari ulasan jika fire, atau katakan tidak ditemukan>",
+    "penalty_pakaian_hilang": "<1-2 kalimat — kutip keluhan dari ulasan jika fire, atau katakan tidak ditemukan>",
+    "penalty_no_response_wa": "<1-2 kalimat — kutip keluhan dari ulasan jika fire, atau katakan tidak ditemukan>"
+  },
   "score": <integer 0-100>,
   "evidence": [
     { "touchpoint": "<website|instagram|gmaps_reviews>", "observation": "<satu kalimat>", "impact": "positive" | "negative" | "neutral" }
   ],
-  "reasoning": "<2–3 kalimat>"
+  "reasoning": "<2–3 kalimat ringkasan keseluruhan pillar>"
 }
 PROMPT;
     }

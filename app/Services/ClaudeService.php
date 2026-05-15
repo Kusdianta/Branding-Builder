@@ -1093,7 +1093,12 @@ SYS;
     /**
      * Parse LLM response for Konsistensi / Experience (includes sub_bucket_scores).
      *
-     * @return array{score:int,sub_bucket_scores:array<string,mixed>,evidence:list<array<string,mixed>>,reasoning:string}
+     * BB34: also extracts sub_bucket_reasoning (per-bucket justification map)
+     * when the rubric v3+ prompt elicited it. Backward-compatible — when the
+     * key is absent (legacy v2 responses or older fixtures), returns an
+     * empty array and callers fall back to the pillar-level reasoning.
+     *
+     * @return array{score:int,sub_bucket_scores:array<string,mixed>,sub_bucket_reasoning:array<string,string>,evidence:list<array<string,mixed>>,reasoning:string}
      */
     private function parseLlmPillarJson(string $pillarSlug, string $raw): array
     {
@@ -1123,11 +1128,22 @@ SYS;
             $decoded['reasoning'] = '';
         }
 
+        $rawReasoning = is_array($decoded['sub_bucket_reasoning'] ?? null)
+            ? $decoded['sub_bucket_reasoning']
+            : [];
+        $bucketReasoning = [];
+        foreach ($rawReasoning as $bucketKey => $reason) {
+            if (is_string($bucketKey) && is_string($reason) && $reason !== '') {
+                $bucketReasoning[$bucketKey] = $reason;
+            }
+        }
+
         return [
-            'score'             => (int) $decoded['score'],
-            'sub_bucket_scores' => is_array($decoded['sub_bucket_scores'] ?? null) ? $decoded['sub_bucket_scores'] : [],
-            'evidence'          => array_values($decoded['evidence']),
-            'reasoning'         => (string) $decoded['reasoning'],
+            'score'                => (int) $decoded['score'],
+            'sub_bucket_scores'    => is_array($decoded['sub_bucket_scores'] ?? null) ? $decoded['sub_bucket_scores'] : [],
+            'sub_bucket_reasoning' => $bucketReasoning,
+            'evidence'             => array_values($decoded['evidence']),
+            'reasoning'            => (string) $decoded['reasoning'],
         ];
     }
 
@@ -1163,7 +1179,7 @@ SYS;
     }
 
     /**
-     * @param array{score:int,sub_bucket_scores:array<string,mixed>,evidence:list<array<string,mixed>>,reasoning:string} $parsed
+     * @param array{score:int,sub_bucket_scores:array<string,mixed>,sub_bucket_reasoning:array<string,string>,evidence:list<array<string,mixed>>,reasoning:string} $parsed
      * @param array<string,mixed> $inputs
      */
     private function hydrateLlmScore(string $pillarSlug, array $parsed, array $inputs): PillarScore
@@ -1177,7 +1193,13 @@ SYS;
             $evidence[] = EvidenceItem::fromArray($row);
         }
 
-        $breakdown = $this->buildLlmBreakdown($pillarSlug, $inputs, $parsed['sub_bucket_scores'], $parsed['reasoning']);
+        $breakdown = $this->buildLlmBreakdown(
+            $pillarSlug,
+            $inputs,
+            $parsed['sub_bucket_scores'],
+            $parsed['reasoning'],
+            $parsed['sub_bucket_reasoning'],
+        );
 
         return new PillarScore(
             pillarSlug:      $pillarSlug,
@@ -1192,12 +1214,27 @@ SYS;
     /**
      * Build per-sub-bucket breakdown for LLM-judged pillars.
      *
+     * BB34: previously copied the pillar-level $reasoning into every bucket's
+     * llm_reasoning slot, which surfaced as identical reasoning text under
+     * every Brand Experience sub-bucket on the dashboard. Now uses the
+     * per-bucket reasoning map from the rubric v3 prompt; falls back to an
+     * empty string per bucket when the LLM didn't provide one (legacy v2
+     * responses, parse failures). Pillar-level reasoning is rendered ONCE
+     * above the sub-bucket list at the view layer instead of being
+     * duplicated under every row.
+     *
      * @param  array<string,mixed>  $inputs
      * @param  array<string,mixed>  $subBucketScores
+     * @param  array<string,string> $subBucketReasoning
      * @return array<string,array<string,mixed>>
      */
-    private function buildLlmBreakdown(string $pillarSlug, array $inputs, array $subBucketScores, string $reasoning): array
-    {
+    private function buildLlmBreakdown(
+        string $pillarSlug,
+        array $inputs,
+        array $subBucketScores,
+        string $reasoning,
+        array $subBucketReasoning = [],
+    ): array {
         $caps        = self::LLM_BUCKET_CAPS[$pillarSlug] ?? [];
         $limitations = $this->inferLimitations($inputs);
         $context     = $this->buildContextList($inputs);
@@ -1209,9 +1246,9 @@ SYS;
                 'cap'            => $caps[$bucketKey] ?? null,
                 'raw_inputs'     => ['context_provided' => $context],
                 'formula'        => 'llm_judgment',
-                'llm_reasoning'  => $reasoning,
+                'llm_reasoning'  => (string) ($subBucketReasoning[$bucketKey] ?? ''),
                 'limitations'    => $limitations,
-                'explanation_id' => $bucketKey . '_llm_v1',
+                'explanation_id' => $bucketKey . '_llm_v2',
             ];
         }
 

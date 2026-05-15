@@ -825,6 +825,14 @@ new class extends Component {
                             $sbs     = $subBucketScores[$slug] ?? [];
                             $hasRecs = ($recsByPillar[$slug] ?? 0) > 0;
                             $methodology = $pillarMethodology[$slug] ?? null;
+                            // BB34: pillar-level LLM reasoning — rendered ONCE above
+                            // the sub-bucket list so it isn't duplicated under every
+                            // row (the BB17 anti-pattern this fix retires).
+                            $pillarLlmReasoning = (string) (
+                                is_array($pillarScores[$slug] ?? null)
+                                    ? ($pillarScores[$slug]['reasoning'] ?? '')
+                                    : ''
+                            );
                         @endphp
                         <x-nui-card>
                             <div class="flex items-center justify-between mb-4">
@@ -849,6 +857,18 @@ new class extends Component {
                                 <div style="margin-bottom: 16px; padding: 12px 14px; background: var(--surface-muted); border-left: 3px solid var(--chimera-200); border-radius: var(--radius-sm);">
                                     <p style="font-size: 10px; font-weight: 600; color: var(--chimera-700); letter-spacing: 0.4px; text-transform: uppercase; margin: 0 0 6px;">About this score</p>
                                     <p style="font-size: 12px; color: var(--text-secondary); line-height: 1.6; margin: 0;">{{ $methodology }}</p>
+                                </div>
+                            @endif
+
+                            {{-- BB34: pillar-level LLM reasoning — rendered ONCE here
+                                 instead of being copied under every sub-bucket row. The
+                                 narrative summarises the LLM's overall judgment of THIS
+                                 audit's data, vs the static "About this score" block
+                                 above which explains the scoring methodology. --}}
+                            @if ($pillarLlmReasoning !== '')
+                                <div style="margin-bottom: 16px; padding: 12px 14px; background: var(--surface-card); border: 1px solid var(--border-default); border-radius: var(--radius-sm);">
+                                    <p style="font-size: 10px; font-weight: 600; color: var(--text-tertiary); letter-spacing: 0.4px; text-transform: uppercase; margin: 0 0 6px;">Ringkasan penilaian</p>
+                                    <p style="font-size: 13px; color: var(--text-primary); line-height: 1.65; margin: 0;">{{ $pillarLlmReasoning }}</p>
                                 </div>
                             @endif
 
