@@ -258,8 +258,13 @@
                     @endphp
                     <tr style="border-bottom: 1px solid rgba(15,20,17,0.08);">
                         <td colspan="2" style="padding: 6px 12px 8px; font-size: 8px; color: #5A6259; background: #F7F9F5;">
-                            {{-- BB17: Cara Perhitungan header — transparency about how this score was derived. --}}
-                            <p style="margin: 0 0 4px; font-size: 8px; font-weight: bold; color: #326D3A; letter-spacing: 0.3px; text-transform: uppercase;">▸ Cara Perhitungan</p>
+                            {{-- BB35: dropped the "▸ Cara Perhitungan" chevron-prefixed
+                                 header — in PDF context the chevron looked like a
+                                 collapsed-dropdown affordance even though the breakdown
+                                 below already renders inline. The Sumber/Formula line
+                                 below carries enough labelling on its own. Phase 9 will
+                                 replace this entire breakdown with the apikprimadya
+                                 table + ✓/✗ pattern. --}}
 
                             @php
                                 $formulaLabel = match ($formula) {
