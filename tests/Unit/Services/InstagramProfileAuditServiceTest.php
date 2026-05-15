@@ -699,70 +699,14 @@ class InstagramProfileAuditServiceTest extends TestCase
         $this->assertStringContainsString('claude_analysis_failed', (string) ($audit->instagram_audit['error'] ?? ''));
     }
 
-    #[Test]
-    public function it_accepts_session_cookies_as_json_string_via_shim(): void
-    {
-        // Hub persistence bug: cookies stored as JSON-encoded JSON-string
-        // (double-encoded), so the encrypted:json cast returns a string.
-        // The shim json_decodes once before handing off to the worker.
-        $audit = $this->makeAudit();
-
-        $cookiesArray = [['name' => 'sessionid', 'value' => 'abc']];
-        $cookiesJson  = json_encode($cookiesArray, JSON_THROW_ON_ERROR);
-
-        $this->hub->expects($this->once())
-            ->method('getNextCredential')
-            ->willReturn([
-                'id'              => '01j_DOUBLE_ENCODED',
-                'platform'        => 'instagram',
-                'username'        => 'u',
-                'password'        => null,
-                'session_cookies' => $cookiesJson, // <-- string, not array
-            ]);
-
-        // Worker should receive the DECODED array.
-        $this->worker->expects($this->once())
-            ->method('auditInstagramProfile')
-            ->with('lessworry.id', $cookiesArray)
-            ->willReturn($this->makeProfileAuditResult());
-
-        $this->claude->method('analyzeInstagramProfile')
-            ->willReturn(['executive_summary' => 'OK']);
-
-        $this->makeService()->audit($audit);
-
-        $audit->refresh();
-        $this->assertSame('done', $audit->instagram_audit_status);
-    }
-
-    #[Test]
-    public function it_treats_unparseable_string_cookies_as_stale(): void
-    {
-        $audit = $this->makeAudit();
-
-        $this->hub->expects($this->exactly(2))
-            ->method('getNextCredential')
-            ->willReturnOnConsecutiveCalls(
-                [
-                    'id'              => '01j_GARBAGE',
-                    'platform'        => 'instagram',
-                    'username'        => 'u',
-                    'password'        => null,
-                    'session_cookies' => '<<not json>>',
-                ],
-                null,
-            );
-        $this->hub->expects($this->once())
-            ->method('reportCredentialStatus')
-            ->with('01j_GARBAGE', 'requires_2fa');
-
-        $this->worker->expects($this->never())->method('auditInstagramProfile');
-
-        $this->makeService()->audit($audit);
-
-        $audit->refresh();
-        $this->assertSame('credentials_stale', $audit->instagram_audit_status);
-    }
+    // W7.5: removed two tests covering the normalizeSessionCookies
+    // shim (it_accepts_session_cookies_as_json_string_via_shim +
+    // it_treats_unparseable_string_cookies_as_stale). The shim
+    // itself was dropped — Hub now consistently writes arrays, so
+    // string-shape cookies coming through the Hub HTTP response are
+    // a contract violation, not an expected case to defensively handle.
+    // The empty-cookies stale path is still covered by
+    // it_skips_credential_with_empty_session_cookies_and_retries below.
 
     #[Test]
     public function it_skips_credential_with_empty_session_cookies_and_retries(): void

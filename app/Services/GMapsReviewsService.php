@@ -72,7 +72,11 @@ final class GMapsReviewsService
             }
 
             $credentialId  = (string) ($credential['id'] ?? '');
-            $sessionCookies = $this->normalizeSessionCookies($credential['session_cookies'] ?? null);
+            // W7.5: dropped normalizeSessionCookies shim. Audit on
+            // 2026-05-15 confirmed all worker_credentials.session_cookies
+            // rows in Hub are stored as JSON arrays (not double-encoded
+            // JSON strings); the W7.1 item 6 shim is no longer needed.
+            $sessionCookies = $credential['session_cookies'] ?? null;
             if (! is_array($sessionCookies) || $sessionCookies === []) {
                 Log::warning('GMapsReviewsService: credential has empty session_cookies', [
                     'audit_id'      => $audit->id,
@@ -246,25 +250,7 @@ final class GMapsReviewsService
         ]);
     }
 
-    /**
-     * Same shim as InstagramProfileAuditService::normalizeSessionCookies
-     * — tolerate Hub credentials that arrive as a JSON STRING instead of
-     * a pre-decoded array (W7.1 item 6, low-priority code-hygiene).
-     *
-     * @return list<array<string,mixed>>|null
-     */
-    private function normalizeSessionCookies(mixed $raw): ?array
-    {
-        if (is_array($raw)) {
-            return $raw;
-        }
-        if (! is_string($raw) || $raw === '') {
-            return null;
-        }
-        $decoded = json_decode($raw, true);
-        if (is_array($decoded)) {
-            return $decoded;
-        }
-        return null;
-    }
+    // W7.5: removed normalizeSessionCookies — see W7.1 item 6 closure
+    // notes. Hub now consistently writes arrays; the defensive
+    // string-decode pass is no longer needed.
 }

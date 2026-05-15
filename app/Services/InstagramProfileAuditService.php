@@ -90,7 +90,11 @@ final class InstagramProfileAuditService
             }
             $usedCredentialIds[] = $credentialId;
 
-            $sessionCookies = $this->normalizeSessionCookies($credential['session_cookies'] ?? null);
+            // W7.5: dropped normalizeSessionCookies shim. Audit on
+            // 2026-05-15 confirmed all worker_credentials.session_cookies
+            // rows in Hub are stored as JSON arrays; the W7.1 item 6
+            // shim is no longer needed.
+            $sessionCookies = $credential['session_cookies'] ?? null;
             if (! is_array($sessionCookies) || $sessionCookies === []) {
                 Log::warning('InstagramProfileAuditService: credential has empty session_cookies', [
                     'audit_id'      => $audit->id,
@@ -398,31 +402,7 @@ final class InstagramProfileAuditService
         ]);
     }
 
-    /**
-     * Tolerate Hub credentials that arrive as a JSON STRING instead of a
-     * pre-decoded array. This is a v1 shim for a Hub-side persistence bug:
-     * worker_credentials.session_cookies is cast as `encrypted:json` on the
-     * Hub model but the underlying ciphertext is a JSON-encoded JSON-string
-     * (double-stringified at write time), so the cast returns a string
-     * instead of an array.
-     *
-     * Follow-up: Hub-side fix — investigate the Filament action /
-     * WorkerCredential write path; cookies should be persisted as a native
-     * PHP array, the cast does the encoding. Once Hub lands the fix and
-     * existing credentials are re-saved, this shim becomes a no-op and can
-     * be removed.
-     *
-     * @return list<array<string,mixed>>|array<string,mixed>|null
-     */
-    private function normalizeSessionCookies(mixed $raw): array|null
-    {
-        if (is_array($raw)) {
-            return $raw;
-        }
-        if (! is_string($raw) || trim($raw) === '') {
-            return null;
-        }
-        $decoded = json_decode($raw, true);
-        return is_array($decoded) ? $decoded : null;
-    }
+    // W7.5: removed normalizeSessionCookies — see W7.1 item 6 closure
+    // notes. Hub now consistently writes arrays; the defensive
+    // string-decode pass is no longer needed.
 }
