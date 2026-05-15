@@ -26,7 +26,7 @@ use App\Models\BrandAudit;
  *     ...
  *   ]
  */
-final class QuickWinsGenerator extends AbstractClaudeGenerator
+class QuickWinsGenerator extends AbstractClaudeGenerator
 {
     protected const MAX_TOKENS  = 1536;
     protected const TEMPERATURE = 0.5;

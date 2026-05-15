@@ -20,7 +20,7 @@ use App\Models\BrandAudit;
  * inside the highlighted "Peluang Pertumbuhan" callout block (matches
  * apikprimadya page 8).
  */
-final class CompetitivePositioningGenerator extends AbstractClaudeGenerator
+class CompetitivePositioningGenerator extends AbstractClaudeGenerator
 {
     protected const MAX_TOKENS  = 1024;
     protected const TEMPERATURE = 0.5;

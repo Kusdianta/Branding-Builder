@@ -27,7 +27,7 @@ use App\Models\BrandAudit;
  * The PDF (BB41) maps these straight onto the apikprimadya
  * "★ #N -- Title / Prioritas: X | Usaha: Y | Dampak: Z / body" cards.
  */
-final class RecommendationGenerator extends AbstractClaudeGenerator
+class RecommendationGenerator extends AbstractClaudeGenerator
 {
     protected const MAX_TOKENS  = 3072;
     protected const TEMPERATURE = 0.5;
