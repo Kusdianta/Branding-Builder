@@ -53,14 +53,20 @@ class AnalyzeBrand implements ShouldQueue
             ->name("audit:{$auditId}")
             ->allowFailures()
             ->then(static function (Batch $batch) use ($auditId): void {
-                GeneratePdfJob::dispatch($auditId);
+                // BB38: GenerateInsightsJob now sits between batch
+                // completion and PDF generation — runs the three
+                // apikprimadya-style generators serially then chains
+                // GeneratePdfJob at the end.
+                GenerateInsightsJob::dispatch($auditId);
             })
             ->catch(static function (Batch $batch, Throwable $e) use ($auditId): void {
                 Log::error('AnalyzeBrand: outer batch failed', [
                     'audit_id' => $auditId,
                     'error'    => $e->getMessage(),
                 ]);
-                // Still try to land a PDF so the user gets *something*.
+                // Still try to land a PDF so the user gets *something*;
+                // skip insights since they need pillar+IG data the failed
+                // batch may not have produced.
                 GeneratePdfJob::dispatch($auditId);
             })
             ->dispatch();
@@ -88,8 +94,12 @@ class AnalyzeBrand implements ShouldQueue
             // Track B (Instagram)
             ['key' => 'ig_scrape',                  'track' => 'b',     'order' => 9],
             ['key' => 'ig_analysis',                'track' => 'b',     'order' => 10],
-            // Final
-            ['key' => 'generate_pdf',               'track' => 'final', 'order' => 11],
+            // Final — BB38 inserted three apikprimadya generator steps
+            // between batch completion and PDF render, ordered serial.
+            ['key' => 'generate_recommendations',   'track' => 'final', 'order' => 11],
+            ['key' => 'generate_quick_wins',        'track' => 'final', 'order' => 12],
+            ['key' => 'generate_positioning',       'track' => 'final', 'order' => 13],
+            ['key' => 'generate_pdf',               'track' => 'final', 'order' => 14],
         ];
 
         foreach ($steps as $s) {
