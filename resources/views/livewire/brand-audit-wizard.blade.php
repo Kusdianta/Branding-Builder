@@ -10,7 +10,7 @@ use Livewire\Volt\Component;
 use Livewire\WithFileUploads;
 use function Livewire\Volt\layout;
 
-layout('layouts.app');
+layout('layouts.audit');
 
 new class extends Component {
     use WithFileUploads;
