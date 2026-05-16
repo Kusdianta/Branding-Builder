@@ -78,28 +78,33 @@ class AnalyzeBrand implements ShouldQueue
      */
     private function seedAuditSteps(): void
     {
+        // BB71 — Phase 11 5-phase pipeline:
+        //   Phase 1 gather:   places + gmaps + IG scrape + website
+        //   Phase 2 analyze:  IG Claude analysis + service signals
+        //   Phase 3 validate: validate_evidence
+        //   Phase 4 score:    4 pillars
+        //   Phase 5 final:    insights + PDF
         $steps = [
             // Phase 1 — gather (parallel)
             ['key' => 'gather_places',              'track' => 'gather',   'order' => 1],
             ['key' => 'gather_gmaps',               'track' => 'gather',   'order' => 2],
             ['key' => 'gather_instagram',           'track' => 'gather',   'order' => 3],
-            // BB69: IG Claude analysis split out from gather_instagram;
-            // currently dispatched synchronously at the end of
-            // FetchInstagramAuditJob, will move to a Phase 2 parallel
-            // batch in BB71.
-            ['key' => 'analyze_instagram',          'track' => 'gather',   'order' => 4],
-            // Phase 2 — validate
-            ['key' => 'validate_evidence',          'track' => 'validate', 'order' => 5],
-            // Phase 3 — score (serial inside ScorePillarsJob)
-            ['key' => 'score_recall',               'track' => 'score',    'order' => 6],
-            ['key' => 'score_digital',              'track' => 'score',    'order' => 7],
-            ['key' => 'score_konsistensi',          'track' => 'score',    'order' => 8],
-            ['key' => 'score_experience',           'track' => 'score',    'order' => 9],
-            // Phase 3 (continued) — insights + PDF
-            ['key' => 'generate_recommendations',   'track' => 'final',    'order' => 10],
-            ['key' => 'generate_quick_wins',        'track' => 'final',    'order' => 11],
-            ['key' => 'generate_positioning',       'track' => 'final',    'order' => 12],
-            ['key' => 'generate_pdf',               'track' => 'final',    'order' => 13],
+            ['key' => 'fetch_website',              'track' => 'gather',   'order' => 4],
+            // Phase 2 — analyze (parallel, consumes Phase 1 evidence)
+            ['key' => 'analyze_instagram',          'track' => 'analyze',  'order' => 5],
+            ['key' => 'extract_service_signals',    'track' => 'analyze',  'order' => 6],
+            // Phase 3 — validate
+            ['key' => 'validate_evidence',          'track' => 'validate', 'order' => 7],
+            // Phase 4 — score (4 pillars, serial inside ScorePillarsJob)
+            ['key' => 'score_recall',               'track' => 'score',    'order' => 8],
+            ['key' => 'score_digital',              'track' => 'score',    'order' => 9],
+            ['key' => 'score_konsistensi',          'track' => 'score',    'order' => 10],
+            ['key' => 'score_experience',           'track' => 'score',    'order' => 11],
+            // Phase 5 — insights + PDF
+            ['key' => 'generate_recommendations',   'track' => 'final',    'order' => 12],
+            ['key' => 'generate_quick_wins',        'track' => 'final',    'order' => 13],
+            ['key' => 'generate_positioning',       'track' => 'final',    'order' => 14],
+            ['key' => 'generate_pdf',               'track' => 'final',    'order' => 15],
         ];
 
         foreach ($steps as $s) {

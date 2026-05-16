@@ -44,7 +44,7 @@ class AnalyzeBrandTest extends TestCase
     }
 
     #[Test]
-    public function it_seeds_the_thirteen_step_pipeline_in_phase_order(): void
+    public function it_seeds_the_five_phase_pipeline_in_phase_order(): void
     {
         Bus::fake();
         $audit = $this->makeAudit();
@@ -57,23 +57,24 @@ class AnalyzeBrandTest extends TestCase
             ->map(fn ($s) => "{$s->order}:{$s->track}:{$s->step_key}")
             ->all();
 
-        // BB69: analyze_instagram added between gather_instagram and
-        // validate_evidence (still in 'gather' track until BB71 introduces
-        // a dedicated 'analyze' phase).
+        // BB71: 5-phase pipeline — gather (4) + analyze (2) + validate (1) +
+        // score (4) + final (4) = 15 steps.
         $this->assertSame([
             '1:gather:gather_places',
             '2:gather:gather_gmaps',
             '3:gather:gather_instagram',
-            '4:gather:analyze_instagram',
-            '5:validate:validate_evidence',
-            '6:score:score_recall',
-            '7:score:score_digital',
-            '8:score:score_konsistensi',
-            '9:score:score_experience',
-            '10:final:generate_recommendations',
-            '11:final:generate_quick_wins',
-            '12:final:generate_positioning',
-            '13:final:generate_pdf',
+            '4:gather:fetch_website',
+            '5:analyze:analyze_instagram',
+            '6:analyze:extract_service_signals',
+            '7:validate:validate_evidence',
+            '8:score:score_recall',
+            '9:score:score_digital',
+            '10:score:score_konsistensi',
+            '11:score:score_experience',
+            '12:final:generate_recommendations',
+            '13:final:generate_quick_wins',
+            '14:final:generate_positioning',
+            '15:final:generate_pdf',
         ], $steps);
     }
 

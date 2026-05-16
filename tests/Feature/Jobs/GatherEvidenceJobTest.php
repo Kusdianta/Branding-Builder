@@ -7,6 +7,7 @@ namespace Tests\Feature\Jobs;
 use App\Jobs\FetchGMapsReviewsJob;
 use App\Jobs\FetchInstagramAuditJob;
 use App\Jobs\FetchPlacesApiJob;
+use App\Jobs\FetchWebsiteJob;
 use App\Jobs\GatherEvidenceJob;
 use App\Models\AuditStep;
 use App\Models\BrandAudit;
@@ -186,10 +187,10 @@ class GatherEvidenceJobTest extends TestCase
                     'instagram_audit'        => $snapshot,
                 ]);
             });
-        // dispatchSync resolves AnalyzeInstagramJob via the container,
-        // which itself resolves the same service. The synchronous hand-off
-        // calls analyze(); stub it as no-op so this test stays focused.
-        $service->shouldReceive('analyze')->once();
+        // BB71: analyze() now runs in the Phase 2 batch
+        // (AnalysisOrchestratorJob), not inline. This gather job MUST
+        // NOT call analyze() — covered by shouldNotReceive.
+        $service->shouldNotReceive('analyze');
         $this->app->instance(InstagramProfileAuditService::class, $service);
 
         (new FetchInstagramAuditJob($audit->id))->handle($service);
@@ -258,6 +259,7 @@ class GatherEvidenceJobTest extends TestCase
                 && in_array(FetchPlacesApiJob::class, $classes, true)
                 && in_array(FetchGMapsReviewsJob::class, $classes, true)
                 && in_array(FetchInstagramAuditJob::class, $classes, true)
+                && in_array(FetchWebsiteJob::class, $classes, true)
                 && $batch->options['allowFailures'] === true;
         });
     }

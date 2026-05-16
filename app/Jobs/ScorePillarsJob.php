@@ -11,6 +11,7 @@ use App\Services\EvidenceMapper;
 use App\Services\Fetchers\TouchpointPresenceDetector;
 use App\Services\Fetchers\WebsiteFetcher;
 use App\Services\Scoring\ExperiencePenaltyDetector;
+use App\Services\Scoring\ExperienceScorer;
 use App\Services\Scoring\KonsistensiScorer;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
@@ -57,6 +58,7 @@ class ScorePillarsJob implements ShouldQueue
         EvidenceMapper $evidenceMapper,
         ExperiencePenaltyDetector $penaltyDetector,
         KonsistensiScorer $konsistensiScorer,
+        ExperienceScorer $experienceScorer,
     ): void {
         if ($this->batch()?->cancelled()) {
             return;
@@ -128,6 +130,8 @@ class ScorePillarsJob implements ShouldQueue
 
         $evidence = (array) ($audit->audit_evidence ?? []);
 
+        $operatorDecls = $audit->operator_declarations;
+
         foreach ($pillarInputs as $slug => $inputs) {
             $step = $this->step($pillarStepMap[$slug]);
             $step?->markRunning();
@@ -139,6 +143,17 @@ class ScorePillarsJob implements ShouldQueue
                     // PillarScore we persist with the same shape
                     // ScorePillarJob would have written.
                     $score = $konsistensiScorer->scoreFromEvidence($evidence, $inputs);
+                    $this->persistPillarScore($score);
+                } elseif ($slug === ScoringRubric::PILLAR_EXPERIENCE) {
+                    // BB75: deterministic tier classifier consuming
+                    // BB74 service_signals + BB73 operator_declarations.
+                    // Penalties still apply after persistence via
+                    // applyExperiencePenalties() below.
+                    $score = $experienceScorer->scoreFromEvidence(
+                        $evidence,
+                        is_array($operatorDecls) ? $operatorDecls : null,
+                        $inputs,
+                    );
                     $this->persistPillarScore($score);
                 } else {
                     ScorePillarJob::dispatchSync($this->auditId, $slug, $inputs);

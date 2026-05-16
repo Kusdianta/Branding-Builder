@@ -68,11 +68,10 @@ class FetchInstagramAuditJob implements ShouldQueue
 
             if ($status === 'scraped') {
                 $step?->markDone($detail);
-                // Synchronous hand-off until BB71 introduces the Phase 2
-                // parallel batch. Keeps the current 3-phase gather/validate/
-                // score chain intact: GatherEvidenceJob's batch ->then()
-                // still fires only after BOTH scrape and analyze finish.
-                AnalyzeInstagramJob::dispatchSync($this->auditId);
+                // BB71: AnalyzeInstagramJob now runs in the Phase 2
+                // parallel batch (AnalysisOrchestratorJob). No inline
+                // dispatch from this gather-phase job; the batch boundary
+                // owns the hand-off.
             } elseif ($status === 'no_instagram_url_provided') {
                 $step?->markDone(['skipped' => true, 'reason' => $status]);
             } else {

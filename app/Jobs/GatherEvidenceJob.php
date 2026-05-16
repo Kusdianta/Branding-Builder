@@ -75,6 +75,7 @@ class GatherEvidenceJob implements ShouldQueue
             new FetchPlacesApiJob($auditId),
             new FetchGMapsReviewsJob($auditId),
             new FetchInstagramAuditJob($auditId),
+            new FetchWebsiteJob($auditId),
         ])
             ->name("audit:{$auditId}:gather")
             ->allowFailures()
@@ -83,10 +84,10 @@ class GatherEvidenceJob implements ShouldQueue
                 // audit_evidence concurrently; we only flip the status here.
                 BrandAudit::where('id', $auditId)
                     ->update(['audit_evidence_status' => 'gathered']);
-                // BB55: chain phase 2 (validate). Dispatched outside the
-                // sub-job batch so a job-level Bus::batch nesting issue
-                // can't strand the audit pre-validate.
-                ValidateEvidenceJob::dispatch($auditId);
+                // BB71: chain Phase 2 (analyze). AnalysisOrchestratorJob
+                // batches AnalyzeInstagramJob + ExtractServiceSignalsJob,
+                // then chains ValidateEvidenceJob.
+                AnalysisOrchestratorJob::dispatch($auditId);
             })
             ->catch(static function (Batch $batch, Throwable $e) use ($auditId): void {
                 Log::error('GatherEvidenceJob: inner batch catch fired (allowFailures should make this rare)', [
@@ -96,7 +97,7 @@ class GatherEvidenceJob implements ShouldQueue
                 // what to do — partial evidence is acceptable downstream.
                 BrandAudit::where('id', $auditId)
                     ->update(['audit_evidence_status' => 'gathered']);
-                ValidateEvidenceJob::dispatch($auditId);
+                AnalysisOrchestratorJob::dispatch($auditId);
             })
             ->dispatch();
     }
