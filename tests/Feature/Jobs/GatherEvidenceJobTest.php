@@ -149,17 +149,23 @@ class GatherEvidenceJobTest extends TestCase
     }
 
     #[Test]
-    public function fetch_instagram_audit_job_splits_legacy_payload_into_raw_and_analysis_slices(): void
+    public function fetch_instagram_audit_job_mirrors_raw_slice_after_scrape(): void
     {
         $audit = $this->makeAudit();
         $step  = $this->seedStep($audit, 'gather_instagram', 'gather', 3);
+        $this->seedStep($audit, 'analyze_instagram', 'gather', 4);
 
-        $legacyPayload = [
-            'executive_summary'  => 'Strong launch but inconsistent posting cadence.',
-            'profile_branding'   => ['score' => 75, 'reasoning' => 'consistent visuals'],
-            'scorecard'          => ['profile_branding' => 75],
-            'analyzed_at'        => '2026-05-16T02:00:00Z',
-            '_meta'              => [
+        // BB69: scrape() persists the snapshot shape (raw_payload + _meta),
+        // status='scraped'. The job then dispatches AnalyzeInstagramJob
+        // synchronously — which mocks below; we stub it as a no-op to keep
+        // this test focused on the FetchInstagramAuditJob mirror behaviour.
+        $snapshot = [
+            'raw_payload' => [
+                'username'    => 'lessworry.id',
+                'captured_at' => '2026-05-16T02:00:00Z',
+                'profile'     => ['name' => 'Less Worry', 'bio' => '', 'followers' => 1000],
+            ],
+            '_meta' => [
                 'username'             => 'lessworry.id',
                 'captured_at'          => '2026-05-16T02:00:00Z',
                 'profile_pic_path'     => 'audits/01abc/profile_pic.png',
@@ -172,14 +178,19 @@ class GatherEvidenceJobTest extends TestCase
         ];
 
         $service = Mockery::mock(InstagramProfileAuditService::class);
-        $service->shouldReceive('audit')
+        $service->shouldReceive('scrape')
             ->once()
-            ->andReturnUsing(function (BrandAudit $a) use ($legacyPayload): void {
+            ->andReturnUsing(function (BrandAudit $a) use ($snapshot): void {
                 $a->update([
-                    'instagram_audit_status' => 'done',
-                    'instagram_audit'        => $legacyPayload,
+                    'instagram_audit_status' => 'scraped',
+                    'instagram_audit'        => $snapshot,
                 ]);
             });
+        // dispatchSync resolves AnalyzeInstagramJob via the container,
+        // which itself resolves the same service. The synchronous hand-off
+        // calls analyze(); stub it as no-op so this test stays focused.
+        $service->shouldReceive('analyze')->once();
+        $this->app->instance(InstagramProfileAuditService::class, $service);
 
         (new FetchInstagramAuditJob($audit->id))->handle($service);
 
@@ -187,18 +198,16 @@ class GatherEvidenceJobTest extends TestCase
         $step->refresh();
         $ev = $audit->audit_evidence;
 
-        // Raw slice has the visual paths and identification fields.
+        // Raw slice (this job's responsibility) has the visual paths +
+        // identification fields lifted from _meta.
         $this->assertSame('audits/01abc/profile_pic.png', $ev['instagram_audit']['profile_pic_path']);
         $this->assertSame('audits/01abc/screenshot.png', $ev['instagram_audit']['screenshot_path']);
         $this->assertCount(2, $ev['instagram_audit']['post_thumbnail_paths']);
         $this->assertSame('lessworry.id', $ev['instagram_audit']['username']);
 
-        // Analysis slice has Claude output + a CLEANED _meta (visual paths stripped).
-        $this->assertSame('Strong launch but inconsistent posting cadence.', $ev['instagram_analysis']['executive_summary']);
-        $this->assertSame(75, $ev['instagram_analysis']['scorecard']['profile_branding']);
-        $this->assertArrayNotHasKey('profile_pic_path', $ev['instagram_analysis']['_meta']);
-        $this->assertArrayNotHasKey('screenshot_path', $ev['instagram_analysis']['_meta']);
-
+        // Analysis slice is AnalyzeInstagramJob's responsibility (see
+        // AnalyzeInstagramJobTest). This job's contract ends at the raw
+        // slice; we only verify the gather_instagram step is done here.
         $this->assertSame(AuditStep::STATUS_DONE, $step->status);
     }
 
@@ -209,11 +218,13 @@ class GatherEvidenceJobTest extends TestCase
         $step  = $this->seedStep($audit, 'gather_instagram', 'gather', 3);
 
         $service = Mockery::mock(InstagramProfileAuditService::class);
-        $service->shouldReceive('audit')
+        $service->shouldReceive('scrape')
             ->once()
             ->andReturnUsing(function (BrandAudit $a): void {
                 $a->update(['instagram_audit_status' => 'no_instagram_url_provided']);
             });
+        // analyze() must NOT be called when scrape returned a terminal status.
+        $service->shouldNotReceive('analyze');
 
         (new FetchInstagramAuditJob($audit->id))->handle($service);
 
@@ -221,7 +232,10 @@ class GatherEvidenceJobTest extends TestCase
         $step->refresh();
 
         $this->assertNull($audit->audit_evidence['instagram_audit']);
-        $this->assertNull($audit->audit_evidence['instagram_analysis']);
+        // BB69: instagram_analysis is AnalyzeInstagramJob's slice; the
+        // no-url path never reaches analyze(), so the key stays absent
+        // (not null) from evidence.
+        $this->assertArrayNotHasKey('instagram_analysis', $audit->audit_evidence);
         $this->assertSame(AuditStep::STATUS_DONE, $step->status);
         $this->assertTrue($step->detail['skipped']);
     }

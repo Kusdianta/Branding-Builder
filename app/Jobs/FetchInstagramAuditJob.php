@@ -18,22 +18,22 @@ use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
- * BB52 — Phase 10 gather sub-job 3 of 3.
+ * BB52 gather sub-job 3 of 3, BB69-refactored.
  *
- * Delegates to InstagramProfileAuditService::audit() (which scrapes
- * via worker + runs Claude analysis + persists to the legacy
- * instagram_audit column), then splits the persisted payload into the
- * two audit_evidence slices BB54+ scorers expect:
+ * Phase 1 (gather): worker scrape only. Delegates to
+ * InstagramProfileAuditService::scrape() which performs the credential
+ * fetch + worker call + visual-asset persistence and writes a sanitized
+ * snapshot to the instagram_audit column with status='scraped'.
  *
- *   audit_evidence.instagram_audit    — RAW extraction-time data:
- *     visual asset paths (profile_pic_path, screenshot_path,
- *     post_thumbnail_paths), captured_at marker. The visual paths are
- *     what BB57's vision-Konsistensi scorer feeds into the multimodal
- *     Claude call.
+ * After scrape, dispatches AnalyzeInstagramJob synchronously so the
+ * Claude analysis pass completes before this batch finalizes. BB71 will
+ * move that dispatch out into a Phase 2 parallel batch.
  *
- *   audit_evidence.instagram_analysis — Claude scorecard + executive
- *     summary + content/engagement/growth analysis: the Phase 7-B
- *     output that the IG pillar already consumes.
+ * Evidence mirroring is split across the two jobs:
+ *   - This job:           audit_evidence.instagram_audit (raw slice with
+ *                          visual asset paths from _meta)
+ *   - AnalyzeInstagramJob: audit_evidence.instagram_analysis (Claude
+ *                          scorecard + analysis JSON)
  *
  * Marks the 'gather_instagram' audit_step. Service contract is
  * never-throw; this job is a defensive wrapper.
@@ -57,33 +57,36 @@ class FetchInstagramAuditJob implements ShouldQueue
 
         try {
             $audit = BrandAudit::findOrFail($this->auditId);
-            $service->audit($audit);
+            $service->scrape($audit);
 
             $audit->refresh();
             $status  = (string) $audit->instagram_audit_status;
-            $payload = $audit->instagram_audit;
 
-            $this->mirrorToEvidence(is_array($payload) ? $payload : null);
+            $this->mirrorScrapeToEvidence($audit);
 
             $detail = ['status' => $status];
 
-            if ($status === 'done') {
+            if ($status === 'scraped') {
                 $step?->markDone($detail);
+                // Synchronous hand-off until BB71 introduces the Phase 2
+                // parallel batch. Keeps the current 3-phase gather/validate/
+                // score chain intact: GatherEvidenceJob's batch ->then()
+                // still fires only after BOTH scrape and analyze finish.
+                AnalyzeInstagramJob::dispatchSync($this->auditId);
             } elseif ($status === 'no_instagram_url_provided') {
                 $step?->markDone(['skipped' => true, 'reason' => $status]);
             } else {
-                // Other terminal statuses (credentials_stale, rate_limited,
-                // profile_not_found, audit_failed, no_credentials_available)
-                // — record but don't fail the step; pipeline continues with
+                // Terminal failure modes (credentials_stale, rate_limited,
+                // profile_not_found, audit_failed, no_credentials_available).
+                // Record but don't fail the step — pipeline continues with
                 // missing IG slice and downstream scorers degrade gracefully.
                 $step?->markDone($detail);
             }
         } catch (Throwable $e) {
-            // Defence in depth — service contract is never-throw.
             Log::error('FetchInstagramAuditJob: service threw despite contract', [
                 'audit_id' => $this->auditId, 'error' => $e->getMessage(),
             ]);
-            $this->mirrorToEvidence(null);
+            $this->mirrorScrapeToEvidence(BrandAudit::find($this->auditId));
             $step?->markFailed($e->getMessage());
         }
     }
@@ -96,26 +99,33 @@ class FetchInstagramAuditJob implements ShouldQueue
     }
 
     /**
-     * Split the legacy instagram_audit payload into raw vs analysis
-     * slices. The legacy column commingles Claude scorecard fields
-     * (executive_summary, profile_branding, scorecard, ...) with a
-     * _meta block holding visual asset paths
-     * (profile_pic_path, screenshot_path, post_thumbnail_paths) that
-     * persistInstagramAssets() wrote to disk during the audit pass.
+     * Mirror the raw scrape slice to audit_evidence.instagram_audit so
+     * KonsistensiScorer's vision path can find profile_pic_path,
+     * screenshot_path, and post_thumbnail_paths without re-reading the
+     * instagram_audit column directly.
      *
-     * Raw slice keeps the visual paths + captured_at marker. Analysis
-     * slice keeps everything else.
+     * Shape mirrors what BB55 KonsistensiScorer::collectVisualAssets()
+     * already expects:
+     *   evidence.instagram_audit = {profile_pic_path, screenshot_path,
+     *                               post_thumbnail_paths, captured_at, username}
+     *
+     * Tolerant of a null audit (defensive failure path).
      */
-    private function mirrorToEvidence(?array $payload): void
+    private function mirrorScrapeToEvidence(?BrandAudit $audit): void
     {
-        DB::transaction(function () use ($payload): void {
-            $audit = BrandAudit::findOrFail($this->auditId);
-            $evidence = (array) ($audit->audit_evidence ?? []);
+        if ($audit === null) {
+            return;
+        }
+        $auditId = $audit->id;
 
-            if ($payload === null) {
-                $evidence['instagram_audit']    = null;
-                $evidence['instagram_analysis'] = null;
-                $audit->update(['audit_evidence' => $evidence]);
+        DB::transaction(function () use ($auditId): void {
+            $fresh = BrandAudit::findOrFail($auditId);
+            $evidence = (array) ($fresh->audit_evidence ?? []);
+
+            $payload = $fresh->instagram_audit;
+            if (! is_array($payload)) {
+                $evidence['instagram_audit'] = null;
+                $fresh->update(['audit_evidence' => $evidence]);
                 return;
             }
 
@@ -125,28 +135,13 @@ class FetchInstagramAuditJob implements ShouldQueue
                 'profile_pic_path'      => $meta['profile_pic_path']      ?? null,
                 'screenshot_path'       => $meta['screenshot_path']       ?? null,
                 'post_thumbnail_paths'  => (array) ($meta['post_thumbnail_paths'] ?? []),
-                'captured_at'           => $meta['captured_at']           ?? ($payload['analyzed_at'] ?? null),
+                'captured_at'           => $meta['captured_at']           ?? null,
                 'username'              => $meta['username']              ?? null,
             ];
 
-            // Analysis = everything except the visual-asset paths we
-            // just lifted into the raw slice. Keep _meta for traceability
-            // but strip the path fields to avoid duplication.
-            $analysisSlice = $payload;
-            if (isset($analysisSlice['_meta'])) {
-                $cleanMeta = $meta;
-                unset(
-                    $cleanMeta['profile_pic_path'],
-                    $cleanMeta['screenshot_path'],
-                    $cleanMeta['post_thumbnail_paths'],
-                );
-                $analysisSlice['_meta'] = $cleanMeta;
-            }
+            $evidence['instagram_audit'] = $rawSlice;
 
-            $evidence['instagram_audit']    = $rawSlice;
-            $evidence['instagram_analysis'] = $analysisSlice;
-
-            $audit->update(['audit_evidence' => $evidence]);
+            $fresh->update(['audit_evidence' => $evidence]);
         });
     }
 }

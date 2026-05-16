@@ -5,9 +5,13 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Models\BrandAudit;
+use DateTimeImmutable;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use Nema\WorkerClient\DTO\Highlight;
 use Nema\WorkerClient\DTO\InstagramProfileAudit;
+use Nema\WorkerClient\DTO\ProfileMetadata;
+use Nema\WorkerClient\DTO\RecentPost;
 use Nema\WorkerClient\Exceptions\ProfileAuditException;
 use Nema\WorkerClient\Exceptions\WorkerAuthException;
 use Nema\WorkerClient\Exceptions\WorkerNotAvailableException;
@@ -21,6 +25,24 @@ use Throwable;
  * for apikprimadya-style analysis, persist the payload + status on the
  * BrandAudit row.
  *
+ * BB69 (Phase 11): the prior atomic audit() pass is now split into two
+ * public methods that the pipeline can drive as separate jobs:
+ *
+ *   scrape()  — credential fetch + worker scrape + visual-asset persistence.
+ *               On success, sets instagram_audit_status='scraped' and writes
+ *               a sanitized DTO snapshot to evidence.instagram_audit.raw_payload
+ *               so the Claude analysis step can run in a separate job.
+ *
+ *   analyze() — reconstitutes the DTO from the persisted snapshot, calls
+ *               Claude, persists the full analysis payload and flips status
+ *               to 'done'. No-op when scrape didn't produce a 'scraped' state.
+ *
+ *   audit()   — backward-compat orchestrator (scrape() then analyze() inline)
+ *               kept so existing callers and tests don't need to migrate.
+ *               BB71 pipeline rewires the two phases to run as parallel
+ *               batches; this entry point will be retained for ad-hoc
+ *               regeneration commands.
+ *
  * NEVER throws back to AnalyzeBrand — every failure mode lands on the
  * BrandAudit row as a status enum value + (when applicable) an `error`-shaped
  * instagram_audit payload. Audit pipeline continues with other pillars
@@ -29,6 +51,7 @@ use Throwable;
  * Status enum (mirror the schema spec):
  *
  *  - pending                      → initial migration default; never written here
+ *  - scraped                      → BB69: worker pass succeeded, awaiting analyze()
  *  - done                         → success, instagram_audit populated
  *  - no_instagram_url_provided    → wizard didn't capture one or it was unparseable
  *  - no_credentials_available     → Hub has no healthy IG credential
@@ -57,7 +80,26 @@ class InstagramProfileAuditService
         private readonly IgUsernameExtractor $extractor,
     ) {}
 
+    /**
+     * BB69: backward-compat orchestrator. Equivalent to scrape() then
+     * analyze() when scrape produced a 'scraped' state.
+     */
     public function audit(BrandAudit $audit): void
+    {
+        $this->scrape($audit);
+
+        $audit->refresh();
+        if ((string) $audit->instagram_audit_status === 'scraped') {
+            $this->analyze($audit);
+        }
+    }
+
+    /**
+     * BB69: phase-1 entry. Performs the worker scrape + visual asset
+     * persistence and writes a sanitized DTO snapshot to evidence so the
+     * separate analyze() pass can run without re-scraping.
+     */
+    public function scrape(BrandAudit $audit): void
     {
         $touchpoints  = (array) $audit->touchpoints;
         $instagramUrl = (string) ($touchpoints['instagram_url'] ?? '');
@@ -74,8 +116,6 @@ class InstagramProfileAuditService
             $credential = $this->fetchCredential($audit);
 
             if ($credential === null) {
-                // First-call null = no healthy credentials at all.
-                // Second-call null = the previous (now-failed) credential was the only one.
                 $status = $attempt === 1 ? 'no_credentials_available' : 'credentials_stale';
                 $this->persistStatus($audit, $status);
                 return;
@@ -83,24 +123,17 @@ class InstagramProfileAuditService
 
             $credentialId = (string) ($credential['id'] ?? '');
             if ($credentialId === '' || in_array($credentialId, $usedCredentialIds, true)) {
-                // Hub returned the same id twice (single-credential pool) —
-                // no fallback path available.
                 $this->persistStatus($audit, 'credentials_stale');
                 return;
             }
             $usedCredentialIds[] = $credentialId;
 
-            // W7.5: dropped normalizeSessionCookies shim. Audit on
-            // 2026-05-15 confirmed all worker_credentials.session_cookies
-            // rows in Hub are stored as JSON arrays; the W7.1 item 6
-            // shim is no longer needed.
             $sessionCookies = $credential['session_cookies'] ?? null;
             if (! is_array($sessionCookies) || $sessionCookies === []) {
                 Log::warning('InstagramProfileAuditService: credential has empty session_cookies', [
                     'audit_id'      => $audit->id,
                     'credential_id' => $credentialId,
                 ]);
-                // Treat as stale — same operator action required.
                 $this->reportCredentialStale($credentialId, 'empty session_cookies in credential record');
                 if ($attempt < self::MAX_CREDENTIAL_ATTEMPTS) {
                     continue;
@@ -121,7 +154,7 @@ class InstagramProfileAuditService
                 if ($resolution === 'retry') {
                     continue;
                 }
-                return; // 'done-handling' = status already persisted
+                return;
             } catch (WorkerAuthException $e) {
                 Log::error('InstagramProfileAuditService: worker auth rejected', [
                     'audit_id' => $audit->id,
@@ -146,13 +179,69 @@ class InstagramProfileAuditService
                 return;
             }
 
-            $this->analyzeAndPersist($audit, $result);
+            $this->persistScrapeResult($audit, $result);
             return;
         }
 
-        // Fall-through guard. Reaching here means MAX_CREDENTIAL_ATTEMPTS
-        // exhausted without resolution — treat as stale.
         $this->persistStatus($audit, 'credentials_stale');
+    }
+
+    /**
+     * BB69: phase-2 entry. Reads the scrape snapshot persisted by scrape(),
+     * reconstitutes the DTO, calls Claude, and writes the final analysis.
+     * Idempotent: skips when status is anything other than 'scraped'.
+     */
+    public function analyze(BrandAudit $audit): void
+    {
+        $status = (string) $audit->instagram_audit_status;
+        if ($status !== 'scraped') {
+            // Either scrape didn't succeed (terminal status already set) or
+            // analyze() already ran ('done'). Either way, nothing to do.
+            return;
+        }
+
+        $snapshot = $this->readScrapeSnapshot($audit);
+        if ($snapshot === null) {
+            // Defensive: status='scraped' without a snapshot is an
+            // inconsistent state. Mark failed so the pipeline doesn't
+            // hang forever expecting an analyze pass.
+            $this->persistFailure($audit, 'analyze_called_without_snapshot');
+            return;
+        }
+
+        try {
+            $result = $this->reconstituteDto($snapshot);
+        } catch (Throwable $e) {
+            Log::error('InstagramProfileAuditService::analyze: DTO reconstitution failed', [
+                'audit_id' => $audit->id,
+                'error'    => $e->getMessage(),
+            ]);
+            $this->persistFailure($audit, 'snapshot_corrupt: ' . $e->getMessage());
+            return;
+        }
+
+        $meta = (array) ($snapshot['_meta'] ?? []);
+
+        try {
+            $analysis = $this->claude->analyzeInstagramProfile(
+                $result,
+                (string) $audit->brand_name,
+                (string) $audit->service_type,
+                $audit->city !== null && $audit->city !== '' ? (string) $audit->city : null,
+            );
+            $analysis['_meta'] = $meta;
+            $audit->update([
+                'instagram_audit_status' => 'done',
+                'instagram_audit'        => $analysis,
+            ]);
+        } catch (Throwable $e) {
+            Log::error('InstagramProfileAuditService::analyze: Claude analysis failed', [
+                'audit_id' => $audit->id,
+                'class'    => $e::class,
+                'error'    => $e->getMessage(),
+            ]);
+            $this->persistFailure($audit, 'claude_analysis_failed: ' . $e->getMessage());
+        }
     }
 
     /**
@@ -176,7 +265,6 @@ class InstagramProfileAuditService
 
         switch ($e->errorCode) {
             case 'login_wall_hit':
-                // Mark this credential stale, then try ONCE more if budget allows.
                 $this->reportCredentialStale(
                     $credentialId,
                     'login_wall_hit during Phase 7-B profile audit',
@@ -188,13 +276,6 @@ class InstagramProfileAuditService
                 return 'done-handling';
 
             case 'interstitial_blocked':
-                // W7.1 item 7: Bloks login-chooser interstitial redirected
-                // away from the profile URL even after the worker's
-                // dismiss + re-navigate retry. Operator action is the same
-                // as login_wall_hit (re-bootstrap credential), so we use
-                // the same retry-once-with-different-credential pattern;
-                // the diagnostic detail string is what carries the
-                // distinction into Filament logs and operator dashboards.
                 $this->reportCredentialStale(
                     $credentialId,
                     'interstitial_blocked: ' . ($e->detail ?? 'Bloks chooser redirect'),
@@ -214,9 +295,6 @@ class InstagramProfileAuditService
                 return 'done-handling';
 
             default:
-                // timeout, audit_failed, missing_session_cookies (should never
-                // hit here — caller validates), unknown — all funnel to
-                // audit_failed with detail.
                 $detail = $e->detail !== null && $e->detail !== ''
                     ? $e->errorCode . ': ' . $e->detail
                     : $e->errorCode;
@@ -225,36 +303,140 @@ class InstagramProfileAuditService
         }
     }
 
-    private function analyzeAndPersist(BrandAudit $audit, InstagramProfileAudit $result): void
+    /**
+     * BB69: persist the scrape result + sanitized snapshot. The snapshot
+     * drops the heavy base64 fields (visual assets are already on disk via
+     * persistInstagramAssets); analyze() doesn't need them for Claude's
+     * text-based analysis path. The on-disk assets are still available to
+     * KonsistensiScorer's vision path via _meta.
+     */
+    private function persistScrapeResult(BrandAudit $audit, InstagramProfileAudit $result): void
     {
-        // BB13: persist the worker's visual assets (profile pic, screenshot,
-        // top-6 post thumbnails) to disk + build the _meta sub-record that
-        // gives Phase 7-C's PDF + dashboard renderers the structured profile
-        // facts they need for the header card and the followers=0 degraded-
-        // data trigger. The Claude analysis output covers the prose; _meta
-        // covers the numeric + visual context.
         $meta = $this->persistInstagramAssets($audit, $result);
 
-        try {
-            $analysis = $this->claude->analyzeInstagramProfile(
-                $result,
-                (string) $audit->brand_name,
-                (string) $audit->service_type,
-                $audit->city !== null && $audit->city !== '' ? (string) $audit->city : null,
-            );
-            $analysis['_meta'] = $meta;
-            $audit->update([
-                'instagram_audit_status' => 'done',
-                'instagram_audit'        => $analysis,
-            ]);
-        } catch (Throwable $e) {
-            Log::error('InstagramProfileAuditService: Claude analysis failed', [
-                'audit_id' => $audit->id,
-                'class'    => $e::class,
-                'error'    => $e->getMessage(),
-            ]);
-            $this->persistFailure($audit, 'claude_analysis_failed: ' . $e->getMessage());
+        $snapshot = $this->buildScrapeSnapshot($result, $meta);
+
+        $audit->update([
+            'instagram_audit_status' => 'scraped',
+            'instagram_audit'        => $snapshot,
+        ]);
+    }
+
+    /**
+     * BB69: build a sanitized snapshot of the DTO + _meta for inter-job
+     * persistence. Drops base64 fields (recoverable via _meta paths on
+     * disk). Keeps everything analyze() needs to reconstitute the DTO and
+     * everything FetchInstagramAuditJob's evidence mirror needs.
+     *
+     * @return array<string,mixed>
+     */
+    private function buildScrapeSnapshot(InstagramProfileAudit $result, array $meta): array
+    {
+        return [
+            'raw_payload' => [
+                'username'     => $result->username,
+                'captured_at'  => $result->capturedAt->format(\DateTimeInterface::ATOM),
+                'is_private'   => $result->isPrivate,
+                'duration_ms'  => $result->durationMs,
+                'profile'      => [
+                    'name'          => $result->profile->name,
+                    'bio'           => $result->profile->bio,
+                    'external_url'  => $result->profile->externalUrl,
+                    'followers'     => $result->profile->followers,
+                    'following'     => $result->profile->following,
+                    'posts_count'   => $result->profile->postsCount,
+                    'is_verified'   => $result->profile->isVerified,
+                    'is_business'   => $result->profile->isBusiness,
+                ],
+                'profile_pic_fetch_error' => $result->profilePicFetchError,
+                'recent_posts' => array_map(static fn (RecentPost $p): array => [
+                    'shortcode'       => $p->shortcode,
+                    'url'             => $p->url,
+                    'type'            => $p->type,
+                    'caption'         => $p->caption,
+                    'approximate_age' => $p->approximateAge,
+                ], $result->recentPosts),
+                'highlights'   => array_map(static fn (Highlight $h): array => [
+                    'name' => $h->name,
+                    // coverBase64 dropped on purpose — large field, not
+                    // read by Claude text analysis; cover images aren't
+                    // persisted to disk in BB13.
+                ], $result->highlights),
+            ],
+            '_meta' => $meta,
+        ];
+    }
+
+    /**
+     * BB69: read the snapshot persisted by scrape(). Returns null when
+     * the current instagram_audit JSON is not in snapshot shape (e.g. an
+     * old 'done' audit being re-analyzed via the legacy audit() entry).
+     *
+     * @return array<string,mixed>|null
+     */
+    private function readScrapeSnapshot(BrandAudit $audit): ?array
+    {
+        $payload = $audit->instagram_audit;
+        if (! is_array($payload)) {
+            return null;
         }
+        if (! isset($payload['raw_payload']) || ! is_array($payload['raw_payload'])) {
+            return null;
+        }
+        return $payload;
+    }
+
+    /**
+     * BB69: rebuild the InstagramProfileAudit DTO from a persisted
+     * snapshot. Base64 fields are restored as empty strings — they were
+     * dropped from the snapshot; analyze()'s Claude call doesn't need
+     * them (text-only analysis), and KonsistensiScorer reads visual
+     * assets via _meta paths on disk.
+     *
+     * @param array<string,mixed> $snapshot
+     */
+    private function reconstituteDto(array $snapshot): InstagramProfileAudit
+    {
+        $raw = (array) ($snapshot['raw_payload'] ?? []);
+        $profile = (array) ($raw['profile'] ?? []);
+
+        return new InstagramProfileAudit(
+            username: (string) ($raw['username'] ?? ''),
+            capturedAt: new DateTimeImmutable((string) ($raw['captured_at'] ?? 'now')),
+            isPrivate: (bool) ($raw['is_private'] ?? false),
+            profile: new ProfileMetadata(
+                name: (string) ($profile['name'] ?? ''),
+                bio: (string) ($profile['bio'] ?? ''),
+                externalUrl: $profile['external_url'] ?? null,
+                followers: (int) ($profile['followers'] ?? 0),
+                following: (int) ($profile['following'] ?? 0),
+                postsCount: (int) ($profile['posts_count'] ?? 0),
+                isVerified: (bool) ($profile['is_verified'] ?? false),
+                isBusiness: (bool) ($profile['is_business'] ?? false),
+                profilePicBase64: '',
+            ),
+            profilePicFetchError: $raw['profile_pic_fetch_error'] ?? null,
+            screenshotBase64: '',
+            recentPosts: array_map(
+                static fn (array $p): RecentPost => new RecentPost(
+                    shortcode: (string) ($p['shortcode'] ?? ''),
+                    url: (string) ($p['url'] ?? ''),
+                    type: (string) ($p['type'] ?? 'image'),
+                    thumbnailBase64: '',
+                    caption: $p['caption'] ?? null,
+                    approximateAge: $p['approximate_age'] ?? null,
+                ),
+                (array) ($raw['recent_posts'] ?? []),
+            ),
+            highlights: array_map(
+                static fn (array $h): Highlight => new Highlight(
+                    name: (string) ($h['name'] ?? ''),
+                    coverBase64: '',
+                ),
+                (array) ($raw['highlights'] ?? []),
+            ),
+            durationMs: (int) ($raw['duration_ms'] ?? 0),
+        );
     }
 
     /**
@@ -264,18 +446,6 @@ class InstagramProfileAuditService
      * Files land on the ``local`` disk (storage/app/private/) under
      * ``audits/{audit_id}/instagram/`` so they're private by default
      * (never web-served, only readable from server-side render paths).
-     *
-     * Schema-safe attachment: returns the record so the caller can attach
-     * it under the ``_meta`` key of the persisted ``instagram_audit`` JSON.
-     * Underscore-prefixed keys are forbidden in Claude's output by the
-     * ANTI-POLA prompt callout (W7.1 item 8), so there's no collision
-     * risk with the analysis structure.
-     *
-     * Defensive: each base64 decode is wrapped — a malformed payload
-     * (RuntimeException from the DTO accessor) skips that single file
-     * without breaking the rest of the persist. ``profile_pic_path``,
-     * ``screenshot_path``, and the per-index ``post_thumbnail_paths``
-     * entries stay null when their source was empty or invalid.
      *
      * @return array<string,mixed>
      */
@@ -306,8 +476,6 @@ class InstagramProfileAuditService
             ),
         ];
 
-        // Profile pic — worker captures as JPEG (httpx fetch of the IG CDN
-        // avatar URL, which IG serves as image/jpeg).
         $picBase64 = $result->profile->profilePicBase64;
         if ($picBase64 !== '') {
             $bytes = base64_decode($picBase64, true);
@@ -318,7 +486,6 @@ class InstagramProfileAuditService
             }
         }
 
-        // Grid screenshot — worker captures as PNG via page.screenshot.
         if ($result->screenshotBase64 !== '') {
             try {
                 $bytes = $result->screenshotBytes();
@@ -332,10 +499,6 @@ class InstagramProfileAuditService
             }
         }
 
-        // Top-6 post thumbnails — worker captures as PNG via element
-        // bounding-box screenshot. Cap matches the audit's caption-fetch
-        // limit (anti-ban discipline) so we never persist more thumbnails
-        // than we have analysed.
         $thumbPaths = [];
         foreach (array_slice($result->recentPosts, 0, 6) as $idx => $post) {
             if ($post->thumbnailBase64 === '') {
@@ -350,8 +513,6 @@ class InstagramProfileAuditService
                 $disk->put($path, $bytes);
                 $thumbPaths[$idx] = $path;
             } catch (RuntimeException) {
-                // Malformed base64 on a single thumbnail — skip this one,
-                // continue with the rest.
                 continue;
             }
         }
@@ -401,8 +562,4 @@ class InstagramProfileAuditService
             'instagram_audit'        => ['error' => $detail],
         ]);
     }
-
-    // W7.5: removed normalizeSessionCookies — see W7.1 item 6 closure
-    // notes. Hub now consistently writes arrays; the defensive
-    // string-decode pass is no longer needed.
 }

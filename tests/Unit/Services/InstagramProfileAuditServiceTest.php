@@ -745,4 +745,84 @@ class InstagramProfileAuditServiceTest extends TestCase
         $audit->refresh();
         $this->assertSame('done', $audit->instagram_audit_status);
     }
+
+    // -- BB69: split scrape() / analyze() entrypoints ---------------------
+
+    #[Test]
+    public function scrape_persists_snapshot_with_status_scraped_and_never_calls_claude(): void
+    {
+        $audit = $this->makeAudit();
+
+        $this->hub->expects($this->once())
+            ->method('getNextCredential')
+            ->with('instagram')
+            ->willReturn([
+                'id'              => '01j_CRED',
+                'platform'        => 'instagram',
+                'session_cookies' => [['name' => 'sessionid', 'value' => 'abc']],
+            ]);
+        $this->worker->expects($this->once())
+            ->method('auditInstagramProfile')
+            ->willReturn($this->makeProfileAuditResult());
+        $this->claude->expects($this->never())
+            ->method('analyzeInstagramProfile');
+
+        $this->makeService()->scrape($audit);
+
+        $audit->refresh();
+        $this->assertSame('scraped', $audit->instagram_audit_status);
+        $payload = $audit->instagram_audit;
+        $this->assertIsArray($payload);
+        $this->assertArrayHasKey('raw_payload', $payload);
+        $this->assertArrayHasKey('_meta', $payload);
+        $this->assertSame('lessworry.id', $payload['raw_payload']['username']);
+        $this->assertSame('lessworry.id', $payload['_meta']['username']);
+    }
+
+    #[Test]
+    public function analyze_is_noop_when_status_is_not_scraped(): void
+    {
+        $audit = $this->makeAudit(['instagram_audit_status' => 'no_instagram_url_provided']);
+        $this->claude->expects($this->never())
+            ->method('analyzeInstagramProfile');
+
+        $this->makeService()->analyze($audit);
+
+        $audit->refresh();
+        $this->assertSame('no_instagram_url_provided', $audit->instagram_audit_status);
+    }
+
+    #[Test]
+    public function analyze_reads_snapshot_and_persists_full_analysis_with_status_done(): void
+    {
+        $audit = $this->makeAudit();
+
+        // Drive scrape first to lay down a real snapshot.
+        $this->hub->expects($this->once())->method('getNextCredential')->willReturn([
+            'id' => '01j_CRED', 'platform' => 'instagram',
+            'session_cookies' => [['name' => 'sessionid', 'value' => 'abc']],
+        ]);
+        $this->worker->expects($this->once())
+            ->method('auditInstagramProfile')
+            ->willReturn($this->makeProfileAuditResult());
+
+        // Claude only called by the analyze() pass.
+        $this->claude->expects($this->once())
+            ->method('analyzeInstagramProfile')
+            ->willReturn(['executive_summary' => 'BB69 analyze', 'scorecard' => ['overall' => ['score' => 7, 'grade' => 'B']]]);
+
+        $service = $this->makeService();
+        $service->scrape($audit);
+
+        $audit->refresh();
+        $this->assertSame('scraped', $audit->instagram_audit_status);
+
+        $service->analyze($audit);
+
+        $audit->refresh();
+        $this->assertSame('done', $audit->instagram_audit_status);
+        $this->assertSame('BB69 analyze', $audit->instagram_audit['executive_summary']);
+        // _meta carried through scrape -> snapshot -> analyze.
+        $this->assertSame('lessworry.id', $audit->instagram_audit['_meta']['username']);
+    }
 }

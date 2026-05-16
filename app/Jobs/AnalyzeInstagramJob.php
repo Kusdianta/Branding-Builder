@@ -1,0 +1,132 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Jobs;
+
+use App\Models\AuditStep;
+use App\Models\BrandAudit;
+use App\Services\InstagramProfileAuditService;
+use Illuminate\Bus\Batchable;
+use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Throwable;
+
+/**
+ * BB69 — Phase 11 analysis-layer job. Pairs with FetchInstagramAuditJob.
+ *
+ * FetchInstagramAuditJob (Phase 1) performs the worker scrape and writes a
+ * sanitized snapshot to BrandAudit.instagram_audit, flipping
+ * instagram_audit_status to 'scraped'. This job consumes that snapshot,
+ * runs the Claude analysis pass via InstagramProfileAuditService::analyze(),
+ * and mirrors the resulting analysis JSON to audit_evidence.instagram_analysis.
+ *
+ * Pipeline alignment:
+ *   - BB69 (this commit) wires this job to run synchronously at the end of
+ *     FetchInstagramAuditJob so the current 3-phase gather/validate/score
+ *     pipeline (BB52-BB55) keeps working unchanged.
+ *   - BB71 will move this job into a Phase 2 parallel batch alongside
+ *     AnalyzeVisualConsistencyJob + ExtractServiceSignalsJob.
+ *
+ * Service contract is never-throw; this job is a defensive wrapper that
+ * records step status and tolerates a missing snapshot (treated as no-op).
+ */
+class AnalyzeInstagramJob implements ShouldQueue
+{
+    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+
+    /** Claude analysis budget plus retry headroom. */
+    public int $timeout = 180;
+
+    public function __construct(public readonly string $auditId) {}
+
+    public function handle(InstagramProfileAuditService $service): void
+    {
+        if ($this->batch()?->cancelled()) {
+            return;
+        }
+
+        $step = $this->step('analyze_instagram');
+        $step?->markRunning();
+
+        $audit = BrandAudit::findOrFail($this->auditId);
+
+        // analyze() is a no-op when status != 'scraped' — skip the
+        // mirror and short-circuit the step row to a 'skipped' done.
+        if ((string) $audit->instagram_audit_status !== 'scraped') {
+            $step?->markDone([
+                'skipped' => true,
+                'reason'  => 'instagram_audit_status not scraped: ' . (string) $audit->instagram_audit_status,
+            ]);
+            return;
+        }
+
+        try {
+            $service->analyze($audit);
+            $audit->refresh();
+            $finalStatus = (string) $audit->instagram_audit_status;
+
+            $this->mirrorAnalysisToEvidence($audit);
+
+            if ($finalStatus === 'done') {
+                $step?->markDone(['status' => 'done']);
+            } else {
+                // analyze() persisted a failure (claude_analysis_failed,
+                // snapshot_corrupt, etc.) — surface but don't block pipeline.
+                $step?->markDone(['status' => $finalStatus]);
+            }
+        } catch (Throwable $e) {
+            Log::error('AnalyzeInstagramJob: service threw despite never-throw contract', [
+                'audit_id' => $this->auditId,
+                'error'    => $e->getMessage(),
+            ]);
+            $step?->markFailed($e->getMessage());
+        }
+    }
+
+    private function step(string $key): ?AuditStep
+    {
+        return AuditStep::where('brand_audit_id', $this->auditId)
+            ->where('step_key', $key)
+            ->first();
+    }
+
+    /**
+     * Mirror the analysis JSON to audit_evidence.instagram_analysis so
+     * downstream scorers can consume it without re-reading the
+     * instagram_audit column directly. Strips _meta's visual paths to
+     * avoid duplicating the FetchInstagramAuditJob.mirrorToEvidence raw
+     * slice (which owns those paths).
+     */
+    private function mirrorAnalysisToEvidence(BrandAudit $audit): void
+    {
+        DB::transaction(function () use ($audit): void {
+            $fresh = BrandAudit::findOrFail($audit->id);
+            $evidence = (array) ($fresh->audit_evidence ?? []);
+
+            $payload = $fresh->instagram_audit;
+            if (! is_array($payload)) {
+                $evidence['instagram_analysis'] = null;
+                $fresh->update(['audit_evidence' => $evidence]);
+                return;
+            }
+
+            $analysisSlice = $payload;
+            $meta = (array) ($analysisSlice['_meta'] ?? []);
+            unset(
+                $meta['profile_pic_path'],
+                $meta['screenshot_path'],
+                $meta['post_thumbnail_paths'],
+            );
+            $analysisSlice['_meta'] = $meta;
+
+            $evidence['instagram_analysis'] = $analysisSlice;
+            $fresh->update(['audit_evidence' => $evidence]);
+        });
+    }
+}

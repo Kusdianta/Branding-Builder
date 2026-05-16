@@ -83,18 +83,23 @@ class AnalyzeBrand implements ShouldQueue
             ['key' => 'gather_places',              'track' => 'gather',   'order' => 1],
             ['key' => 'gather_gmaps',               'track' => 'gather',   'order' => 2],
             ['key' => 'gather_instagram',           'track' => 'gather',   'order' => 3],
+            // BB69: IG Claude analysis split out from gather_instagram;
+            // currently dispatched synchronously at the end of
+            // FetchInstagramAuditJob, will move to a Phase 2 parallel
+            // batch in BB71.
+            ['key' => 'analyze_instagram',          'track' => 'gather',   'order' => 4],
             // Phase 2 — validate
-            ['key' => 'validate_evidence',          'track' => 'validate', 'order' => 4],
+            ['key' => 'validate_evidence',          'track' => 'validate', 'order' => 5],
             // Phase 3 — score (serial inside ScorePillarsJob)
-            ['key' => 'score_recall',               'track' => 'score',    'order' => 5],
-            ['key' => 'score_digital',              'track' => 'score',    'order' => 6],
-            ['key' => 'score_konsistensi',          'track' => 'score',    'order' => 7],
-            ['key' => 'score_experience',           'track' => 'score',    'order' => 8],
+            ['key' => 'score_recall',               'track' => 'score',    'order' => 6],
+            ['key' => 'score_digital',              'track' => 'score',    'order' => 7],
+            ['key' => 'score_konsistensi',          'track' => 'score',    'order' => 8],
+            ['key' => 'score_experience',           'track' => 'score',    'order' => 9],
             // Phase 3 (continued) — insights + PDF
-            ['key' => 'generate_recommendations',   'track' => 'final',    'order' => 9],
-            ['key' => 'generate_quick_wins',        'track' => 'final',    'order' => 10],
-            ['key' => 'generate_positioning',       'track' => 'final',    'order' => 11],
-            ['key' => 'generate_pdf',               'track' => 'final',    'order' => 12],
+            ['key' => 'generate_recommendations',   'track' => 'final',    'order' => 10],
+            ['key' => 'generate_quick_wins',        'track' => 'final',    'order' => 11],
+            ['key' => 'generate_positioning',       'track' => 'final',    'order' => 12],
+            ['key' => 'generate_pdf',               'track' => 'final',    'order' => 13],
         ];
 
         foreach ($steps as $s) {
