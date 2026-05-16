@@ -59,6 +59,13 @@ class GenerateInsightsJob implements ShouldQueue
     ): void {
         $audit = BrandAudit::findOrFail($this->auditId);
 
+        // BB66: tag each generator's Claude call with the audit id so the
+        // Hub api_usage_log dashboard can roll up per-audit cost across
+        // the three insight passes.
+        $recommendations->setAuditContext($this->auditId);
+        $quickWins->setAuditContext($this->auditId);
+        $positioning->setAuditContext($this->auditId);
+
         $this->runStep(
             'generate_recommendations',
             fn () => $audit->update($recommendations->generate($audit)),

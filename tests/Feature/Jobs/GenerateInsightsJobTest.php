@@ -101,6 +101,7 @@ class GenerateInsightsJobTest extends TestCase
         $counter = new \ArrayObject(['n' => 0]);
 
         $rec = Mockery::mock(RecommendationGenerator::class);
+        $rec->shouldReceive('setAuditContext')->withAnyArgs()->andReturnNull();
         $rec->shouldReceive('generate')->andReturnUsing(function () use ($counter, $order) {
             $counter['n']++;
             $order['rec'] = $counter['n'];
@@ -112,6 +113,7 @@ class GenerateInsightsJobTest extends TestCase
         });
 
         $qw = Mockery::mock(QuickWinsGenerator::class);
+        $qw->shouldReceive('setAuditContext')->withAnyArgs()->andReturnNull();
         $qw->shouldReceive('generate')->andReturnUsing(function () use ($counter, $order) {
             $counter['n']++;
             $order['qw'] = $counter['n'];
@@ -121,6 +123,7 @@ class GenerateInsightsJobTest extends TestCase
         });
 
         $cp = Mockery::mock(CompetitivePositioningGenerator::class);
+        $cp->shouldReceive('setAuditContext')->withAnyArgs()->andReturnNull();
         $cp->shouldReceive('generate')->andReturnUsing(function () use ($counter, $order) {
             $counter['n']++;
             $order['cp'] = $counter['n'];
@@ -219,6 +222,7 @@ class GenerateInsightsJobTest extends TestCase
         // contract from BB38: one LLM hiccup must not take the rest down.
         $this->bindFakeGenerators();
         $throwingRec = Mockery::mock(RecommendationGenerator::class);
+        $throwingRec->shouldReceive('setAuditContext')->withAnyArgs()->andReturnNull();
         $throwingRec->shouldReceive('generate')->andThrow(new \RuntimeException('simulated Anthropic 429'));
         $this->app->instance(RecommendationGenerator::class, $throwingRec);
 

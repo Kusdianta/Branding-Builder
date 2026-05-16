@@ -6,6 +6,7 @@ namespace App\Services\Recommendation;
 
 use Anthropic\Client;
 use App\Exceptions\MissingAnthropicKeyException;
+use App\Services\HubUsageLogger;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -34,14 +35,27 @@ abstract class AbstractClaudeGenerator
     protected Client $client;
     protected string $model;
 
-    public function __construct()
-    {
+    /**
+     * BB66: optional audit context for usage logging.
+     * Set by GenerateInsightsJob before each generator runs.
+     */
+    protected ?string $auditContextId = null;
+
+    public function __construct(
+        protected readonly ?HubUsageLogger $usageLogger = null,
+    ) {
         $apiKey = (string) config('services.anthropic.key', '');
         if ($apiKey === '') {
             throw MissingAnthropicKeyException::create();
         }
         $this->client = new Client(apiKey: $apiKey);
         $this->model  = (string) config('services.anthropic.model_recommendation', config('services.anthropic.model', self::DEFAULT_MODEL));
+    }
+
+    /** BB66: bind audit id for subsequent calls in this generator's lifecycle. */
+    public function setAuditContext(?string $auditId): void
+    {
+        $this->auditContextId = $auditId;
     }
 
     /**
@@ -61,6 +75,7 @@ abstract class AbstractClaudeGenerator
                 system:      $systemPrompt,
                 temperature: static::TEMPERATURE,
             );
+            $this->recordUsage($callerLabel, $response);
         } catch (Throwable $e) {
             Log::warning("{$callerLabel}: LLM call failed", ['error' => $e->getMessage()]);
             return $this->fallbackPayload();
@@ -93,6 +108,34 @@ abstract class AbstractClaudeGenerator
         } catch (Throwable $e) {
             Log::warning("{$callerLabel}: response parse failed", ['error' => $e->getMessage()]);
             return $this->fallbackPayload();
+        }
+    }
+
+    /**
+     * BB66: fire-and-forget usage logging for the generator's Claude call.
+     */
+    private function recordUsage(string $callerLabel, object $response): void
+    {
+        if ($this->usageLogger === null) {
+            return;
+        }
+        $usage = $response->usage ?? null;
+        if (! is_object($usage)) {
+            return;
+        }
+        try {
+            $this->usageLogger->logClaude(
+                model: $this->model,
+                operation: $callerLabel,
+                inputTokens: isset($usage->inputTokens) ? (int) $usage->inputTokens : null,
+                outputTokens: isset($usage->outputTokens) ? (int) $usage->outputTokens : null,
+                cacheCreationInputTokens: isset($usage->cacheCreationInputTokens) ? (int) $usage->cacheCreationInputTokens : null,
+                cacheReadInputTokens: isset($usage->cacheReadInputTokens) ? (int) $usage->cacheReadInputTokens : null,
+                auditId: $this->auditContextId,
+            );
+        } catch (Throwable) {
+            // defence-in-depth — logger is already fire-and-forget but
+            // suppress any unexpected shape errors here.
         }
     }
 
