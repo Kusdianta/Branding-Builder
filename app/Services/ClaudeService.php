@@ -1151,6 +1151,103 @@ SYS;
         };
     }
 
+    /**
+     * BB74 — Stage 2 verification for BB74 ServiceSignalsExtractor.
+     *
+     * Called only for signals whose Stage 1 confidence landed in the
+     * ambiguous band (AMBIGUOUS_LOW..AMBIGUOUS_HIGH). Receives the
+     * full per-signal payload (sources + snippets) and returns a verdict
+     * map keyed by signal name with {detected: bool, reasoning: string}.
+     *
+     * Falls through to ALL signals = not_detected on any failure — the
+     * extractor preserves Stage 1 scores in that case (no overwrite),
+     * so the caller still has a usable signal set.
+     *
+     * @param array<string,array<string,mixed>> $ambiguousSignals
+     * @return array<string,array{detected: bool, reasoning: string}>
+     */
+    public function verifyServiceSignals(array $ambiguousSignals): array
+    {
+        if ($ambiguousSignals === []) {
+            return [];
+        }
+
+        $model = (string) config('services.anthropic.model_validation', 'claude-haiku-4-5');
+
+        $summary = [];
+        foreach ($ambiguousSignals as $key => $signal) {
+            $snippets = array_values(array_filter(array_map(
+                static fn ($s) => is_array($s) ? (string) ($s['snippet'] ?? '') : '',
+                (array) ($signal['sources'] ?? []),
+            ), static fn ($s): bool => $s !== ''));
+            $summary[$key] = [
+                'confidence' => round((float) ($signal['confidence'] ?? 0), 3),
+                'sources'    => array_map(
+                    static fn ($s) => is_array($s) ? (string) ($s['source'] ?? '') : '',
+                    (array) ($signal['sources'] ?? []),
+                ),
+                'snippets'   => $snippets,
+            ];
+        }
+
+        $signalCatalog = [
+            'bonus_ekspres'      => 'Express / same-day laundry service availability',
+            'bonus_antar_jemput' => 'Pickup / delivery service availability',
+            'bonus_sop_keluhan'  => 'Published complaint handling SOP or compensation policy',
+            'bonus_price_list'   => 'Public price list / tariffs available',
+        ];
+
+        $userMessage = "Given evidence snippets for several laundry-brand service signals, decide for each whether the signal is genuinely DETECTED at the brand. Only mark detected=true when the snippet evidence is unambiguous (not a passing mention, not a negation, not a complaint about its absence).\n\n";
+        foreach ($summary as $key => $data) {
+            $label = $signalCatalog[$key] ?? $key;
+            $userMessage .= "SIGNAL: {$key} ({$label})\n";
+            $userMessage .= "  Stage-1 confidence: {$data['confidence']}\n";
+            $userMessage .= "  Sources: " . implode(', ', $data['sources']) . "\n";
+            foreach ($data['snippets'] as $i => $snip) {
+                $userMessage .= "  Snippet {$i}: " . mb_substr($snip, 0, 240) . "\n";
+            }
+            $userMessage .= "\n";
+        }
+        $userMessage .= "Return ONLY a JSON object (no prose, no fences) mapping each SIGNAL key to {\"detected\": <true|false>, \"reasoning\": \"<one short Indonesian-language sentence>\"}.";
+
+        try {
+            $response = $this->client->messages->create(
+                maxTokens: 512,
+                messages: [['role' => 'user', 'content' => $userMessage]],
+                model: $model,
+                temperature: 0.1,
+            );
+        } catch (\Throwable $e) {
+            Log::warning('ClaudeService::verifyServiceSignals — API call failed', [
+                'error' => $e->getMessage(),
+            ]);
+            return [];
+        }
+
+        $raw     = $this->extractText($response);
+        $cleaned = $this->stripFences($raw);
+        $decoded = json_decode($cleaned, true);
+
+        if (! is_array($decoded)) {
+            Log::warning('ClaudeService::verifyServiceSignals — JSON parse failed', [
+                'raw' => substr($raw, 0, 200),
+            ]);
+            return [];
+        }
+
+        $out = [];
+        foreach ($decoded as $key => $verdict) {
+            if (! is_string($key) || ! is_array($verdict)) {
+                continue;
+            }
+            $out[$key] = [
+                'detected'  => (bool) ($verdict['detected'] ?? false),
+                'reasoning' => (string) ($verdict['reasoning'] ?? ''),
+            ];
+        }
+        return $out;
+    }
+
     // -------------------------------------------------------------------------
     // Deterministic pillars (score via math, narrative via LLM)
     // -------------------------------------------------------------------------
