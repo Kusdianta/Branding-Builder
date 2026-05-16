@@ -32,6 +32,13 @@
     $subBuckets    = (array) ($audit->sub_bucket_scores ?? []);
     $scoreBreakdown = (array) ($audit->score_breakdown ?? []);
 
+    // BB60: validation warning surface for the PDF banner.
+    $validation = (array) ($audit->audit_evidence['validation'] ?? []);
+    $hasValidationWarning = $audit->hasValidationWarning()
+        || ((float) ($validation['confidence'] ?? 1.0)) < 0.5;
+    $validationWarnings = (array) ($validation['warnings'] ?? []);
+    $validationConfidence = (float) ($validation['confidence'] ?? 1.0);
+
     $tierColor = static fn (?int $s): string => match (true) {
         ($s ?? 0) >= 70 => '#3D8948', // chimera-500
         ($s ?? 0) >= 50 => '#C97A1B', // warning amber
@@ -91,6 +98,33 @@
 
 {{-- ========================== 1. Cover ========================== --}}
 @include('pdf.sections.cover')
+
+{{-- BB60: validation warning banner — sits between Cover and
+     Executive Summary so the reader sees it before any scores. --}}
+@if ($hasValidationWarning)
+    <div style="page-break-before: always; padding: 20px; margin-bottom: 16px; background: rgba(201, 122, 27, 0.08); border: 1px solid #C97A1B; border-radius: 12px;">
+        <table style="width: 100%;">
+            <tr>
+                <td style="width: 28px; vertical-align: top; font-size: 18px; color: #C97A1B; line-height: 1;">⚠</td>
+                <td style="vertical-align: top;">
+                    <p style="font-size: 12px; font-weight: bold; color: #0F1411; margin: 0 0 6px 0;">
+                        Peringatan Validasi
+                    </p>
+                    <p style="font-size: 10px; color: #5A6259; margin: 0 0 8px 0;">
+                        Sistem mendeteksi kemungkinan ketidakcocokan antara brand input dan URL yang discrap. Skor di bawah dihitung dari data yang discrap — jika brand/lokasi tidak cocok, hasil audit mungkin tidak akurat. Confidence: {{ number_format($validationConfidence * 100, 0) }}/100.
+                    </p>
+                    @if (! empty($validationWarnings))
+                        <ul style="font-size: 10px; color: #5A6259; margin: 0; padding-left: 14px;">
+                            @foreach ($validationWarnings as $warn)
+                                <li style="margin-bottom: 3px;">{{ $warn }}</li>
+                            @endforeach
+                        </ul>
+                    @endif
+                </td>
+            </tr>
+        </table>
+    </div>
+@endif
 
 {{-- ========================== 2. Executive Summary ========================== --}}
 @include('pdf.sections.executive-summary')

@@ -54,6 +54,13 @@ new class extends Component {
     public array   $gmapsReviews         = [];
     public ?string $gmapsReviewsStatus   = null;
 
+    // BB60: validation warning surface — populated from audit_evidence.validation
+    // when ValidateEvidenceJob (BB53) wrote a low-confidence result.
+    public bool   $hasValidationWarning = false;
+    /** @var list<string> */
+    public array  $validationWarnings   = [];
+    public float  $validationConfidence = 1.0;
+
     // BB21: per-step progress for the live loading view. Each entry:
     // ['key', 'track', 'status', 'order', 'elapsed_s', 'detail']
     public array   $auditSteps = [];
@@ -130,6 +137,15 @@ new class extends Component {
         // Pelanggan" dashboard section.
         $this->gmapsReviews         = (array) ($audit->gmaps_reviews ?? []);
         $this->gmapsReviewsStatus   = $audit->gmaps_reviews_status;
+
+        // BB60: validation warning surface — populated when
+        // ValidateEvidenceJob (BB53) wrote a confidence < 0.5 result
+        // OR the audit's top-level status is STATUS_VALIDATION_WARNING.
+        $validation = (array) ($audit->audit_evidence['validation'] ?? []);
+        $this->hasValidationWarning = $audit->hasValidationWarning()
+            || ((float) ($validation['confidence'] ?? 1.0)) < 0.5;
+        $this->validationWarnings = (array) ($validation['warnings'] ?? []);
+        $this->validationConfidence = (float) ($validation['confidence'] ?? 1.0);
 
         // BB21: load audit_steps for live loading view.
         $this->auditSteps = AuditStep::where('brand_audit_id', $audit->id)
@@ -324,6 +340,36 @@ new class extends Component {
 
         $this->kitGenerating = true;
         \App\Jobs\GenerateActivationKit::dispatch($audit);
+    }
+
+    /**
+     * BB60: take the user back to the wizard's touchpoint_inputs step
+     * with the existing form fields preserved (they live on public
+     * properties already). The dashboard's audit-id state is cleared
+     * so submitting will create a fresh BrandAudit row — the original
+     * audit is left untouched (operators can navigate back to it via
+     * the session_token URL if they change their mind).
+     */
+    public function editAndRerun(): void
+    {
+        $this->step = 'touchpoint_inputs';
+        $this->auditId     = null;
+        $this->auditStatus = '';
+        $this->sessionToken = null;
+        // Score + finding state cleared so the partial dashboard
+        // doesn't flash when the user returns from a different audit.
+        $this->overallScore         = null;
+        $this->overallLabel         = null;
+        $this->pillarScores         = [];
+        $this->subBucketScores      = [];
+        $this->scoreBreakdown       = [];
+        $this->keyFindings          = [];
+        $this->recommendations      = [];
+        $this->activationKitPath    = null;
+        $this->auditSteps           = [];
+        $this->hasValidationWarning = false;
+        $this->validationWarnings   = [];
+        $this->validationConfidence = 1.0;
     }
 
     public function checkKit(): void
@@ -806,6 +852,50 @@ new class extends Component {
         @endphp
 
         <div class="max-w-5xl mx-auto pb-16">
+
+            {{-- BB60: validation warning banner — renders when
+                 audit_evidence.validation.confidence < 0.5 OR audit.status
+                 is STATUS_VALIDATION_WARNING. Operator sees this BEFORE
+                 the score section so a misleading audit (wrong URL paste)
+                 gets corrected, not acted on. --}}
+            @if ($hasValidationWarning)
+                <div
+                    class="mb-8"
+                    style="background: rgba(201, 122, 27, 0.08); border: 1px solid var(--color-warning); border-radius: var(--radius-lg); padding: 20px;"
+                    role="alert"
+                >
+                    <div class="flex items-start gap-3">
+                        <span style="font-size: 22px; color: var(--color-warning); line-height: 1;">⚠</span>
+                        <div style="flex: 1;">
+                            <p style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px;">
+                                Sistem mendeteksi kemungkinan ketidakcocokan antara brand input dan URL yang discrap.
+                            </p>
+                            <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 12px;">
+                                Harap periksa kembali URL Instagram dan Google Maps yang Anda masukkan. Skor di bawah dihitung dari data yang discrap — jika brand/lokasi tidak cocok, hasil audit mungkin tidak akurat.
+                            </p>
+                            @if (! empty($validationWarnings))
+                                <ul style="font-size: 13px; color: var(--text-secondary); margin: 0 0 12px 0; padding-left: 18px; list-style: disc;">
+                                    @foreach ($validationWarnings as $warn)
+                                        <li style="margin-bottom: 4px;">{{ $warn }}</li>
+                                    @endforeach
+                                </ul>
+                            @endif
+                            <div class="flex items-center gap-3 flex-wrap">
+                                <button
+                                    type="button"
+                                    wire:click="editAndRerun"
+                                    style="font-size: 13px; padding: 8px 16px; border: 1px solid var(--color-warning); color: var(--text-primary); background: var(--surface-card); border-radius: var(--radius-pill); font-weight: 500;"
+                                >
+                                    Edit URL & ulangi audit
+                                </button>
+                                <span style="font-size: 12px; color: var(--text-tertiary);">
+                                    Confidence skor: {{ number_format($validationConfidence * 100, 0) }}/100
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            @endif
 
             {{-- Header --}}
             <div class="flex items-start justify-between mb-10 flex-wrap gap-4">
