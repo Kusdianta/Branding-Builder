@@ -6,6 +6,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class BrandAudit extends Model
@@ -30,6 +31,8 @@ class BrandAudit extends Model
 
     protected $fillable = [
         'session_token',
+        'user_id',
+        'credits_charged',
         'ip_address',
         'brand_name',
         'city',
@@ -67,6 +70,7 @@ class BrandAudit extends Model
             'sub_bucket_scores'  => 'array',
             'score_breakdown'    => 'array',
             'overall_score'      => 'integer',
+            'credits_charged'    => 'integer',
             'key_findings'      => 'array',
             'recommendations'   => 'array',
             'evidence'          => 'array',
@@ -82,6 +86,12 @@ class BrandAudit extends Model
     public function brandKit(): HasOne
     {
         return $this->hasOne(BrandKit::class);
+    }
+
+    /** @return BelongsTo<User, BrandAudit> */
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
     }
 
     public function isComplete(): bool
