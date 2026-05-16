@@ -15,6 +15,7 @@ use App\Services\Scoring\DigitalPresenceScorer;
 use App\Services\Scoring\RecallScorer;
 use App\Services\Scoring\SearchRecallScorer;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use Nema\WorkerClient\DTO\InstagramProfileAudit;
 use RuntimeException;
 
@@ -839,6 +840,175 @@ SYS;
         }
 
         return $decoded;
+    }
+
+    /**
+     * BB57: Phase 10 multimodal cross-touchpoint visual consistency.
+     *
+     * Sends a multi-image prompt to Claude asking it to grade the
+     * brand's visual consistency across Instagram + Google Maps +
+     * (when present) Places-API outlet photos. Replaces the text-only
+     * URL-presence Konsistensi pre-Phase-10 path.
+     *
+     * Image inputs (up to 5, in priority order):
+     *   1. IG profile picture
+     *   2. IG profile grid screenshot
+     *   3. GMaps place-page screenshot
+     *   4-5. Up to 2 Places-API outlet photos (when supplied)
+     *
+     * Output schema (always parseable; falls back to a neutral
+     * 50/100 score with a limitations note on error):
+     *
+     *   {
+     *     "color_consistency":         {"score": int 0-100, "observations": string},
+     *     "typography_consistency":    {"score": int 0-100, "observations": string},
+     *     "logo_consistency":          {"score": int 0-100, "observations": string},
+     *     "imagery_tone":              {"score": int 0-100, "observations": string},
+     *     "overall_visual_coherence":  {"score": int 0-100, "summary":      string},
+     *     "touchpoints_analyzed":      string[],
+     *     "limitations":               string[]
+     *   }
+     *
+     * Cost estimate (BB57 entry): roughly $0.05 per call at
+     * Sonnet 4.6 pricing. Honoured pause-point: caller can guardrail
+     * via services.anthropic.vision_konsistensi_enabled config.
+     *
+     * @param array{instagram_profile_pic_path?: ?string, instagram_screenshot_path?: ?string, gmaps_screenshot_path?: ?string, places_photo_paths?: list<string>, brand_name?: string} $assets
+     * @return array<string,mixed>
+     */
+    public function analyzeBrandConsistency(array $assets): array
+    {
+        $model = (string) config('services.anthropic.model_vision', $this->model);
+
+        $brandName = (string) ($assets['brand_name'] ?? '');
+        $imageBlocks = [];
+        $touchpoints = [];
+
+        $tryAddImage = function (?string $relativePath, string $touchpointName) use (&$imageBlocks, &$touchpoints): void {
+            if ($relativePath === null || $relativePath === '') {
+                return;
+            }
+            $absolute = $this->resolveAssetPath($relativePath);
+            $block    = $absolute === null ? null : $this->buildImageBlock($absolute);
+            if ($block !== null) {
+                $imageBlocks[] = $block;
+                $touchpoints[] = $touchpointName;
+            }
+        };
+
+        $tryAddImage($assets['instagram_profile_pic_path'] ?? null, 'instagram_profile_pic');
+        $tryAddImage($assets['instagram_screenshot_path']  ?? null, 'instagram_grid');
+        $tryAddImage($assets['gmaps_screenshot_path']      ?? null, 'gmaps_page');
+
+        foreach (array_slice((array) ($assets['places_photo_paths'] ?? []), 0, 2) as $i => $photo) {
+            $tryAddImage((string) $photo, 'places_photo_' . ($i + 1));
+        }
+
+        if ($imageBlocks === []) {
+            return $this->neutralVisionResult(
+                'No visual assets supplied. BB58 fallback path applies.',
+                $touchpoints,
+            );
+        }
+
+        $textPrompt = [
+            'type' => 'text',
+            'text' => "Anda adalah analis brand konsistensi untuk bisnis laundry kecil-menengah di Indonesia. "
+                . "Brand: \"{$brandName}\".\n\n"
+                . "Anda menerima beberapa gambar dari touchpoint brand ini (Instagram profile pic, "
+                . "Instagram grid screenshot, Google Maps page screenshot, dan/atau foto outlet dari Places API). "
+                . "Tugas: nilai konsistensi visual brand antar touchpoint pada empat dimensi:\n\n"
+                . "  1. color_consistency       — apakah palet warna sama / saling melengkapi?\n"
+                . "  2. typography_consistency  — apakah pilihan font terlihat konsisten? (Skor 50 saat tidak ada teks visible)\n"
+                . "  3. logo_consistency        — apakah logo/mark muncul konsisten di seluruh touchpoint?\n"
+                . "  4. imagery_tone            — apakah nada gambar konsisten (lifestyle vs produk vs operasional)?\n\n"
+                . "Beri skor 0-100 per dimensi + overall_visual_coherence (rata-rata berbobot). "
+                . "Sertakan ``observations`` (satu kalimat per dimensi, dalam Bahasa Indonesia). "
+                . "Sertakan ``limitations`` jika sebuah dimensi tidak bisa dinilai akurat dari gambar yang ada.\n\n"
+                . "Output JSON saja, tanpa pembungkus markdown:\n"
+                . '{"color_consistency":{"score":int,"observations":string},'
+                . '"typography_consistency":{"score":int,"observations":string},'
+                . '"logo_consistency":{"score":int,"observations":string},'
+                . '"imagery_tone":{"score":int,"observations":string},'
+                . '"overall_visual_coherence":{"score":int,"summary":string},'
+                . '"touchpoints_analyzed":[string],"limitations":[string]}',
+        ];
+
+        $userContent = array_merge([$textPrompt], $imageBlocks);
+
+        try {
+            $response = $this->client->messages->create(
+                maxTokens: 1024,
+                messages: [['role' => 'user', 'content' => $userContent]],
+                model: $model,
+                temperature: 0.2,
+            );
+        } catch (\Throwable $e) {
+            Log::warning('ClaudeService::analyzeBrandConsistency — API call failed', [
+                'brand_name'        => $brandName,
+                'image_count'       => count($imageBlocks),
+                'error'             => $e->getMessage(),
+            ]);
+            return $this->neutralVisionResult('Vision API call failed: ' . $e->getMessage(), $touchpoints);
+        }
+
+        $raw     = $this->extractText($response);
+        $cleaned = $this->stripFences($raw);
+        $decoded = json_decode($cleaned, true);
+
+        if (! is_array($decoded)) {
+            Log::warning('ClaudeService::analyzeBrandConsistency — JSON parse failed', [
+                'brand_name' => $brandName, 'raw' => substr($raw, 0, 200),
+            ]);
+            return $this->neutralVisionResult('Vision response was not valid JSON', $touchpoints);
+        }
+
+        // Backfill touchpoints_analyzed from our own inventory if the
+        // model omitted it.
+        if (! isset($decoded['touchpoints_analyzed']) || ! is_array($decoded['touchpoints_analyzed'])) {
+            $decoded['touchpoints_analyzed'] = $touchpoints;
+        }
+
+        return $decoded;
+    }
+
+    /**
+     * @param list<string> $touchpoints
+     */
+    private function neutralVisionResult(string $reason, array $touchpoints): array
+    {
+        $neutral = ['score' => 50, 'observations' => $reason];
+        return [
+            'color_consistency'        => $neutral,
+            'typography_consistency'   => $neutral,
+            'logo_consistency'         => $neutral,
+            'imagery_tone'             => $neutral,
+            'overall_visual_coherence' => ['score' => 50, 'summary' => $reason],
+            'touchpoints_analyzed'     => $touchpoints,
+            'limitations'              => [$reason],
+        ];
+    }
+
+    /**
+     * Resolve a storage-relative path to an absolute file path. Returns
+     * null when the file does not exist. Accepts both absolute paths
+     * (already resolved by callers) and disk-local relative paths
+     * ("audits/{id}/screenshot.png").
+     */
+    private function resolveAssetPath(string $path): ?string
+    {
+        if ($path === '') {
+            return null;
+        }
+        if (is_file($path)) {
+            return $path;
+        }
+        try {
+            $abs = Storage::disk('local')->path($path);
+        } catch (\Throwable) {
+            return null;
+        }
+        return is_file($abs) ? $abs : null;
     }
 
     /**
