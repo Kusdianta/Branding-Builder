@@ -6,6 +6,7 @@ namespace App\Services;
 
 use App\Models\BrandAudit;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use Nema\WorkerClient\Exceptions\GMapsReviewsException;
 use Nema\WorkerClient\Exceptions\WorkerAuthException;
 use Nema\WorkerClient\Exceptions\WorkerNotAvailableException;
@@ -131,6 +132,12 @@ class GMapsReviewsService
                 return;
             }
 
+            // BB56: persist the place screenshot to disk (best-effort)
+            // so KonsistensiScorer (BB57) has a visual asset to feed
+            // into the multimodal vision call. Empty path on capture
+            // failure — scorer detects and skips this evidence source.
+            $screenshotPath = $this->persistGMapsScreenshot($audit, $result->screenshotBytes());
+
             // Success — persist the structured payload.
             $audit->update([
                 'gmaps_reviews_status' => 'done',
@@ -148,10 +155,11 @@ class GMapsReviewsService
                         ],
                         $result->reviews,
                     ),
-                    'scraped_at'   => $result->scrapedAt->format('c'),
-                    'duration_ms'  => $result->durationMs,
-                    'limitations'  => $result->limitations,
-                    '_meta'        => [
+                    'scraped_at'             => $result->scrapedAt->format('c'),
+                    'duration_ms'            => $result->durationMs,
+                    'limitations'            => $result->limitations,
+                    'gmaps_screenshot_path'  => $screenshotPath,
+                    '_meta'                  => [
                         'credential_id' => $credentialId,
                         'sample_source' => 'gmaps_scrape',
                     ],
@@ -248,6 +256,32 @@ class GMapsReviewsService
             'gmaps_reviews_status' => 'scrape_failed',
             'gmaps_reviews'        => ['error' => $detail],
         ]);
+    }
+
+    /**
+     * BB56: write the place-page screenshot to the audit's private
+     * storage directory. Returns the relative path (suitable for
+     * Storage::disk('local')->path(...) hydration in BB57) or null
+     * when bytes are empty or the write fails.
+     */
+    private function persistGMapsScreenshot(BrandAudit $audit, string $bytes): ?string
+    {
+        if ($bytes === '') {
+            return null;
+        }
+
+        $relativePath = "audits/{$audit->id}/gmaps_screenshot.png";
+
+        try {
+            Storage::disk('local')->put($relativePath, $bytes);
+        } catch (Throwable $e) {
+            Log::warning('GMapsReviewsService: gmaps screenshot persistence failed', [
+                'audit_id' => $audit->id, 'error' => $e->getMessage(),
+            ]);
+            return null;
+        }
+
+        return $relativePath;
     }
 
     // W7.5: removed normalizeSessionCookies — see W7.1 item 6 closure
