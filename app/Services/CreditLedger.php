@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Models\BrandAudit;
+use App\Models\CreditAdjustment;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -83,6 +84,45 @@ class CreditLedger
             $audit->forceFill(['credits_charged' => 0])->save();
 
             return true;
+        });
+    }
+
+    /**
+     * BB84 — apply a manual operator adjustment to $user's balance and
+     * append a credit_adjustments audit-trail row. Positive amounts add
+     * credits; negative amounts deduct (clamped so the balance never goes
+     * below zero). Returns the resulting balance after adjustment.
+     */
+    public function adjust(User $user, int $amount, string $reason, string $adjustedBy): int
+    {
+        return DB::transaction(function () use ($user, $amount, $reason, $adjustedBy): int {
+            $fresh = User::lockForUpdate()->find($user->id);
+            if (! $fresh) {
+                throw new \RuntimeException('User missing during credit adjust.');
+            }
+
+            $effectiveAmount = $amount;
+            if ($amount < 0) {
+                // Clamp: never go below zero.
+                $effectiveAmount = -min(abs($amount), $fresh->credits_balance);
+            }
+
+            if ($effectiveAmount > 0) {
+                $fresh->increment('credits_balance', $effectiveAmount);
+                $fresh->increment('credits_lifetime_earned', $effectiveAmount);
+            } elseif ($effectiveAmount < 0) {
+                $fresh->decrement('credits_balance', abs($effectiveAmount));
+            }
+
+            CreditAdjustment::create([
+                'user_id'     => $fresh->id,
+                'amount'      => $effectiveAmount,
+                'reason'      => $reason,
+                'adjusted_by' => $adjustedBy,
+                'created_at'  => now(),
+            ]);
+
+            return (int) $fresh->fresh()->credits_balance;
         });
     }
 }

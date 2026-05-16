@@ -69,6 +69,11 @@ return [
         'url'             => env('HUB_URL', 'http://nema-hub.test'),
         'inbound_api_key' => env('HUB_INBOUND_API_KEY', ''),
         'timeout'         => (float) env('HUB_TIMEOUT', 10.0),
+
+        // BB84 — separate bearer used by Hub -> branding-builder traffic for
+        // the users + credits-adjust API. Decoupled from inbound_api_key so
+        // the two permissions can be rotated independently.
+        'users_api_key'   => env('HUB_USERS_API_KEY', ''),
     ],
 
 ];
