@@ -27,6 +27,21 @@ new class extends Component {
     public string $gmapsUrl         = '';
     public bool   $whatsappBusiness = false;
 
+    // BB73: operator declarations (Phase 11). All optional; empty means
+    // "let the system auto-detect from touchpoints". Combined with
+    // service_signals (BB74) by ExperienceScorer's tier classifier
+    // (BB75) to attribute Brand Experience bonus sub-bucket scores.
+    public ?bool  $declEkspres        = null;
+    public string $declEkspresUrl     = '';
+    public ?bool  $declAntarJemput    = null;
+    public string $declAntarJemputUrl = '';
+    /** @var list<string> */
+    public array  $declServiceVariants = [];
+    public ?bool  $declSopKeluhan     = null;
+    public string $declSopKeluhanUrl  = '';
+    public ?bool  $declPriceList      = null;
+    public string $declPriceListUrl   = '';
+
     // File uploads (multi-file, image, max 3 each, 5MB each)
     public array $outletPhotosOuter = [];
     public array $outletPhotosInner = [];
@@ -82,6 +97,17 @@ new class extends Component {
         'outletPhotosOuter.*'    => 'image|mimes:jpg,jpeg,png,webp|max:5120',
         'outletPhotosInner'      => 'nullable|array|max:3',
         'outletPhotosInner.*'    => 'image|mimes:jpg,jpeg,png,webp|max:5120',
+        // BB73: operator declarations — all optional, free-form.
+        'declEkspres'            => 'nullable|boolean',
+        'declEkspresUrl'         => 'nullable|url|max:500',
+        'declAntarJemput'        => 'nullable|boolean',
+        'declAntarJemputUrl'     => 'nullable|url|max:500',
+        'declServiceVariants'    => 'nullable|array',
+        'declServiceVariants.*'  => 'string|in:kiloan,satuan,dry_cleaning,sepatu,karpet,bedding,gaun_dress,boneka,lainnya',
+        'declSopKeluhan'         => 'nullable|boolean',
+        'declSopKeluhanUrl'      => 'nullable|url|max:500',
+        'declPriceList'          => 'nullable|boolean',
+        'declPriceListUrl'       => 'nullable|url|max:500',
     ];
 
     protected array $messages = [
@@ -172,6 +198,43 @@ new class extends Component {
         };
     }
 
+    /**
+     * BB73: shape operator_declarations JSON column from form state.
+     * Returns null when the operator left every field empty (no bool
+     * checked, no URL filled, no variant selected) — keeps the column
+     * NULL so BB75 Tier classifier can short-circuit on "undeclared".
+     *
+     * @return array<string,mixed>|null
+     */
+    private function collectOperatorDeclarations(): ?array
+    {
+        $hasAnyDeclaration = $this->declEkspres !== null
+            || $this->declAntarJemput !== null
+            || $this->declSopKeluhan !== null
+            || $this->declPriceList !== null
+            || $this->declServiceVariants !== []
+            || trim($this->declEkspresUrl) !== ''
+            || trim($this->declAntarJemputUrl) !== ''
+            || trim($this->declSopKeluhanUrl) !== ''
+            || trim($this->declPriceListUrl) !== '';
+
+        if (! $hasAnyDeclaration) {
+            return null;
+        }
+
+        return [
+            'has_ekspres'        => $this->declEkspres,
+            'ekspres_url'        => trim($this->declEkspresUrl) ?: null,
+            'has_antar_jemput'   => $this->declAntarJemput,
+            'antar_jemput_url'   => trim($this->declAntarJemputUrl) ?: null,
+            'service_variants'   => array_values($this->declServiceVariants),
+            'has_sop_keluhan'    => $this->declSopKeluhan,
+            'sop_keluhan_url'    => trim($this->declSopKeluhanUrl) ?: null,
+            'has_price_list'     => $this->declPriceList,
+            'price_list_url'     => trim($this->declPriceListUrl) ?: null,
+        ];
+    }
+
     public function removePhoto(string $bucket, int $index): void
     {
         $prop = $bucket === 'outer' ? 'outletPhotosOuter' : 'outletPhotosInner';
@@ -227,6 +290,10 @@ new class extends Component {
                 'outlet_photo_outer_paths' => $outerPaths,
                 'outlet_photo_inner_paths' => $innerPaths,
             ],
+            // BB73: persist operator declarations only when at least one
+            // field was filled in. Null column means "operator skipped" so
+            // ExperienceScorer (BB75) treats every signal as undeclared.
+            'operator_declarations' => $this->collectOperatorDeclarations(),
             'status'        => BrandAudit::STATUS_PENDING,
             'expires_at'    => now()->addDays(30),
         ]);
@@ -599,6 +666,181 @@ new class extends Component {
                             </p>
                         </div>
                     </label>
+
+                    {{-- BB73: operator declarations (optional self-report) --}}
+                    <div>
+                        <p style="font-size: 14px; font-weight: 600; color: var(--text-primary);">
+                            Layanan & Kebijakan Operasional
+                            <span style="font-weight: 400; color: var(--text-tertiary);">(Opsional)</span>
+                        </p>
+                        <p style="font-size: 13px; color: var(--text-secondary); margin-top: 2px; margin-bottom: 16px;">
+                            Jika kosong, sistem akan mencoba mendeteksi otomatis dari touchpoint Anda. Mengisi langsung membantu skor Brand Experience lebih akurat.
+                        </p>
+
+                        <div class="flex flex-col gap-5">
+
+                            {{-- Ekspres --}}
+                            <div class="flex flex-col gap-2">
+                                <label style="font-size: 13px; font-weight: 500; color: var(--text-primary);">
+                                    <i class="ti ti-bolt" style="color: var(--chimera-500); margin-right: 4px;"></i>
+                                    Layanan ekspres / same-day tersedia?
+                                </label>
+                                <div class="flex flex-wrap items-center gap-3">
+                                    <label class="flex items-center gap-2" style="font-size: 13px;">
+                                        <input type="radio" wire:model="declEkspres" :value="true" style="accent-color: var(--chimera-500);">
+                                        Ya
+                                    </label>
+                                    <label class="flex items-center gap-2" style="font-size: 13px;">
+                                        <input type="radio" wire:model="declEkspres" :value="false" style="accent-color: var(--chimera-500);">
+                                        Tidak
+                                    </label>
+                                    <button type="button"
+                                        wire:click="$set('declEkspres', null)"
+                                        style="font-size: 12px; color: var(--text-tertiary); text-decoration: underline;">
+                                        Tidak yakin
+                                    </button>
+                                </div>
+                                @if ($declEkspres === true)
+                                    <x-nui-form-input
+                                        name="declEkspresUrl"
+                                        label=""
+                                        type="url"
+                                        wire:model="declEkspresUrl"
+                                        placeholder="URL bukti (opsional): IG post, halaman website, dsb"
+                                        :error="$errors->first('declEkspresUrl')"
+                                    />
+                                @endif
+                            </div>
+
+                            {{-- Antar Jemput --}}
+                            <div class="flex flex-col gap-2">
+                                <label style="font-size: 13px; font-weight: 500; color: var(--text-primary);">
+                                    <i class="ti ti-truck-delivery" style="color: var(--chimera-500); margin-right: 4px;"></i>
+                                    Antar jemput tersedia?
+                                </label>
+                                <div class="flex flex-wrap items-center gap-3">
+                                    <label class="flex items-center gap-2" style="font-size: 13px;">
+                                        <input type="radio" wire:model="declAntarJemput" :value="true" style="accent-color: var(--chimera-500);">
+                                        Ya
+                                    </label>
+                                    <label class="flex items-center gap-2" style="font-size: 13px;">
+                                        <input type="radio" wire:model="declAntarJemput" :value="false" style="accent-color: var(--chimera-500);">
+                                        Tidak
+                                    </label>
+                                    <button type="button"
+                                        wire:click="$set('declAntarJemput', null)"
+                                        style="font-size: 12px; color: var(--text-tertiary); text-decoration: underline;">
+                                        Tidak yakin
+                                    </button>
+                                </div>
+                                @if ($declAntarJemput === true)
+                                    <x-nui-form-input
+                                        name="declAntarJemputUrl"
+                                        label=""
+                                        type="url"
+                                        wire:model="declAntarJemputUrl"
+                                        placeholder="URL bukti (opsional)"
+                                        :error="$errors->first('declAntarJemputUrl')"
+                                    />
+                                @endif
+                            </div>
+
+                            {{-- Variasi Layanan --}}
+                            <div class="flex flex-col gap-2">
+                                <label style="font-size: 13px; font-weight: 500; color: var(--text-primary);">
+                                    <i class="ti ti-list-details" style="color: var(--chimera-500); margin-right: 4px;"></i>
+                                    Variasi layanan
+                                </label>
+                                <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                                    @foreach ([
+                                        'kiloan'       => 'Kiloan',
+                                        'satuan'       => 'Satuan',
+                                        'dry_cleaning' => 'Dry Cleaning',
+                                        'sepatu'       => 'Sepatu',
+                                        'karpet'       => 'Karpet',
+                                        'bedding'      => 'Bedding / Selimut',
+                                        'gaun_dress'   => 'Gaun / Dress',
+                                        'boneka'       => 'Boneka',
+                                        'lainnya'      => 'Lainnya',
+                                    ] as $key => $label)
+                                        <label class="flex items-center gap-2 p-2 rounded" style="background: var(--surface-muted); font-size: 13px; cursor: pointer;">
+                                            <input type="checkbox"
+                                                wire:model="declServiceVariants"
+                                                value="{{ $key }}"
+                                                style="accent-color: var(--chimera-500);">
+                                            {{ $label }}
+                                        </label>
+                                    @endforeach
+                                </div>
+                            </div>
+
+                            {{-- SOP Keluhan --}}
+                            <div class="flex flex-col gap-2">
+                                <label style="font-size: 13px; font-weight: 500; color: var(--text-primary);">
+                                    <i class="ti ti-shield-check" style="color: var(--chimera-500); margin-right: 4px;"></i>
+                                    SOP keluhan / garansi dipublikasikan?
+                                </label>
+                                <div class="flex flex-wrap items-center gap-3">
+                                    <label class="flex items-center gap-2" style="font-size: 13px;">
+                                        <input type="radio" wire:model="declSopKeluhan" :value="true" style="accent-color: var(--chimera-500);">
+                                        Ya
+                                    </label>
+                                    <label class="flex items-center gap-2" style="font-size: 13px;">
+                                        <input type="radio" wire:model="declSopKeluhan" :value="false" style="accent-color: var(--chimera-500);">
+                                        Tidak
+                                    </label>
+                                    <button type="button"
+                                        wire:click="$set('declSopKeluhan', null)"
+                                        style="font-size: 12px; color: var(--text-tertiary); text-decoration: underline;">
+                                        Tidak yakin
+                                    </button>
+                                </div>
+                                @if ($declSopKeluhan === true)
+                                    <x-nui-form-input
+                                        name="declSopKeluhanUrl"
+                                        label=""
+                                        type="url"
+                                        wire:model="declSopKeluhanUrl"
+                                        placeholder="URL bukti (opsional): kebijakan, FAQ, IG highlight"
+                                        :error="$errors->first('declSopKeluhanUrl')"
+                                    />
+                                @endif
+                            </div>
+
+                            {{-- Price List --}}
+                            <div class="flex flex-col gap-2">
+                                <label style="font-size: 13px; font-weight: 500; color: var(--text-primary);">
+                                    <i class="ti ti-receipt" style="color: var(--chimera-500); margin-right: 4px;"></i>
+                                    Price list publik tersedia?
+                                </label>
+                                <div class="flex flex-wrap items-center gap-3">
+                                    <label class="flex items-center gap-2" style="font-size: 13px;">
+                                        <input type="radio" wire:model="declPriceList" :value="true" style="accent-color: var(--chimera-500);">
+                                        Ya
+                                    </label>
+                                    <label class="flex items-center gap-2" style="font-size: 13px;">
+                                        <input type="radio" wire:model="declPriceList" :value="false" style="accent-color: var(--chimera-500);">
+                                        Tidak
+                                    </label>
+                                    <button type="button"
+                                        wire:click="$set('declPriceList', null)"
+                                        style="font-size: 12px; color: var(--text-tertiary); text-decoration: underline;">
+                                        Tidak yakin
+                                    </button>
+                                </div>
+                                @if ($declPriceList === true)
+                                    <x-nui-form-input
+                                        name="declPriceListUrl"
+                                        label=""
+                                        type="url"
+                                        wire:model="declPriceListUrl"
+                                        placeholder="URL bukti (opsional)"
+                                        :error="$errors->first('declPriceListUrl')"
+                                    />
+                                @endif
+                            </div>
+                        </div>
+                    </div>
 
                     {{-- File uploads --}}
                     <div>

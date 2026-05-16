@@ -35,6 +35,7 @@ class BrandAudit extends Model
         'city',
         'service_type',
         'touchpoints',
+        'operator_declarations',
         'status',
         'pillar_scores',
         'sub_bucket_scores',
@@ -60,8 +61,9 @@ class BrandAudit extends Model
     protected function casts(): array
     {
         return [
-            'touchpoints'       => 'array',
-            'pillar_scores'     => 'array',
+            'touchpoints'           => 'array',
+            'operator_declarations' => 'array',
+            'pillar_scores'         => 'array',
             'sub_bucket_scores'  => 'array',
             'score_breakdown'    => 'array',
             'overall_score'      => 'integer',
