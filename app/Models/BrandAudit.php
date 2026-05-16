@@ -20,6 +20,14 @@ class BrandAudit extends Model
 
     public const STATUS_FAILED = 'failed';
 
+    /**
+     * BB53: audit completed but the cross-touchpoint validation flagged
+     * the input URLs as possibly belonging to a different brand than
+     * the typed brand_name + city. The PDF + dashboard render normally
+     * but with a warning banner; user can re-edit URLs and re-run.
+     */
+    public const STATUS_VALIDATION_WARNING = 'validation_warning';
+
     protected $fillable = [
         'session_token',
         'ip_address',
@@ -42,6 +50,8 @@ class BrandAudit extends Model
         'instagram_audit_status',
         'gmaps_reviews',
         'gmaps_reviews_status',
+        'audit_evidence',
+        'audit_evidence_status',
         'quick_wins',
         'competitive_positioning',
         'expires_at',
@@ -60,6 +70,7 @@ class BrandAudit extends Model
             'evidence'          => 'array',
             'instagram_audit'         => 'array',
             'gmaps_reviews'           => 'array',
+            'audit_evidence'          => 'array',
             'quick_wins'              => 'array',
             'competitive_positioning' => 'array',
             'expires_at'              => 'datetime',
@@ -73,11 +84,17 @@ class BrandAudit extends Model
 
     public function isComplete(): bool
     {
-        return $this->status === self::STATUS_DONE;
+        return $this->status === self::STATUS_DONE
+            || $this->status === self::STATUS_VALIDATION_WARNING;
     }
 
     public function isFailed(): bool
     {
         return $this->status === self::STATUS_FAILED;
+    }
+
+    public function hasValidationWarning(): bool
+    {
+        return $this->status === self::STATUS_VALIDATION_WARNING;
     }
 }
