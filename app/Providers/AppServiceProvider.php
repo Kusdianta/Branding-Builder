@@ -6,6 +6,7 @@ namespace App\Providers;
 
 use App\Services\HubCredentialsClient;
 use App\Services\HubUsageLogger;
+use Illuminate\Auth\Middleware\Authenticate;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\ServiceProvider;
 use Livewire\Volt\Volt;
@@ -42,5 +43,12 @@ class AppServiceProvider extends ServiceProvider
         Volt::mount([
             resource_path('views/livewire'),
         ]);
+
+        // BB83 — there is no Laravel 'login' route in branding-builder
+        // (OAuth-only). Send unauthenticated users to /auth/google so the
+        // auth middleware on /audits and friends does the right thing.
+        Authenticate::redirectUsing(static function (): string {
+            return route('auth.google.redirect');
+        });
     }
 }
