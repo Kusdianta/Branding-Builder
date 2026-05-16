@@ -30,13 +30,29 @@ new class extends Component {
 ?>
 
 <section class="max-w-4xl mx-auto py-8">
-    <div class="mb-8">
-        <h1 style="font-size: 30px; font-weight: 600; color: var(--text-primary); letter-spacing: -0.01em;">
-            Riwayat Audit Anda
-        </h1>
-        <p style="font-size: 14px; color: var(--text-secondary); margin-top: 6px;">
-            Klik audit untuk melihat hasil lengkap. Audit yang sudah selesai bisa dibuka kapan saja.
-        </p>
+    <div class="mb-8 flex items-start justify-between gap-4 flex-wrap">
+        <div>
+            <h1 style="font-size: 30px; font-weight: 600; color: var(--text-primary); letter-spacing: -0.01em;">
+                Riwayat Audit Anda
+            </h1>
+            <p style="font-size: 14px; color: var(--text-secondary); margin-top: 6px;">
+                Klik audit untuk melihat hasil lengkap. Audit yang sudah selesai bisa dibuka kapan saja.
+            </p>
+        </div>
+        @auth
+            <div style="display: inline-flex; align-items: center; gap: 12px;">
+                <div style="text-align: right;">
+                    <div style="font-size: 11px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.04em;">Sisa Kredit</div>
+                    <div style="font-size: 22px; font-weight: 600; color: var(--chimera-700); line-height: 1;">{{ (int) auth()->user()->credits_balance }}</div>
+                </div>
+                @if ($audits->total() > 0)
+                    <a href="{{ route('home') }}" wire:navigate class="nui-btn-primary rounded-pill" style="font-size: 13px; padding: 10px 18px;">
+                        <i class="ti ti-plus" style="font-size: 13px;"></i>
+                        Audit baru
+                    </a>
+                @endif
+            </div>
+        @endauth
     </div>
 
     @if ($audits->total() === 0)
