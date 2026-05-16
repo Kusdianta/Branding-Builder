@@ -294,8 +294,11 @@ class ScorePillarsJob implements ShouldQueue
                 $mapper->instagramRaw($audit)['screenshot_path'] !== null ? 'instagram_screenshot' : null,
             ]),
             ScoringRubric::PILLAR_EXPERIENCE => array_filter([
-                'places_api',
+                // BB75: ExperienceScorer reads service_signals + operator_declarations.
+                'analysis.service_signals',
+                $audit->operator_declarations !== null ? 'operator_declarations' : null,
                 $mapper->fullReviews($audit) !== [] ? 'gmaps_scrape' : null,
+                'places_api',
                 'website_fetch',
             ]),
             default => [],

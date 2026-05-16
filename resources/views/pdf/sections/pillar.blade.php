@@ -16,6 +16,20 @@
 @php
     $bucketCount = count($bucketScores);
 
+    // BB76 — flat-shape lookups for the BB75 ExperienceScorer breakdown.
+    // The Experience pillar stores per-bucket data in sibling maps inside
+    // the pillar dict (not in nested per-bucket dicts), so we surface
+    // those here:
+    //   $bdByBucket['sub_bucket_reasoning'][<bucket>]
+    //   $bdByBucket['evidence_sources'][<bucket>]
+    //   $bdByBucket['tier_classification'][<bucket>]
+    $flatSubReasoning = is_array($bdByBucket['sub_bucket_reasoning'] ?? null)
+        ? $bdByBucket['sub_bucket_reasoning'] : [];
+    $flatSubCaps = is_array($bdByBucket['sub_bucket_caps'] ?? null)
+        ? $bdByBucket['sub_bucket_caps'] : [];
+    $flatTiers = is_array($bdByBucket['tier_classification'] ?? null)
+        ? $bdByBucket['tier_classification'] : [];
+
     // Compute status icon from score-vs-cap ratio:
     //   >= 80% of cap  -> ✓
     //   >= 40% of cap  -> ~
@@ -30,24 +44,38 @@
         return ['icon' => '✗', 'color' => '#C24E3A'];
     };
 
-    // Pull per-bucket llm reasoning (BB34 source) as the row's "Catatan"
-    // when present, else fall back to evidence touchpoint label.
-    $catatanFor = function (string $bucketKey, ?array $bd): string {
-        if ($bd === null) return '—';
-        $r = trim((string) ($bd['llm_reasoning'] ?? ''));
-        if ($r !== '') {
-            return mb_strlen($r) > 140 ? mb_substr($r, 0, 139) . '…' : $r;
-        }
-        // Deterministic pillars carry tier_table or signals; surface a
-        // short summary from those instead of a bare em-dash.
-        $formula = (string) ($bd['formula'] ?? '');
-        if ($formula === 'deterministic_threshold') {
-            $tt = (array) ($bd['tier_table'] ?? []);
-            foreach ($tt as $tier) {
-                if (! empty($tier['matched'])) {
-                    return sprintf('Tier "%s" (%s pt)', (string) ($tier['range'] ?? ''), (string) ($tier['points'] ?? '—'));
+    // BB76 tier pill colors per A/B/C/D classification.
+    $tierColorFor = function (?string $tier): string {
+        return match ($tier) {
+            'A'     => '#3D8948',
+            'B'     => '#326D3A',
+            'C'     => '#C97A1B',
+            default => '#8A9088',
+        };
+    };
+
+    // Pull per-bucket reasoning. Try the legacy per-bucket dict shape
+    // first; fall back to BB75's flat sub_bucket_reasoning map.
+    $catatanFor = function (string $bucketKey, ?array $bd) use ($flatSubReasoning): string {
+        if ($bd !== null) {
+            $r = trim((string) ($bd['llm_reasoning'] ?? ''));
+            if ($r !== '') {
+                return mb_strlen($r) > 140 ? mb_substr($r, 0, 139) . '…' : $r;
+            }
+            // Deterministic pillars carry tier_table or signals.
+            $formula = (string) ($bd['formula'] ?? '');
+            if ($formula === 'deterministic_threshold') {
+                $tt = (array) ($bd['tier_table'] ?? []);
+                foreach ($tt as $tier) {
+                    if (! empty($tier['matched'])) {
+                        return sprintf('Tier "%s" (%s pt)', (string) ($tier['range'] ?? ''), (string) ($tier['points'] ?? '—'));
+                    }
                 }
             }
+        }
+        $r2 = trim((string) ($flatSubReasoning[$bucketKey] ?? ''));
+        if ($r2 !== '') {
+            return mb_strlen($r2) > 140 ? mb_substr($r2, 0, 139) . '…' : $r2;
         }
         return '—';
     };
@@ -90,14 +118,21 @@
             @foreach ($bucketScores as $bucketKey => $bucketScore)
                 @php
                     $bd       = is_array($bdByBucket[$bucketKey] ?? null) ? $bdByBucket[$bucketKey] : null;
-                    $cap      = is_int($bd['cap'] ?? null) ? (int) $bd['cap'] : null;
+                    $cap      = is_int($bd['cap'] ?? null) ? (int) $bd['cap']
+                                : (is_int($flatSubCaps[$bucketKey] ?? null) ? (int) $flatSubCaps[$bucketKey] : null);
                     $status   = $statusFor((int) $bucketScore, $cap);
                     $catatan  = $catatanFor((string) $bucketKey, $bd);
+                    // BB76 — tier pill from BB75 flat shape (only meaningful
+                    // for the Experience pillar). Renders next to status when
+                    // present so readers can see WHY a bonus fired/didn't.
+                    $tier = is_string($flatTiers[$bucketKey] ?? null) ? $flatTiers[$bucketKey] : null;
                 @endphp
                 <tr style="border-bottom: 1px solid rgba(15,20,17,0.05); page-break-inside: avoid;">
                     <td style="padding: 6px 10px; font-size: 9px; color: #0F1411;">{{ $subBucketLabels[$bucketKey] ?? $bucketKey }}</td>
                     <td style="padding: 6px 10px; font-size: 9px; font-weight: bold; color: #0F1411; text-align: center;">{{ $bucketScore }}{{ $cap !== null ? '/' . $cap : '' }}</td>
-                    <td style="padding: 6px 10px; font-size: 12px; font-weight: bold; color: {{ $status['color'] }}; text-align: center;">{{ $status['icon'] }}</td>
+                    <td style="padding: 6px 10px; font-size: 12px; font-weight: bold; color: {{ $status['color'] }}; text-align: center;">
+                        {{ $status['icon'] }}@if ($tier !== null)<span style="font-size: 7px; font-weight: bold; color: {{ $tierColorFor($tier) }}; margin-left: 4px; padding: 1px 4px; border: 1px solid {{ $tierColorFor($tier) }}; border-radius: 3px;">T{{ $tier }}</span>@endif
+                    </td>
                     <td style="padding: 6px 10px; font-size: 8px; color: #5A6259; line-height: 1.5;">{{ $catatan }}</td>
                 </tr>
             @endforeach

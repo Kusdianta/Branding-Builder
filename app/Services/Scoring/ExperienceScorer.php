@@ -142,8 +142,17 @@ class ExperienceScorer
             'analysis_path'      => 'tier_classifier_v1',
             'sub_bucket_scores'  => $subBucketScores,
             'sub_bucket_reasoning' => $subBucketReasoning,
+            'sub_bucket_caps'    => array_merge(
+                ['base' => self::BASE_SCORE],
+                self::BONUS_CAPS,
+                ['penalty_keterlambatan' => 8, 'penalty_pakaian_hilang' => 10, 'penalty_no_response_wa' => 8],
+            ),
             'evidence_sources'   => $sourcesTable,
             'tier_classification' => $tiersTable,
+            'evidence_consumed'  => [
+                'evidence.analysis.service_signals',
+                'operator_declarations',
+            ],
             'brand_name'         => (string) ($context['brand_name'] ?? ''),
         ];
 
