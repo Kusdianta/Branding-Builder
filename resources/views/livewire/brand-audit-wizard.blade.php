@@ -962,19 +962,24 @@ new class extends Component {
     {{-- ===== STEP 2: ANALYZING (BB21 live progress) ===== --}}
     @if ($step === 'analyzing')
         @php
+            // BB72 — Phase 11 5-phase progression labels.
             $stepLabels = [
                 // Phase 1 — gather
                 'gather_places'              => 'Mengambil data Google Places',
                 'gather_gmaps'               => 'Scraping ulasan Google Maps',
                 'gather_instagram'           => 'Scraping profil Instagram',
-                // Phase 2 — validate
+                'fetch_website'              => 'Mengambil metadata website',
+                // Phase 2 — analyze
+                'analyze_instagram'          => 'Analisis konten Instagram (AI)',
+                'extract_service_signals'    => 'Mengekstrak sinyal layanan',
+                // Phase 3 — validate
                 'validate_evidence'          => 'Validasi kecocokan brand',
-                // Phase 3 — score
+                // Phase 4 — score
                 'score_recall'               => 'Skoring Brand Recall',
                 'score_digital'              => 'Skoring Digital Presence',
                 'score_konsistensi'          => 'Skoring Brand Konsistensi',
                 'score_experience'           => 'Skoring Brand Experience',
-                // Phase 3 (cont.) — insights + PDF
+                // Phase 5 — insights + PDF
                 'generate_recommendations'   => 'Generate 5 rekomendasi prioritas',
                 'generate_quick_wins'        => 'Generate quick wins',
                 'generate_positioning'       => 'Generate posisi kompetitif',
@@ -982,9 +987,10 @@ new class extends Component {
             ];
             $trackLabels = [
                 'gather'    => 'Fase 1 · Kumpulkan data',
-                'validate'  => 'Fase 2 · Validasi',
-                'score'     => 'Fase 3 · Skoring pilar',
-                'final'     => 'Fase 3 · Insight + PDF',
+                'analyze'   => 'Fase 2 · Analisis AI',
+                'validate'  => 'Fase 3 · Validasi',
+                'score'     => 'Fase 4 · Skoring pilar',
+                'final'     => 'Fase 5 · Insight + PDF',
             ];
             $groupedSteps = [];
             foreach ($auditSteps as $s) {
@@ -1009,14 +1015,14 @@ new class extends Component {
                     Menganalisis brand <em>{{ $brandName }}</em>
                 </h2>
                 <p style="font-size: 14px; color: var(--text-secondary); margin-top: 8px;">
-                    Track A (pilar brand) dan Track B (Instagram) berjalan paralel. Halaman ini otomatis update setiap 2 detik.
+                    Pipeline berjalan dalam 5 fase berurutan. Halaman ini otomatis update setiap 2 detik.
                 </p>
             </div>
 
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {{-- BB55: render the new 3-phase tracks (gather / validate / score).
-                     Final goes in its own row below. --}}
-                @foreach (['gather', 'validate', 'score'] as $trackKey)
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                {{-- BB72: render the 5-phase tracks (gather / analyze /
+                     validate / score). Final goes in its own row below. --}}
+                @foreach (['gather', 'analyze', 'validate', 'score'] as $trackKey)
                     <x-nui-card>
                         <p style="font-size: 11px; font-weight: 600; color: var(--text-tertiary); letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 12px;">
                             {{ $trackLabels[$trackKey] ?? $trackKey }}
@@ -1066,7 +1072,7 @@ new class extends Component {
                                     <span style="font-size: 16px; color: {{ $stepClr($s['status']) }}; min-width: 18px; display: inline-block; text-align: center;">{{ $stepIcon($s['status']) }}</span>
                                     <span style="font-size: 13px; color: {{ $s['status'] === 'pending' ? 'var(--text-tertiary)' : 'var(--text-primary)' }};">
                                         {{ $stepLabels[$s['key']] ?? $s['key'] }}
-                                        @if ($s['status'] === 'pending') <span style="color: var(--text-tertiary); font-size: 11px;">(menunggu kedua track selesai)</span> @endif
+                                        @if ($s['status'] === 'pending') <span style="color: var(--text-tertiary); font-size: 11px;">(menunggu skoring pilar selesai)</span> @endif
                                     </span>
                                 </div>
                                 @if ($s['elapsed_s'] !== null)
