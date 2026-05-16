@@ -11,9 +11,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
-use Throwable;
 
 class GenerateActivationKit implements ShouldQueue
 {
@@ -25,60 +23,65 @@ class GenerateActivationKit implements ShouldQueue
 
     public function handle(): void
     {
-        try {
-            $pdf = Pdf::loadView('pdf.activation-kit', [
-                'audit'           => $this->audit,
-                'pillarOrder'     => [
-                    'brand-konsistensi',
-                    'brand-recall',
-                    'brand-experience',
-                    'digital-presence',
-                ],
-                'pillarLabels'    => [
-                    'brand-konsistensi' => 'Konsistensi Brand',
-                    'brand-recall'      => 'Brand Recall',
-                    'brand-experience'  => 'Brand Experience',
-                    'digital-presence'  => 'Digital Presence',
-                ],
-                'subBucketLabels' => [
-                    'rating_tier'           => 'Rating',
-                    'review_count_tier'     => 'Jumlah Review',
-                    'keyword_saturation'    => 'Kata Kunci Positif di Ulasan', // BB18: legacy alias for old audit rows
-                    'review_keyword_quality' => 'Kata Kunci Positif di Ulasan',
-                    'sentiment_quality'     => 'Sentimen',
-                    'search_recall'         => 'Search Recall',
-                    'has_gmaps'             => 'Google Maps',
-                    'has_instagram'         => 'Instagram',
-                    'has_website'           => 'Website',
-                    'has_wa'                => 'WhatsApp Business',
-                    'has_tiktok'            => 'TikTok',
-                    'review_bonus'          => 'Bonus Review',
-                    'kehadiran_digital'     => 'Kehadiran Digital',
-                    'konsistensi_visual'    => 'Konsistensi Visual',
-                    'kelengkapan_layanan'   => 'Kelengkapan Layanan',
-                    'transparansi_harga'    => 'Transparansi Harga',
-                    'base'                  => 'Dasar',
-                    'bonus_ekspres'         => 'Layanan Ekspres',
-                    'bonus_antar_jemput'    => 'Antar Jemput',
-                    'bonus_variasi_layanan' => 'Variasi Layanan',
-                    'bonus_sop_keluhan'     => 'SOP Keluhan',
-                    'bonus_price_list'      => 'Daftar Harga',
-                    'penalty_keterlambatan' => 'Penalti Keterlambatan',
-                    'penalty_pakaian_hilang' => 'Penalti Pakaian Hilang',
-                    'penalty_no_response_wa' => 'Penalti No-Response WA',
-                ],
-            ])->setPaper('a4');
+        // BB79: prior implementation wrapped this in a catch(Throwable)
+        // that only logged + left activation_kit_path null. Transient
+        // failures (Dompdf parse errors, missing view variables) became
+        // invisible — audit_steps.generate_pdf would record done with
+        // path:null, dashboard would show the "Buat Activation Kit"
+        // fallback button, and clicking that would silently fail again.
+        //
+        // The fix: let exceptions propagate. GeneratePdfJob already has
+        // a defensive catch around dispatchSync() and marks the step
+        // failed with the real error message — that's where the
+        // operator-facing diagnostic now lives. The async wizard path
+        // (queue worker handle()) lands the failure in Laravel's
+        // failed_jobs table.
+        $pdf = Pdf::loadView('pdf.activation-kit', [
+            'audit'           => $this->audit,
+            'pillarOrder'     => [
+                'brand-konsistensi',
+                'brand-recall',
+                'brand-experience',
+                'digital-presence',
+            ],
+            'pillarLabels'    => [
+                'brand-konsistensi' => 'Konsistensi Brand',
+                'brand-recall'      => 'Brand Recall',
+                'brand-experience'  => 'Brand Experience',
+                'digital-presence'  => 'Digital Presence',
+            ],
+            'subBucketLabels' => [
+                'rating_tier'           => 'Rating',
+                'review_count_tier'     => 'Jumlah Review',
+                'keyword_saturation'    => 'Kata Kunci Positif di Ulasan',
+                'review_keyword_quality' => 'Kata Kunci Positif di Ulasan',
+                'sentiment_quality'     => 'Sentimen',
+                'search_recall'         => 'Search Recall',
+                'has_gmaps'             => 'Google Maps',
+                'has_instagram'         => 'Instagram',
+                'has_website'           => 'Website',
+                'has_wa'                => 'WhatsApp Business',
+                'has_tiktok'            => 'TikTok',
+                'review_bonus'          => 'Bonus Review',
+                'kehadiran_digital'     => 'Kehadiran Digital',
+                'konsistensi_visual'    => 'Konsistensi Visual',
+                'kelengkapan_layanan'   => 'Kelengkapan Layanan',
+                'transparansi_harga'    => 'Transparansi Harga',
+                'base'                  => 'Dasar',
+                'bonus_ekspres'         => 'Layanan Ekspres',
+                'bonus_antar_jemput'    => 'Antar Jemput',
+                'bonus_variasi_layanan' => 'Variasi Layanan',
+                'bonus_sop_keluhan'     => 'SOP Keluhan',
+                'bonus_price_list'      => 'Daftar Harga',
+                'penalty_keterlambatan' => 'Penalti Keterlambatan',
+                'penalty_pakaian_hilang' => 'Penalti Pakaian Hilang',
+                'penalty_no_response_wa' => 'Penalti No-Response WA',
+            ],
+        ])->setPaper('a4');
 
-            $relativePath = "audits/{$this->audit->id}/activation-kit.pdf";
-            Storage::disk('local')->put($relativePath, $pdf->output());
+        $relativePath = "audits/{$this->audit->id}/activation-kit.pdf";
+        Storage::disk('local')->put($relativePath, $pdf->output());
 
-            $this->audit->update(['activation_kit_path' => $relativePath]);
-        } catch (Throwable $e) {
-            Log::error('GenerateActivationKit failed', [
-                'audit_id' => $this->audit->id,
-                'error'    => $e->getMessage(),
-            ]);
-            // Leave activation_kit_path null so the UI can show the retry button.
-        }
+        $this->audit->update(['activation_kit_path' => $relativePath]);
     }
 }

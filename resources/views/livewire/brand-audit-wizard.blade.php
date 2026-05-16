@@ -59,6 +59,8 @@ new class extends Component {
     public ?string $errorMessage       = null;
     public ?string $activationKitPath  = null;
     public bool    $kitGenerating      = false;
+    // BB79: surface PDF generation failures to the operator.
+    public ?string $pdfError           = null;
     public array   $scoreBreakdown     = [];
 
     // Phase 7-C BB15: Instagram audit data for dashboard rendering.
@@ -190,6 +192,29 @@ new class extends Component {
         // Stop showing the spinner once the file has actually landed.
         if ($this->activationKitPath) {
             $this->kitGenerating = false;
+            $this->pdfError = null;
+        }
+
+        // BB79: surface PDF generation failure to the operator. When the
+        // generate_pdf audit_step row landed status=failed (real error
+        // now propagates per BB79 GenerateActivationKit fix), pull the
+        // error message + reset the spinner so the "Buat Activation Kit"
+        // retry button re-appears.
+        foreach ($this->auditSteps as $s) {
+            if ($s['key'] !== 'generate_pdf') {
+                continue;
+            }
+            if ($s['status'] === 'failed') {
+                $this->kitGenerating = false;
+                $this->pdfError = (string) ($s['detail']['error'] ?? 'PDF gagal di-generate. Klik tombol untuk mencoba lagi.');
+            } elseif ($s['status'] === 'done' && ! $this->activationKitPath) {
+                // BB79 pre-fix audits or partial-failure edge case: step
+                // marked done but no file landed. Show a soft retry prompt.
+                $this->kitGenerating = false;
+                $this->pdfError = $this->pdfError
+                    ?? 'PDF belum tersedia. Klik tombol untuk membuat ulang.';
+            }
+            break;
         }
 
         $this->step = match ($audit->status) {
@@ -406,6 +431,7 @@ new class extends Component {
         }
 
         $this->kitGenerating = true;
+        $this->pdfError      = null;  // clear prior error on retry
         \App\Jobs\GenerateActivationKit::dispatch($audit);
     }
 
@@ -1173,19 +1199,27 @@ new class extends Component {
                             Membuat activation kit...
                         </span>
                     @else
-                        <button
-                            type="button"
-                            wire:click="generateKit"
-                            wire:loading.attr="disabled"
-                            wire:target="generateKit"
-                            class="nui-btn-primary rounded-pill"
-                            style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; font-size: 13px; font-weight: 500;"
-                        >
-                            <span wire:loading.remove wire:target="generateKit">
-                                <i class="ti ti-file-text"></i> Buat Activation Kit (PDF)
-                            </span>
-                            <span wire:loading wire:target="generateKit">Memulai...</span>
-                        </button>
+                        <div style="display: inline-flex; flex-direction: column; align-items: flex-end; gap: 4px;">
+                            <button
+                                type="button"
+                                wire:click="generateKit"
+                                wire:loading.attr="disabled"
+                                wire:target="generateKit"
+                                class="nui-btn-primary rounded-pill"
+                                style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; font-size: 13px; font-weight: 500;"
+                            >
+                                <span wire:loading.remove wire:target="generateKit">
+                                    <i class="ti ti-file-text"></i>
+                                    {{ $pdfError ? 'Coba Buat PDF Lagi' : 'Buat Activation Kit (PDF)' }}
+                                </span>
+                                <span wire:loading wire:target="generateKit">Memulai...</span>
+                            </button>
+                            @if ($pdfError)
+                                <p style="font-size: 11px; color: var(--color-danger); max-width: 320px; text-align: right;">
+                                    {{ $pdfError }}
+                                </p>
+                            @endif
+                        </div>
                     @endif
                 </div>
             </div>
