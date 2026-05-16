@@ -9,6 +9,7 @@ use App\Models\AuditStep;
 use App\Models\BrandAudit;
 use App\Services\ClaudeService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Str;
 use Mockery;
 use PHPUnit\Framework\Attributes\Test;
@@ -23,6 +24,16 @@ use Tests\TestCase;
 class ValidateEvidenceJobTest extends TestCase
 {
     use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        // BB55: ValidateEvidenceJob::handle() chains Bus::batch into
+        // ScorePillarsJob -> GenerateInsightsJob. Bus::fake() intercepts
+        // the chain so tests cover just the validate phase without
+        // triggering downstream LLM calls.
+        Bus::fake();
+    }
 
     protected function tearDown(): void
     {

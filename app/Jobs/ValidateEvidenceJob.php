@@ -7,12 +7,14 @@ namespace App\Jobs;
 use App\Models\AuditStep;
 use App\Models\BrandAudit;
 use App\Services\ClaudeService;
+use Illuminate\Bus\Batch;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -89,6 +91,42 @@ class ValidateEvidenceJob implements ShouldQueue
             ]);
             $step?->markFailed($e->getMessage());
         }
+
+        $this->chainScorePhase();
+    }
+
+    /**
+     * Phase 3 kicker: wrap ScorePillarsJob in a one-job batch so we can
+     * hang ->then(GenerateInsightsJob::dispatch) off completion.
+     * GenerateInsightsJob already chains GeneratePdfJob at the end of
+     * its own pipeline (BB38).
+     *
+     * Why a single-job batch instead of straight dispatch + relying on
+     * ScorePillarsJob itself to dispatch insights? The current
+     * ScorePillarsJob ends with AggregateAuditJob::dispatchSync — its
+     * handle() doesn't return until the pillar work is done, so the
+     * batch boundary is a clean completion signal. Using ::dispatch
+     * directly would race the queue worker against subsequent reads.
+     */
+    private function chainScorePhase(): void
+    {
+        $auditId = $this->auditId;
+
+        Bus::batch([new ScorePillarsJob($auditId)])
+            ->name("audit:{$auditId}:score")
+            ->then(static function (Batch $batch) use ($auditId): void {
+                GenerateInsightsJob::dispatch($auditId);
+            })
+            ->catch(static function (Batch $batch, Throwable $e) use ($auditId): void {
+                Log::error('ValidateEvidenceJob: score batch failed', [
+                    'audit_id' => $auditId, 'error' => $e->getMessage(),
+                ]);
+                // Still try to land a PDF even when scoring fails —
+                // GenerateInsightsJob will degrade gracefully on missing
+                // pillar_scores (BB38 contract).
+                GenerateInsightsJob::dispatch($auditId);
+            })
+            ->dispatch();
     }
 
     private function step(string $key): ?AuditStep

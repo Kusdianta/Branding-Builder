@@ -83,15 +83,20 @@ class GatherEvidenceJob implements ShouldQueue
                 // audit_evidence concurrently; we only flip the status here.
                 BrandAudit::where('id', $auditId)
                     ->update(['audit_evidence_status' => 'gathered']);
+                // BB55: chain phase 2 (validate). Dispatched outside the
+                // sub-job batch so a job-level Bus::batch nesting issue
+                // can't strand the audit pre-validate.
+                ValidateEvidenceJob::dispatch($auditId);
             })
             ->catch(static function (Batch $batch, Throwable $e) use ($auditId): void {
                 Log::error('GatherEvidenceJob: inner batch catch fired (allowFailures should make this rare)', [
                     'audit_id' => $auditId, 'error' => $e->getMessage(),
                 ]);
-                // Still transition to 'gathered' so BB55's chain can decide
+                // Still transition to 'gathered' so the chain can decide
                 // what to do — partial evidence is acceptable downstream.
                 BrandAudit::where('id', $auditId)
                     ->update(['audit_evidence_status' => 'gathered']);
+                ValidateEvidenceJob::dispatch($auditId);
             })
             ->dispatch();
     }

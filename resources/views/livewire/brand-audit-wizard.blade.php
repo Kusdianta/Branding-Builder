@@ -608,20 +608,28 @@ new class extends Component {
     @if ($step === 'analyzing')
         @php
             $stepLabels = [
-                'fetch_gmaps'        => 'Mengambil ulasan Google Maps',
-                'score_recall'       => 'Skoring Brand Recall',
-                'score_digital'      => 'Skoring Digital Presence',
-                'score_konsistensi'  => 'Skoring Brand Konsistensi',
-                'score_experience'   => 'Skoring Brand Experience',
-                'aggregate_pillars'  => 'Agregasi pilar + rekomendasi',
-                'ig_scrape'          => 'Scraping profil Instagram',
-                'ig_analysis'        => 'Analisis Instagram dengan AI',
-                'generate_pdf'       => 'Generate activation kit PDF',
+                // Phase 1 — gather
+                'gather_places'              => 'Mengambil data Google Places',
+                'gather_gmaps'               => 'Scraping ulasan Google Maps',
+                'gather_instagram'           => 'Scraping profil Instagram',
+                // Phase 2 — validate
+                'validate_evidence'          => 'Validasi kecocokan brand',
+                // Phase 3 — score
+                'score_recall'               => 'Skoring Brand Recall',
+                'score_digital'              => 'Skoring Digital Presence',
+                'score_konsistensi'          => 'Skoring Brand Konsistensi',
+                'score_experience'           => 'Skoring Brand Experience',
+                // Phase 3 (cont.) — insights + PDF
+                'generate_recommendations'   => 'Generate 5 rekomendasi prioritas',
+                'generate_quick_wins'        => 'Generate quick wins',
+                'generate_positioning'       => 'Generate posisi kompetitif',
+                'generate_pdf'               => 'Generate activation kit PDF',
             ];
             $trackLabels = [
-                'a'     => 'Track A · Pilar Brand',
-                'b'     => 'Track B · Instagram',
-                'final' => 'Final',
+                'gather'    => 'Fase 1 · Kumpulkan data',
+                'validate'  => 'Fase 2 · Validasi',
+                'score'     => 'Fase 3 · Skoring pilar',
+                'final'     => 'Fase 3 · Insight + PDF',
             ];
             $groupedSteps = [];
             foreach ($auditSteps as $s) {

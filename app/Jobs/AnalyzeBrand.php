@@ -6,28 +6,45 @@ namespace App\Jobs;
 
 use App\Models\AuditStep;
 use App\Models\BrandAudit;
-use Illuminate\Bus\Batch;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\Bus;
-use Illuminate\Support\Facades\Log;
-use Throwable;
 
 /**
- * BB20: outer orchestrator. Pre-creates audit_steps rows for live UI
- * progress (BB21), flips audit.status='analyzing', dispatches the outer
- * Bus::batch with Track A (ScorePillarsJob — fetch+score+aggregate) +
- * Track B (ScoreInstagramJob — IG scrape+Claude). The ->then() callback
- * fires GeneratePdfJob after BOTH tracks complete.
+ * Phase 10 BB55: 3-phase pipeline orchestrator.
  *
- * Total wall time: max(Track A ≈ 35s, Track B ≈ 50-75s) + PDF ≈ 3s.
- * Previous sequential design was ~70-90s; the parallelization win is
- * marginal in wall time but substantial in user-facing visibility —
- * BB21's loading view shows per-step progress instead of a generic
- * spinner.
+ *   Phase 1: GATHER   (parallel)  — GatherEvidenceJob fans out
+ *                                   FetchPlacesApi / FetchGMapsReviews /
+ *                                   FetchInstagramAudit. Each writes
+ *                                   to audit_evidence; allowFailures
+ *                                   so partial evidence is acceptable.
+ *
+ *   Phase 2: VALIDATE             — ValidateEvidenceJob fuzzy-matches
+ *                                   scraped names + city against
+ *                                   typed brand_name; LLM tie-breaker
+ *                                   via ClaudeService::validateBrandMatch.
+ *                                   Flags low-confidence audits with
+ *                                   status=validation_warning (still
+ *                                   completes — banner in PDF/dash).
+ *
+ *   Phase 3: SCORE + INSIGHTS     — ScorePillarsJob pulls inputs from
+ *                                   EvidenceMapper, scores the 4
+ *                                   pillars in turn, applies experience
+ *                                   penalties, aggregates. Then
+ *                                   GenerateInsightsJob runs the three
+ *                                   apikprimadya generators serially
+ *                                   and chains GeneratePdfJob.
+ *
+ * Each phase's job dispatches the next at the end of its handle()
+ * (Phase 1 via its inner batch's then() callback). AnalyzeBrand only
+ * seeds audit_steps + flips status + kicks off Phase 1.
+ *
+ * Replaces the Phase 7-B Track A / Track B Bus::batch pattern. Wall
+ * time is roughly comparable — gather phase runs the three fetches in
+ * parallel; the validate phase adds ~3-5s for the haiku tie-breaker;
+ * scoring runs sequentially as before.
  */
 class AnalyzeBrand implements ShouldQueue
 {
@@ -44,62 +61,40 @@ class AnalyzeBrand implements ShouldQueue
 
         $this->seedAuditSteps();
 
-        $auditId = $this->auditId;
-
-        Bus::batch([
-            new ScorePillarsJob($auditId),
-            new ScoreInstagramJob($auditId),
-        ])
-            ->name("audit:{$auditId}")
-            ->allowFailures()
-            ->then(static function (Batch $batch) use ($auditId): void {
-                // BB38: GenerateInsightsJob now sits between batch
-                // completion and PDF generation — runs the three
-                // apikprimadya-style generators serially then chains
-                // GeneratePdfJob at the end.
-                GenerateInsightsJob::dispatch($auditId);
-            })
-            ->catch(static function (Batch $batch, Throwable $e) use ($auditId): void {
-                Log::error('AnalyzeBrand: outer batch failed', [
-                    'audit_id' => $auditId,
-                    'error'    => $e->getMessage(),
-                ]);
-                // Still try to land a PDF so the user gets *something*;
-                // skip insights since they need pillar+IG data the failed
-                // batch may not have produced.
-                GeneratePdfJob::dispatch($auditId);
-            })
-            ->dispatch();
+        // Phase 1 kicks the chain. Phase 1 -> Phase 2 -> Phase 3 are
+        // wired job-to-job (GatherEvidenceJob's inner batch then() ->
+        // ValidateEvidenceJob -> ScorePillarsJob via its own batch ->
+        // GenerateInsightsJob via existing serial dispatch).
+        GatherEvidenceJob::dispatch($this->auditId);
     }
 
     /**
-     * Pre-create the full step set so the loading view (BB21) can render
-     * the planned pipeline immediately and transition each row through
-     * pending → running → done without race-window flicker.
+     * Pre-create the new step set so the loading view (BB21) can
+     * render the planned 12-step pipeline immediately. The validate
+     * step is its own row; the implicit penalty + aggregate phases
+     * inside ScorePillarsJob no longer surface as user-visible steps
+     * (BB55 removed them — they were noise; the per-pillar score steps
+     * already convey progress).
      */
     private function seedAuditSteps(): void
     {
         $steps = [
-            // Track A (pillars) — BB27 inserted fetch_gmaps_reviews
-            // between Places-API metadata and pillar scoring, and
-            // apply_experience_penalties after the pillar loop.
-            ['key' => 'fetch_gmaps',                'track' => 'a',     'order' => 1],
-            ['key' => 'fetch_gmaps_reviews',        'track' => 'a',     'order' => 2],
-            ['key' => 'score_recall',               'track' => 'a',     'order' => 3],
-            ['key' => 'score_digital',              'track' => 'a',     'order' => 4],
-            ['key' => 'score_konsistensi',          'track' => 'a',     'order' => 5],
-            ['key' => 'score_experience',           'track' => 'a',     'order' => 6],
-            ['key' => 'apply_experience_penalties', 'track' => 'a',     'order' => 7],
-            ['key' => 'aggregate_pillars',          'track' => 'a',     'order' => 8],
-            // Track B (Instagram)
-            ['key' => 'ig_scrape',                  'track' => 'b',     'order' => 9],
-            ['key' => 'ig_analysis',                'track' => 'b',     'order' => 10],
-            // Final — BB38 inserted three apikprimadya generator steps
-            // between batch completion and PDF render, ordered serial.
-            ['key' => 'generate_recommendations',   'track' => 'final', 'order' => 11],
-            ['key' => 'generate_quick_wins',        'track' => 'final', 'order' => 12],
-            ['key' => 'generate_positioning',       'track' => 'final', 'order' => 13],
-            ['key' => 'generate_pdf',               'track' => 'final', 'order' => 14],
+            // Phase 1 — gather (parallel)
+            ['key' => 'gather_places',              'track' => 'gather',   'order' => 1],
+            ['key' => 'gather_gmaps',               'track' => 'gather',   'order' => 2],
+            ['key' => 'gather_instagram',           'track' => 'gather',   'order' => 3],
+            // Phase 2 — validate
+            ['key' => 'validate_evidence',          'track' => 'validate', 'order' => 4],
+            // Phase 3 — score (serial inside ScorePillarsJob)
+            ['key' => 'score_recall',               'track' => 'score',    'order' => 5],
+            ['key' => 'score_digital',              'track' => 'score',    'order' => 6],
+            ['key' => 'score_konsistensi',          'track' => 'score',    'order' => 7],
+            ['key' => 'score_experience',           'track' => 'score',    'order' => 8],
+            // Phase 3 (continued) — insights + PDF
+            ['key' => 'generate_recommendations',   'track' => 'final',    'order' => 9],
+            ['key' => 'generate_quick_wins',        'track' => 'final',    'order' => 10],
+            ['key' => 'generate_positioning',       'track' => 'final',    'order' => 11],
+            ['key' => 'generate_pdf',               'track' => 'final',    'order' => 12],
         ];
 
         foreach ($steps as $s) {

@@ -7,10 +7,9 @@ namespace App\Jobs;
 use App\Models\AuditStep;
 use App\Models\BrandAudit;
 use App\Models\ScoringRubric;
-use App\Services\Fetchers\GoogleMapsReviewsFetcher;
+use App\Services\EvidenceMapper;
 use App\Services\Fetchers\TouchpointPresenceDetector;
 use App\Services\Fetchers\WebsiteFetcher;
-use App\Services\GMapsReviewsService;
 use App\Services\Scoring\ExperiencePenaltyDetector;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
@@ -23,51 +22,45 @@ use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
- * BB20 Track A: pillar scoring + aggregation.
+ * Phase 10 BB55: Phase 3 of the 3-phase pipeline.
  *
- * Runs the existing 4-pillar fetch + score + aggregate flow inline so
- * the outer Bus::batch in AnalyzeBrand can use ->then() reliably. Each
- * pillar runs synchronously (dispatchSync) inside this job — we lose
- * the previous intra-track parallelism but gain a single completion
- * boundary the outer batch can hang ->then() off.
+ * REFACTORED — no longer fetches data inline. The gather phase (BB52
+ * GatherEvidenceJob -> Fetch*Job) already populated audit_evidence;
+ * this job pulls inputs from EvidenceMapper instead.
  *
- * Phase 8 BB27: extended with two new units of work that bracket the
- * pillar loop:
+ *   gather_gmaps      -> evidence.places_api      (RecallScorer)
+ *   gather_gmaps      -> evidence.gmaps_scrape    (Recall + Experience penalty)
+ *   gather_instagram  -> evidence.instagram_*     (KonsistensiScorer post-BB57)
  *
- *   1. fetch_gmaps_reviews (after fetch_gmaps): GMapsReviewsService
- *      claims a 'gmaps' worker_credential from Hub and runs the W8
- *      Playwright scrape. Output lands on $audit->gmaps_reviews and
- *      flows into the Recall pillar's `full_reviews` input.
+ * Audit_steps surfaced: score_recall, score_digital, score_konsistensi,
+ * score_experience. The previous fetch_gmaps / fetch_gmaps_reviews /
+ * apply_experience_penalties / aggregate_pillars steps are gone —
+ * penalty application and aggregation are now implicit (no separate
+ * step rows; their logic still runs at the end of handle()).
  *
- *   2. apply_experience_penalties (after the pillar loop, before
- *      aggregate_pillars): ExperiencePenaltyDetector scans the same
- *      review corpus for keterlambatan / pakaian_hilang /
- *      no_response_wa patterns and subtracts deltas from the LLM-
- *      produced Experience pillar score. Penalty payload is folded
- *      into score_breakdown[experience][penalties] for PDF + dashboard
- *      surfacing (BB28 / BB29).
- *
- * Updates audit_steps rows pre-created by AnalyzeBrand so the loading
- * view (BB21) shows real-time progress for each step.
+ * Konsistensi pillar routes through KonsistensiScorer (BB54) instead
+ * of the generic LLM pathway. Behaviour is identical today; BB57 will
+ * swap the scorer's internal implementation to the multimodal vision
+ * call without changing this job.
  */
 class ScorePillarsJob implements ShouldQueue
 {
     use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    /** Bumped from 120s — gmaps scrape can add 30-90s. */
-    public int $timeout = 240;
+    /** Without inline gather, scoring runs in ~30-40s. Buffer for LLM retries. */
+    public int $timeout = 180;
 
     public function __construct(public readonly string $auditId) {}
 
     public function handle(
-        GMapsReviewsService $gmapsService,
+        EvidenceMapper $evidenceMapper,
         ExperiencePenaltyDetector $penaltyDetector,
     ): void {
         if ($this->batch()?->cancelled()) {
             return;
         }
 
-        $audit = BrandAudit::findOrFail($this->auditId);
+        $audit        = BrandAudit::findOrFail($this->auditId);
         $touchpoints  = (array) $audit->touchpoints;
         $brandName    = (string) $audit->brand_name;
         $serviceType  = (string) $audit->service_type;
@@ -78,51 +71,27 @@ class ScorePillarsJob implements ShouldQueue
         $waActive     = (bool) ($touchpoints['whatsapp_business_active'] ?? false);
         $photoPaths   = (array) ($touchpoints['outlet_photo_paths'] ?? []);
 
-        // ── Step 1: fetch Places API metadata ────────────────────────
-        $fetchStep = $this->step('fetch_gmaps');
-        $fetchStep?->markRunning();
-        $reviewData = $this->fetchReviews($gmapsUrl, $brandName);
+        // ── Inputs from gather phase (no inline fetches) ─────────────
+        $placesApi  = $evidenceMapper->placesApi($audit);
+        $fullReviews = $this->normalizeReviewsForScoring($evidenceMapper->fullReviews($audit));
+        $websiteData = $this->fetchWebsite($websiteUrl); // not yet in evidence layer
         $presence = (new TouchpointPresenceDetector())->detect([
             'instagram_url'            => $instagramUrl,
             'website_url'              => $websiteUrl,
             'gmaps_url'                => $gmapsUrl,
             'whatsapp_business_active' => $waActive,
             'tiktok_url'               => $tiktokUrl,
-            'review_count'             => $reviewData['review_count'],
-        ]);
-        $websiteData = $this->fetchWebsite($websiteUrl);
-        $fetchStep?->markDone(['review_count' => $reviewData['review_count'], 'rating' => $reviewData['rating']]);
-
-        // ── Step 1.5 (BB27): gmaps full-corpus scrape via worker ──────
-        $scrapeStep = $this->step('fetch_gmaps_reviews');
-        $scrapeStep?->markRunning();
-        try {
-            $gmapsService->fetch($audit);
-        } catch (Throwable $e) {
-            // GMapsReviewsService is supposed to swallow all errors; this
-            // catch is defensive in case something throws past it.
-            Log::warning('ScorePillarsJob: gmaps scrape threw unexpectedly', [
-                'audit_id' => $this->auditId, 'error' => $e->getMessage(),
-            ]);
-        }
-        $audit->refresh();
-        $fullReviews = $this->extractFullReviewsForScoring($audit);
-        $scrapeStep?->markDone([
-            'status'        => (string) $audit->gmaps_reviews_status,
-            'review_count'  => count($fullReviews),
+            'review_count'             => $placesApi['review_count'],
         ]);
 
-        // ── Step 2: score each pillar synchronously ──────────────────
+        // ── Per-pillar input bundles ─────────────────────────────────
         $pillarInputs = [
             ScoringRubric::PILLAR_RECALL => [
                 'brand_name'      => $brandName,
-                'rating'          => $reviewData['rating'],
-                'review_count'    => $reviewData['review_count'],
-                'keyword_hits'    => $reviewData['keyword_hits'],
-                'sampled_reviews' => $reviewData['sampled_reviews'],
-                // BB27: full_reviews drives the keyword + sentiment
-                // sub-buckets when populated; falls back to
-                // sampled_reviews otherwise (legacy + scrape failures).
+                'rating'          => $placesApi['rating'],
+                'review_count'    => $placesApi['review_count'],
+                'keyword_hits'    => $placesApi['keyword_hits'],
+                'sampled_reviews' => $placesApi['sampled_reviews'],
                 'full_reviews'    => $fullReviews,
             ],
             ScoringRubric::PILLAR_DIGITAL => array_merge(
@@ -144,7 +113,7 @@ class ScorePillarsJob implements ShouldQueue
                 'instagram_url'   => $instagramUrl,
                 'website_url'     => $websiteUrl,
                 'website_excerpt' => (string) ($websiteData['text_content'] ?? ''),
-                'keyword_hits'    => $reviewData['keyword_hits'],
+                'keyword_hits'    => $placesApi['keyword_hits'],
             ],
         ];
 
@@ -160,6 +129,7 @@ class ScorePillarsJob implements ShouldQueue
             $step?->markRunning();
             try {
                 ScorePillarJob::dispatchSync($this->auditId, $slug, $inputs);
+                $this->stampDataSourceForPillar($slug, $evidenceMapper, $audit);
                 $step?->markDone();
             } catch (Throwable $e) {
                 Log::warning('ScorePillarsJob: pillar failed', [
@@ -169,35 +139,19 @@ class ScorePillarsJob implements ShouldQueue
             }
         }
 
-        // ── Step 2.5 (BB27): apply experience penalties from full_reviews ─
-        $penaltyStep = $this->step('apply_experience_penalties');
-        if ($penaltyStep !== null) {
-            $penaltyStep->markRunning();
-            try {
-                $payload = $penaltyDetector->detect($this->experienceReviewsForPenaltyDetector($audit));
-                $this->applyExperiencePenalties($payload);
-                $penaltyStep->markDone([
-                    'total_penalty'   => (int) $payload['total_penalty'],
-                    'reviews_scanned' => (int) $payload['reviews_scanned'],
-                ]);
-            } catch (Throwable $e) {
-                Log::warning('ScorePillarsJob: experience penalty application failed', [
-                    'audit_id' => $this->auditId, 'error' => $e->getMessage(),
-                ]);
-                $penaltyStep->markFailed($e->getMessage());
-            }
+        // ── Implicit: experience penalties (no step row anymore) ─────
+        try {
+            $reviews = $this->reviewsForPenaltyDetector($evidenceMapper->fullReviews($audit));
+            $payload = $penaltyDetector->detect($reviews);
+            $this->applyExperiencePenalties($payload);
+        } catch (Throwable $e) {
+            Log::warning('ScorePillarsJob: experience penalty application failed', [
+                'audit_id' => $this->auditId, 'error' => $e->getMessage(),
+            ]);
         }
 
-        // ── Step 3: aggregate ────────────────────────────────────────
-        $aggStep = $this->step('aggregate_pillars');
-        $aggStep?->markRunning();
-        try {
-            AggregateAuditJob::dispatchSync($this->auditId);
-            $aggStep?->markDone();
-        } catch (Throwable $e) {
-            $aggStep?->markFailed($e->getMessage());
-            throw $e;
-        }
+        // ── Implicit: aggregate ──────────────────────────────────────
+        AggregateAuditJob::dispatchSync($this->auditId);
     }
 
     private function step(string $key): ?AuditStep
@@ -205,22 +159,6 @@ class ScorePillarsJob implements ShouldQueue
         return AuditStep::where('brand_audit_id', $this->auditId)
             ->where('step_key', $key)
             ->first();
-    }
-
-    /** @return array{rating:float,review_count:int,keyword_hits:array<string,mixed>,sampled_reviews:list<mixed>} */
-    private function fetchReviews(string $gmapsUrl, string $brandName): array
-    {
-        $fallback = ['rating' => 0.0, 'review_count' => 0, 'keyword_hits' => ['positive' => [], 'negative' => []], 'sampled_reviews' => []];
-        $key = (string) config('services.google.maps_api_key', '');
-        if ($key === '' || $gmapsUrl === '') {
-            return $fallback;
-        }
-        try {
-            return (new GoogleMapsReviewsFetcher($key))->fetch($gmapsUrl, $brandName) ?? $fallback;
-        } catch (Throwable $e) {
-            Log::warning('ScorePillarsJob: GMaps fetch failed', ['error' => $e->getMessage()]);
-            return $fallback;
-        }
     }
 
     /** @return array<string,mixed>|null */
@@ -238,22 +176,16 @@ class ScorePillarsJob implements ShouldQueue
     }
 
     /**
-     * Pull the persisted gmaps_reviews payload into the {text, rating}
-     * shape RecallScorer expects. Returns [] when the scrape produced
-     * no reviews (no_credentials_available, scrape_failed, legacy
-     * audits, etc.) so the scorer falls back to sampled_reviews.
+     * Normalize EvidenceMapper::fullReviews() output into the
+     * {text, rating} shape RecallScorer expects.
      *
+     * @param  list<array<string,mixed>> $reviews
      * @return list<array{text: string, rating: float}>
      */
-    private function extractFullReviewsForScoring(BrandAudit $audit): array
+    private function normalizeReviewsForScoring(array $reviews): array
     {
-        $payload = (array) ($audit->gmaps_reviews ?? []);
-        $reviews = (array) ($payload['reviews'] ?? []);
         $out = [];
         foreach ($reviews as $review) {
-            if (! is_array($review)) {
-                continue;
-            }
             $text = (string) ($review['text'] ?? '');
             if ($text === '') {
                 continue;
@@ -267,21 +199,16 @@ class ScorePillarsJob implements ShouldQueue
     }
 
     /**
-     * Same source as RecallScorer (gmaps_reviews.reviews) but kept in
-     * the scrape's native {author, rating_value, text} shape so the
-     * penalty detector's evidence captures stay informative.
+     * Native {author, rating_value, text} shape for the penalty
+     * detector (its evidence captures depend on author + rating).
      *
+     * @param  list<array<string,mixed>> $reviews
      * @return list<array{author?: string, rating_value?: int, text?: string}>
      */
-    private function experienceReviewsForPenaltyDetector(BrandAudit $audit): array
+    private function reviewsForPenaltyDetector(array $reviews): array
     {
-        $payload = (array) ($audit->gmaps_reviews ?? []);
-        $reviews = (array) ($payload['reviews'] ?? []);
         $out = [];
         foreach ($reviews as $review) {
-            if (! is_array($review)) {
-                continue;
-            }
             $out[] = [
                 'author'       => (string) ($review['author'] ?? ''),
                 'rating_value' => (int) ($review['rating_value'] ?? 0),
@@ -289,6 +216,43 @@ class ScorePillarsJob implements ShouldQueue
             ];
         }
         return $out;
+    }
+
+    /**
+     * BB54 provenance trail: write a data_source list into each
+     * pillar's score_breakdown so operators can trace which evidence
+     * keys the score relied on. ScorePillarJob has already persisted
+     * the pillar's score row; this is an additive enrichment.
+     */
+    private function stampDataSourceForPillar(string $slug, EvidenceMapper $mapper, BrandAudit $audit): void
+    {
+        $sources = match ($slug) {
+            ScoringRubric::PILLAR_RECALL => array_filter([
+                'places_api',
+                $mapper->fullReviews($audit) !== [] ? 'gmaps_scrape' : null,
+            ]),
+            ScoringRubric::PILLAR_DIGITAL => ['touchpoint_presence'],
+            ScoringRubric::PILLAR_KONSISTENSI => array_filter([
+                'touchpoint_urls',
+                ! empty($audit->touchpoints['outlet_photo_paths'] ?? []) ? 'outlet_photo_paths' : null,
+                $mapper->instagramRaw($audit)['screenshot_path'] !== null ? 'instagram_screenshot' : null,
+            ]),
+            ScoringRubric::PILLAR_EXPERIENCE => array_filter([
+                'places_api',
+                $mapper->fullReviews($audit) !== [] ? 'gmaps_scrape' : null,
+                'website_fetch',
+            ]),
+            default => [],
+        };
+
+        DB::transaction(function () use ($slug, $sources): void {
+            $audit = BrandAudit::findOrFail($this->auditId);
+            $breakdown = (array) ($audit->score_breakdown ?? []);
+            $pillar    = (array) ($breakdown[$slug] ?? []);
+            $pillar['data_source'] = array_values($sources);
+            $breakdown[$slug] = $pillar;
+            $audit->update(['score_breakdown' => $breakdown]);
+        });
     }
 
     /**
