@@ -841,6 +841,146 @@ SYS;
         return $decoded;
     }
 
+    /**
+     * BB53: Phase 10 cross-touchpoint brand-match validation.
+     *
+     * Asks Claude whether the scraped GMaps business + Instagram profile
+     * likely belong to the same brand the user typed in. Heuristic
+     * fuzzy match runs first in ValidateEvidenceJob; this method is the
+     * LLM tie-breaker that catches semantic equivalence (e.g.
+     * "Less Worry Laundry" vs "Less Worry | Laundry Bebas Worry") that
+     * raw Levenshtein on the surface strings would miss, AND flags
+     * cross-source contradictions a single-source heuristic can't see.
+     *
+     * Output schema (always parseable; falls back to neutral on error):
+     *   {
+     *     "confidence":       float 0.0-1.0,
+     *     "brand_name_match": true|false|null,
+     *     "city_match":       true|false|null,
+     *     "warnings":         string[],
+     *     "reasoning":        string  // brief explanation
+     *   }
+     *
+     * @param array<string,mixed> $evidence
+     * @return array{confidence: float, brand_name_match: bool|null, city_match: bool|null, warnings: list<string>, reasoning: string}
+     */
+    public function validateBrandMatch(string $brandName, ?string $city, array $evidence): array
+    {
+        $model = (string) config('services.anthropic.model_validation', 'claude-haiku-4-5');
+
+        $gmaps    = (array) ($evidence['gmaps_scrape'] ?? []);
+        $igAudit  = (array) ($evidence['instagram_audit'] ?? []);
+        $igAnal   = (array) ($evidence['instagram_analysis'] ?? []);
+        $places   = (array) ($evidence['places_api'] ?? []);
+
+        $summary = [
+            'input_brand'             => $brandName,
+            'input_city'              => $city ?: '(not provided)',
+            'gmaps_business_name'     => (string) ($gmaps['business_name'] ?? ''),
+            'gmaps_address'           => (string) ($gmaps['address'] ?? ''),
+            'gmaps_review_count'      => (int) ($gmaps['total_review_count'] ?? 0),
+            'places_api_address'      => (string) ($places['address'] ?? ''),
+            'instagram_username'      => (string) ($igAudit['username'] ?? ''),
+            'instagram_profile_name'  => (string) ($igAnal['profile_branding']['name'] ?? ''),
+        ];
+
+        $userMessage = "Validate whether the scraped touchpoint data below describes the same brand the user typed.\n\n"
+            . "USER INPUT:\n"
+            . "  brand_name: " . $summary['input_brand'] . "\n"
+            . "  city: " . $summary['input_city'] . "\n\n"
+            . "SCRAPED DATA:\n"
+            . "  gmaps_business_name: " . ($summary['gmaps_business_name'] ?: '(no scrape)') . "\n"
+            . "  gmaps_address: " . ($summary['gmaps_address'] ?: '(none)') . "\n"
+            . "  gmaps_review_count: " . $summary['gmaps_review_count'] . "\n"
+            . "  places_api_address: " . ($summary['places_api_address'] ?: '(none)') . "\n"
+            . "  instagram_username: " . ($summary['instagram_username'] ?: '(no scrape)') . "\n"
+            . "  instagram_profile_name: " . ($summary['instagram_profile_name'] ?: '(none)') . "\n\n"
+            . "Treat semantic equivalents as matching (\"Less Worry Laundry\" matches \"Less Worry | Laundry Bebas Worry\"). "
+            . "Treat city tokens as matching when the address contains the city name in any form. "
+            . "Return ONLY a JSON object (no prose, no fences):\n"
+            . "{\n"
+            . '  "confidence": <float 0.0-1.0; how confident scraped data describes the input brand>,' . "\n"
+            . '  "brand_name_match": <true | false | null if no scraped names available>,' . "\n"
+            . '  "city_match": <true | false | null if no address or input city missing>,' . "\n"
+            . '  "warnings": <array of short Indonesian-language operator-facing strings; empty if no concerns>,' . "\n"
+            . '  "reasoning": <one-sentence English explanation>' . "\n"
+            . "}";
+
+        try {
+            $response = $this->client->messages->create(
+                maxTokens: 512,
+                messages: [['role' => 'user', 'content' => $userMessage]],
+                model: $model,
+                temperature: 0.1,
+            );
+        } catch (\Throwable $e) {
+            Log::warning('ClaudeService::validateBrandMatch — API call failed', [
+                'brand_name' => $brandName, 'error' => $e->getMessage(),
+            ]);
+            return $this->neutralValidationResult('LLM validation call failed: ' . $e->getMessage());
+        }
+
+        $raw     = $this->extractText($response);
+        $cleaned = $this->stripFences($raw);
+        $decoded = json_decode($cleaned, true);
+
+        if (! is_array($decoded)) {
+            Log::warning('ClaudeService::validateBrandMatch — JSON parse failed', [
+                'brand_name' => $brandName, 'raw' => substr($raw, 0, 200),
+            ]);
+            return $this->neutralValidationResult('LLM response was not valid JSON');
+        }
+
+        $confidence = (float) ($decoded['confidence'] ?? 0.5);
+        $confidence = max(0.0, min(1.0, $confidence));
+
+        return [
+            'confidence'       => $confidence,
+            'brand_name_match' => $this->normalizeNullableBool($decoded['brand_name_match'] ?? null),
+            'city_match'       => $this->normalizeNullableBool($decoded['city_match'] ?? null),
+            'warnings'         => array_values(array_filter(
+                array_map('strval', (array) ($decoded['warnings'] ?? [])),
+                fn (string $w): bool => $w !== '',
+            )),
+            'reasoning'        => (string) ($decoded['reasoning'] ?? ''),
+        ];
+    }
+
+    /**
+     * Neutral fallback when LLM call/parse fails. Confidence 0.5 means
+     * "no signal" — the heuristic pre-pass in ValidateEvidenceJob is
+     * authoritative on its own findings; this fallback ensures the
+     * pipeline keeps moving without false-positive warnings.
+     *
+     * @return array{confidence: float, brand_name_match: bool|null, city_match: bool|null, warnings: list<string>, reasoning: string}
+     */
+    private function neutralValidationResult(string $reason): array
+    {
+        return [
+            'confidence'       => 0.5,
+            'brand_name_match' => null,
+            'city_match'       => null,
+            'warnings'         => [],
+            'reasoning'        => $reason,
+        ];
+    }
+
+    private function normalizeNullableBool(mixed $v): ?bool
+    {
+        if ($v === null) {
+            return null;
+        }
+        if (is_bool($v)) {
+            return $v;
+        }
+        $s = strtolower((string) $v);
+        return match ($s) {
+            'true', '1', 'yes' => true,
+            'false', '0', 'no' => false,
+            default            => null,
+        };
+    }
+
     // -------------------------------------------------------------------------
     // Deterministic pillars (score via math, narrative via LLM)
     // -------------------------------------------------------------------------
