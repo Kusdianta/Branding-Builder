@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Fetchers;
 
+use App\Services\HubUsageLogger;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -26,7 +27,15 @@ final class GoogleMapsReviewsFetcher
     private const MAX_RETRIES      = 3;
     private const RETRY_BASE_MS    = 1000;
 
-    public function __construct(private readonly string $apiKey) {}
+    public function __construct(
+        private readonly string $apiKey,
+        // BB66: optional logger so the Hub api_usage_log captures Google
+        // Places per-call billing. Optional so legacy ad-hoc instantiation
+        // (e.g. unit tests) keeps working.
+        private readonly ?HubUsageLogger $usageLogger = null,
+        // BB66: optional audit context for per-audit cost rollup.
+        private readonly ?string $auditId = null,
+    ) {}
 
     /**
      * @return array{
@@ -118,6 +127,12 @@ final class GoogleMapsReviewsFetcher
                 'textQuery' => $brandName,
             ]);
 
+            // BB66: text-search is billed under the Pro tier ($32/1000).
+            // Logged regardless of result count — Google charges per call.
+            $this->logGoogle('text-search-pro', 'place_text_search', 1, [
+                'brand_name' => $brandName,
+            ]);
+
             $places = $response->json('places', []);
 
             return ! empty($places) ? (string) ($places[0]['id'] ?? '') ?: null : null;
@@ -142,6 +157,16 @@ final class GoogleMapsReviewsFetcher
                 ])
                 ->timeout(8)
                 ->get(self::PLACES_API_BASE . '/' . $placeId);
+
+                // BB66: Place Details Pro tier is $17/1000. The field mask
+                // includes reviews + userRatingCount which are Pro-tier
+                // fields; Essentials would be $5/1000 but doesn't include
+                // reviews. Each retry attempt is a billable call.
+                $this->logGoogle('place-details-pro', 'place_details_fetch', 1, [
+                    'place_id'    => $placeId,
+                    'attempt'     => $attempt + 1,
+                    'http_status' => $response->status(),
+                ]);
 
                 if ($response->status() === 404) {
                     return null;
@@ -234,5 +259,29 @@ final class GoogleMapsReviewsFetcher
         }
 
         return $result;
+    }
+
+    /**
+     * BB66: fire-and-forget Google Places usage logger. Swallows
+     * exceptions so a Hub outage never breaks a Places API fetch.
+     *
+     * @param array<string,mixed>|null $metadata
+     */
+    private function logGoogle(string $sku, string $operation, int $requestCount = 1, ?array $metadata = null): void
+    {
+        if ($this->usageLogger === null) {
+            return;
+        }
+        try {
+            $this->usageLogger->logGoogle(
+                sku: $sku,
+                operation: $operation,
+                requestCount: $requestCount,
+                auditId: $this->auditId,
+                metadata: $metadata,
+            );
+        } catch (\Throwable) {
+            // logger is already fire-and-forget; defence-in-depth.
+        }
     }
 }

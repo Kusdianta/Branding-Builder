@@ -7,6 +7,7 @@ namespace App\Jobs;
 use App\Models\AuditStep;
 use App\Models\BrandAudit;
 use App\Services\Fetchers\GoogleMapsReviewsFetcher;
+use App\Services\HubUsageLogger;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -36,7 +37,7 @@ class FetchPlacesApiJob implements ShouldQueue
 
     public function __construct(public readonly string $auditId) {}
 
-    public function handle(): void
+    public function handle(HubUsageLogger $usageLogger): void
     {
         if ($this->batch()?->cancelled()) {
             return;
@@ -61,7 +62,11 @@ class FetchPlacesApiJob implements ShouldQueue
         }
 
         try {
-            $payload = (new GoogleMapsReviewsFetcher($apiKey))->fetch($gmapsUrl, $brandName);
+            // BB66: thread the HubUsageLogger + audit id into the fetcher so
+            // each chargeable Places API call (text-search + place-details)
+            // posts a row to the Hub api_usage_log endpoint.
+            $payload = (new GoogleMapsReviewsFetcher($apiKey, $usageLogger, $this->auditId))
+                ->fetch($gmapsUrl, $brandName);
             $this->writeEvidenceSlice($payload);
             $step?->markDone([
                 'review_count' => (int) ($payload['review_count'] ?? 0),

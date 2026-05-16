@@ -78,7 +78,10 @@ class GatherEvidenceJobTest extends TestCase
         $step  = $this->seedStep($audit, 'gather_places', 'gather', 1);
 
         config(['services.google.maps_api_key' => '']);
-        (new FetchPlacesApiJob($audit->id))->handle();
+        // BB66: handle() now takes a HubUsageLogger dep — the no-api-key
+        // path short-circuits before any logger calls, so resolving the
+        // real bound instance works fine here.
+        (new FetchPlacesApiJob($audit->id))->handle($this->app->make(\App\Services\HubUsageLogger::class));
 
         $audit->refresh();
         $step->refresh();
