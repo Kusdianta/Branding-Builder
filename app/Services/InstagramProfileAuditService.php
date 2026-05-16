@@ -222,6 +222,9 @@ class InstagramProfileAuditService
 
         $meta = (array) ($snapshot['_meta'] ?? []);
 
+        // BB66: tag the IG analyze Claude call with the audit id.
+        $this->claude->setAuditContext($audit->id);
+
         try {
             $analysis = $this->claude->analyzeInstagramProfile(
                 $result,

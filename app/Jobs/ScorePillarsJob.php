@@ -10,6 +10,7 @@ use App\Models\ScoringRubric;
 use App\Services\EvidenceMapper;
 use App\Services\Fetchers\TouchpointPresenceDetector;
 use App\Services\Fetchers\WebsiteFetcher;
+use App\Services\ClaudeService;
 use App\Services\Scoring\ExperiencePenaltyDetector;
 use App\Services\Scoring\ExperienceScorer;
 use App\Services\Scoring\KonsistensiScorer;
@@ -59,10 +60,16 @@ class ScorePillarsJob implements ShouldQueue
         ExperiencePenaltyDetector $penaltyDetector,
         KonsistensiScorer $konsistensiScorer,
         ExperienceScorer $experienceScorer,
+        ClaudeService $claude,
     ): void {
         if ($this->batch()?->cancelled()) {
             return;
         }
+
+        // BB66: tag all Claude calls from this score phase (Konsistensi
+        // vision + per-pillar LLM scoring) with the audit id so the Hub
+        // api_usage_log dashboard can produce per-audit cost rollups.
+        $claude->setAuditContext($this->auditId);
 
         $audit        = BrandAudit::findOrFail($this->auditId);
         $touchpoints  = (array) $audit->touchpoints;

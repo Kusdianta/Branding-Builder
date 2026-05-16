@@ -36,6 +36,10 @@ class ScorePillarJob implements ShouldQueue
             return;
         }
 
+        // BB66: tag the api_usage_log rows from this Claude call with
+        // the audit id for per-audit cost rollups in the Hub dashboard.
+        $claude->setAuditContext($this->auditId);
+
         try {
             $score = $claude->scorePillar($this->pillarSlug, $this->fetcherData);
 

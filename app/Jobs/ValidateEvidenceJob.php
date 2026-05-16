@@ -61,6 +61,9 @@ class ValidateEvidenceJob implements ShouldQueue
             return;
         }
 
+        // BB66: tag api_usage_log rows with the audit id.
+        $claude->setAuditContext($this->auditId);
+
         $step = $this->step('validate_evidence');
         $step?->markRunning();
 

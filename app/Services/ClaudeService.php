@@ -77,8 +77,18 @@ class ClaudeService
 
     private string $model;
 
+    /**
+     * BB66: optional per-audit context for usage logging. Set by job-level
+     * callers (ScorePillarsJob, GenerateInsightsJob, etc.) so the
+     * api_usage_log rows can be rolled up per audit for cost transparency.
+     * Singleton-safe in practice — queue workers handle one job at a time
+     * and the wizard's audit lifecycle is request-scoped.
+     */
+    private ?string $auditContextId = null;
+
     public function __construct(
         private readonly SearchRecallScorer $searchRecallScorer,
+        private readonly ?HubUsageLogger $usageLogger = null,
     ) {
         $apiKey = (string) config('services.anthropic.key', '');
         if ($apiKey === '') {
@@ -87,6 +97,56 @@ class ClaudeService
 
         $this->client = new Client(apiKey: $apiKey);
         $this->model  = (string) config('services.anthropic.model', self::DEFAULT_MODEL);
+    }
+
+    /**
+     * BB66: bind the current audit id so subsequent Claude calls log
+     * api_usage_log rows tagged with it. Call once at the top of any
+     * job that processes a single BrandAudit. Pass null to clear.
+     */
+    public function setAuditContext(?string $auditId): void
+    {
+        $this->auditContextId = $auditId;
+    }
+
+    /**
+     * BB66: capture response.usage and POST to Hub.
+     * Tolerant of usage being absent (defensive: SDK quirks, fallback paths).
+     * Never throws.
+     *
+     * @param object|null $response Anthropic SDK response with `usage` property
+     * @param array<string,mixed>|null $metadata Free-form context
+     */
+    private function recordClaudeUsage(
+        string $operation,
+        string $model,
+        ?object $response,
+        ?array $metadata = null,
+    ): void {
+        if ($this->usageLogger === null || $response === null) {
+            return;
+        }
+
+        $usage = $response->usage ?? null;
+        if (! is_object($usage)) {
+            return;
+        }
+
+        try {
+            $this->usageLogger->logClaude(
+                model: $model,
+                operation: $operation,
+                inputTokens: isset($usage->inputTokens) ? (int) $usage->inputTokens : null,
+                outputTokens: isset($usage->outputTokens) ? (int) $usage->outputTokens : null,
+                cacheCreationInputTokens: isset($usage->cacheCreationInputTokens) ? (int) $usage->cacheCreationInputTokens : null,
+                cacheReadInputTokens: isset($usage->cacheReadInputTokens) ? (int) $usage->cacheReadInputTokens : null,
+                auditId: $this->auditContextId,
+                metadata: $metadata,
+            );
+        } catch (\Throwable) {
+            // Defence-in-depth: logger itself is fire-and-forget but
+            // catch here in case the response shape surprises us.
+        }
     }
 
     /**
@@ -146,6 +206,7 @@ class ClaudeService
                     system: $systemPrompt,
                     temperature: self::ANALYSIS_TEMPERATURE,
                 );
+                $this->recordClaudeUsage('analyze_instagram_profile', $model, $response, ['attempt' => $attempt]);
             } catch (\Throwable $e) {
                 if ($attempt >= self::ANALYSIS_RETRY_ATTEMPTS) {
                     return $this->fallbackAnalysis(
@@ -828,6 +889,7 @@ SYS;
             model: $this->model,
             temperature: self::KIT_TEMPERATURE,
         );
+        $this->recordClaudeUsage('generate_activation_kit', $this->model, $response);
 
         $raw     = $this->extractText($response);
         $cleaned = $this->stripFences($raw);
@@ -943,6 +1005,7 @@ SYS;
                 model: $model,
                 temperature: 0.2,
             );
+            $this->recordClaudeUsage('analyze_brand_consistency', $model, $response);
         } catch (\Throwable $e) {
             Log::warning('ClaudeService::analyzeBrandConsistency — API call failed', [
                 'brand_name'        => $brandName,
@@ -1083,6 +1146,7 @@ SYS;
                 model: $model,
                 temperature: 0.1,
             );
+            $this->recordClaudeUsage('validate_brand_match', $model, $response);
         } catch (\Throwable $e) {
             Log::warning('ClaudeService::validateBrandMatch — API call failed', [
                 'brand_name' => $brandName, 'error' => $e->getMessage(),
@@ -1217,6 +1281,7 @@ SYS;
                 model: $model,
                 temperature: 0.1,
             );
+            $this->recordClaudeUsage('verify_service_signals', $model, $response);
         } catch (\Throwable $e) {
             Log::warning('ClaudeService::verifyServiceSignals — API call failed', [
                 'error' => $e->getMessage(),
@@ -1327,6 +1392,7 @@ SYS;
             system: $rubric->system_prompt,
             temperature: self::SCORING_TEMPERATURE,
         );
+        $this->recordClaudeUsage('score_pillar_narrative', $this->model, $response, ['pillar' => $pillarSlug]);
 
         $raw  = $this->extractText($response);
         return $this->parseNarrativeJson($pillarSlug, $raw);
@@ -1360,6 +1426,7 @@ SYS;
             system: $rubric->system_prompt,
             temperature: self::SCORING_TEMPERATURE,
         );
+        $this->recordClaudeUsage('score_pillar_llm', $this->model, $response, ['pillar' => $pillarSlug]);
 
         $raw    = $this->extractText($response);
         $parsed = $this->parseLlmPillarJson($pillarSlug, $raw);

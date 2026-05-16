@@ -80,6 +80,9 @@ class ValidateEvidenceJobTest extends TestCase
     private function mockClaude(array $response): ClaudeService
     {
         $m = Mockery::mock(ClaudeService::class);
+        // BB66: ValidateEvidenceJob now tags Claude calls with audit id.
+        // Allow zero-or-more calls — we don't care about the exact count.
+        $m->shouldReceive('setAuditContext')->withAnyArgs()->andReturnNull();
         $m->shouldReceive('validateBrandMatch')->once()->andReturn($response);
         $this->app->instance(ClaudeService::class, $m);
         return $m;
