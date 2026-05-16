@@ -238,6 +238,73 @@ new class extends Component {
         $this->dispatch('open-modal-recommendations');
     }
 
+    /**
+     * BB59: re-run a single gather step + re-flow scoring + PDF.
+     * Routes through AuditController::retryStep so the same dispatch
+     * chain runs whether triggered via this Livewire action or a
+     * straight POST to /audit/{token}/retry-step.
+     */
+    public function retryStep(string $stepKey): void
+    {
+        $allowed = ['gather_gmaps', 'gather_instagram'];
+        if (! in_array($stepKey, $allowed, true) || ! $this->auditId) {
+            return;
+        }
+
+        $audit = BrandAudit::find($this->auditId);
+        if (! $audit) {
+            return;
+        }
+
+        $step = \App\Models\AuditStep::where('brand_audit_id', $audit->id)
+            ->where('step_key', $stepKey)
+            ->first();
+        if ($step === null) {
+            return;
+        }
+
+        $step->update([
+            'status'       => \App\Models\AuditStep::STATUS_PENDING,
+            'started_at'   => null,
+            'completed_at' => null,
+            'detail'       => null,
+        ]);
+
+        \App\Models\AuditStep::where('brand_audit_id', $audit->id)
+            ->whereIn('step_key', [
+                'score_recall', 'score_digital', 'score_konsistensi', 'score_experience',
+                'generate_recommendations', 'generate_quick_wins', 'generate_positioning', 'generate_pdf',
+            ])
+            ->update([
+                'status'       => \App\Models\AuditStep::STATUS_PENDING,
+                'started_at'   => null,
+                'completed_at' => null,
+                'detail'       => null,
+            ]);
+
+        $audit->update(['status' => BrandAudit::STATUS_ANALYZING]);
+
+        $fetchJob = $stepKey === 'gather_gmaps'
+            ? new \App\Jobs\FetchGMapsReviewsJob($audit->id)
+            : new \App\Jobs\FetchInstagramAuditJob($audit->id);
+
+        \Illuminate\Support\Facades\Bus::batch([$fetchJob])
+            ->name("audit:{$audit->id}:retry-{$stepKey}")
+            ->allowFailures()
+            ->then(static function (\Illuminate\Bus\Batch $batch) use ($audit): void {
+                \Illuminate\Support\Facades\Bus::batch([new \App\Jobs\ScorePillarsJob($audit->id)])
+                    ->name("audit:{$audit->id}:retry-score")
+                    ->then(static function (\Illuminate\Bus\Batch $b2) use ($audit): void {
+                        \App\Jobs\GenerateInsightsJob::dispatch($audit->id);
+                    })
+                    ->dispatch();
+            })
+            ->dispatch();
+
+        $audit->refresh();
+        $this->loadAudit($audit);
+    }
+
     public function closeModal(): void
     {
         $this->modalPillar = null;
@@ -658,8 +725,10 @@ new class extends Component {
                 </p>
             </div>
 
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                @foreach (['a', 'b'] as $trackKey)
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                {{-- BB55: render the new 3-phase tracks (gather / validate / score).
+                     Final goes in its own row below. --}}
+                @foreach (['gather', 'validate', 'score'] as $trackKey)
                     <x-nui-card>
                         <p style="font-size: 11px; font-weight: 600; color: var(--text-tertiary); letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 12px;">
                             {{ $trackLabels[$trackKey] ?? $trackKey }}
@@ -672,9 +741,23 @@ new class extends Component {
                                         {{ $stepLabels[$s['key']] ?? $s['key'] }}
                                     </span>
                                 </div>
-                                @if ($s['elapsed_s'] !== null)
-                                    <span style="font-size: 11px; color: var(--text-tertiary); font-variant-numeric: tabular-nums;">{{ $s['elapsed_s'] }}s</span>
-                                @endif
+                                <div class="flex items-center gap-2">
+                                    @if ($s['elapsed_s'] !== null)
+                                        <span style="font-size: 11px; color: var(--text-tertiary); font-variant-numeric: tabular-nums;">{{ $s['elapsed_s'] }}s</span>
+                                    @endif
+                                    {{-- BB59: per-row "Coba lagi" button for retryable gather steps. --}}
+                                    @if ($s['status'] === 'failed' && in_array($s['key'], ['gather_gmaps', 'gather_instagram']))
+                                        <button
+                                            type="button"
+                                            wire:click="retryStep('{{ $s['key'] }}')"
+                                            wire:loading.attr="disabled"
+                                            style="font-size: 11px; padding: 4px 10px; border: 1px solid var(--color-danger); color: var(--color-danger); border-radius: var(--radius-pill); background: var(--surface-card);"
+                                            title="Ulangi langkah ini dan re-skor"
+                                        >
+                                            Coba lagi
+                                        </button>
+                                    @endif
+                                </div>
                             </div>
                         @empty
                             <p style="font-size: 13px; color: var(--text-tertiary);">(menunggu jadwal)</p>

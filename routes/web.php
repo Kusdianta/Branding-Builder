@@ -16,4 +16,8 @@ Route::get('/audit/{token}/status', [AuditController::class, 'status'])->name('a
 
 Route::post('/audit/{token}/kit', [AuditController::class, 'generateKit'])->name('audit.kit.generate');
 
+// BB59: retry a single gather step + re-flow scoring/PDF.
+Route::post('/audit/{token}/retry-step', [AuditController::class, 'retryStep'])
+    ->name('audit.retry-step');
+
 Route::get('/audit/{token}/kit/download', [AuditController::class, 'downloadKit'])->name('audit.kit.download');
