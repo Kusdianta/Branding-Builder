@@ -68,6 +68,21 @@ class GMapsReviewsService
 
             if ($credential === null) {
                 $status = $attempt === 1 ? 'no_credentials_available' : 'credentials_stale';
+                // BB61: surface the rotation outcome explicitly so
+                // operators can distinguish "no healthy creds at all"
+                // (status=no_credentials_available, attempt=1) from
+                // "the only healthy cred we had just went stale"
+                // (status=credentials_stale, attempt=2) without
+                // needing to read Hub state directly.
+                Log::warning('GMapsReviewsService: credential rotation exhausted', [
+                    'audit_id'         => $audit->id,
+                    'attempt'          => $attempt,
+                    'max_attempts'     => self::MAX_CREDENTIAL_ATTEMPTS,
+                    'resolved_status'  => $status,
+                    'reason'           => $attempt === 1
+                        ? 'Hub returned null on first claim — no healthy gmaps credentials available.'
+                        : 'Previous credential failed and Hub had no second healthy credential to rotate to.',
+                ]);
                 $this->persistStatus($audit, $status);
                 return;
             }
