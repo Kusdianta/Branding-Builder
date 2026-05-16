@@ -11,6 +11,7 @@ use App\Services\EvidenceMapper;
 use App\Services\Fetchers\TouchpointPresenceDetector;
 use App\Services\Fetchers\WebsiteFetcher;
 use App\Services\Scoring\ExperiencePenaltyDetector;
+use App\Services\Scoring\KonsistensiScorer;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -55,6 +56,7 @@ class ScorePillarsJob implements ShouldQueue
     public function handle(
         EvidenceMapper $evidenceMapper,
         ExperiencePenaltyDetector $penaltyDetector,
+        KonsistensiScorer $konsistensiScorer,
     ): void {
         if ($this->batch()?->cancelled()) {
             return;
@@ -124,11 +126,23 @@ class ScorePillarsJob implements ShouldQueue
             ScoringRubric::PILLAR_EXPERIENCE  => 'score_experience',
         ];
 
+        $evidence = (array) ($audit->audit_evidence ?? []);
+
         foreach ($pillarInputs as $slug => $inputs) {
             $step = $this->step($pillarStepMap[$slug]);
             $step?->markRunning();
             try {
-                ScorePillarJob::dispatchSync($this->auditId, $slug, $inputs);
+                if ($slug === ScoringRubric::PILLAR_KONSISTENSI) {
+                    // BB57+BB58: route Konsistensi through the dedicated
+                    // scorer so the vision multimodal call (or BB58
+                    // fallback) takes effect. The scorer returns a
+                    // PillarScore we persist with the same shape
+                    // ScorePillarJob would have written.
+                    $score = $konsistensiScorer->scoreFromEvidence($evidence, $inputs);
+                    $this->persistPillarScore($score);
+                } else {
+                    ScorePillarJob::dispatchSync($this->auditId, $slug, $inputs);
+                }
                 $this->stampDataSourceForPillar($slug, $evidenceMapper, $audit);
                 $step?->markDone();
             } catch (Throwable $e) {
@@ -159,6 +173,33 @@ class ScorePillarsJob implements ShouldQueue
         return AuditStep::where('brand_audit_id', $this->auditId)
             ->where('step_key', $key)
             ->first();
+    }
+
+    /**
+     * BB57: persist a PillarScore returned by KonsistensiScorer. Mirrors
+     * ScorePillarJob's persistence shape so the dashboard/PDF read
+     * paths don't need a code branch.
+     */
+    private function persistPillarScore(\App\DTO\PillarScore $score): void
+    {
+        DB::transaction(function () use ($score): void {
+            $audit = BrandAudit::findOrFail($this->auditId);
+
+            $pillarScores = (array) ($audit->pillar_scores ?? []);
+            $pillarScores[$score->pillarSlug] = $score->toArray();
+
+            $subBuckets = (array) ($audit->sub_bucket_scores ?? []);
+            $subBuckets[$score->pillarSlug] = $score->subBucketScores;
+
+            $scoreBreakdown = (array) ($audit->score_breakdown ?? []);
+            $scoreBreakdown[$score->pillarSlug] = $score->scoreBreakdown;
+
+            $audit->update([
+                'pillar_scores'     => $pillarScores,
+                'sub_bucket_scores' => $subBuckets,
+                'score_breakdown'   => $scoreBreakdown,
+            ]);
+        });
     }
 
     /** @return array<string,mixed>|null */
