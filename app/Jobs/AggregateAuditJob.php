@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Jobs;
 
 use App\Models\BrandAudit;
+use App\Services\CreditLedger;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -20,7 +21,7 @@ class AggregateAuditJob implements ShouldQueue
 
     public function __construct(public readonly string $auditId) {}
 
-    public function handle(): void
+    public function handle(CreditLedger $ledger): void
     {
         $audit = BrandAudit::findOrFail($this->auditId);
         $pillarScores = (array) ($audit->pillar_scores ?? []);
@@ -42,6 +43,11 @@ class AggregateAuditJob implements ShouldQueue
                 'status'        => BrandAudit::STATUS_FAILED,
                 'error_message' => 'Gagal menskoring pilar: ' . implode(', ', $failedPillars),
             ]);
+
+            // BB82: refund the credit so a hard-failed audit does not cost
+            // the user anything. CreditLedger::refund() is idempotent and
+            // a no-op for anonymous (pre-Phase-12a) audits with user_id null.
+            $ledger->refund($audit->fresh());
 
             return;
         }
@@ -78,6 +84,9 @@ class AggregateAuditJob implements ShouldQueue
                 'status'        => BrandAudit::STATUS_FAILED,
                 'error_message' => 'Agregasi gagal: ' . $e->getMessage(),
             ]);
+
+            // BB82: terminal failure → refund.
+            $ledger->refund($audit->fresh());
         }
     }
 

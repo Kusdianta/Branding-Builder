@@ -5,6 +5,9 @@ declare(strict_types=1);
 use App\Jobs\AnalyzeBrand;
 use App\Models\AuditStep;
 use App\Models\BrandAudit;
+use App\Services\CreditLedger;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Livewire\Volt\Component;
 use Livewire\WithFileUploads;
@@ -85,6 +88,11 @@ new class extends Component {
     // Modal
     public bool    $showModal   = false;
     public ?string $modalPillar = null;
+
+    // BB82: surfaced when a signed-in user tries to start an audit with
+    // zero credits. The wizard renders an "Sisa kredit habis" modal that
+    // explains the manual top-up path until Phase 12b ships Xendit.
+    public bool    $showInsufficientCreditsModal = false;
 
     protected array $rules = [
         'brandName'              => 'required|string|max:100',
@@ -270,8 +278,17 @@ new class extends Component {
         }
     }
 
-    public function submit(): void
+    public function submit(CreditLedger $ledger): void
     {
+        // BB82: gate audit creation on Google sign-in + a credit balance.
+        // Server-side check is the source of truth — the template hides
+        // the form for guests, but we still re-verify here in case the
+        // client posts past the gate (Livewire fingerprint replay, etc.).
+        if (! Auth::check()) {
+            $this->redirect(route('auth.google.redirect'));
+            return;
+        }
+
         $this->validate();
 
         // "At least 2 of 5 touchpoint signals" rule from Phase 4 spec
@@ -287,6 +304,14 @@ new class extends Component {
             return;
         }
 
+        // BB82: balance check after touchpoint validation so users do not
+        // lose form state when balance is low — they see the modal then
+        // can still edit + retry after a top-up.
+        if ((int) Auth::user()->credits_balance < 1) {
+            $this->showInsufficientCreditsModal = true;
+            return;
+        }
+
         $outerPaths = [];
         foreach ($this->outletPhotosOuter as $photo) {
             $outerPaths[] = $photo->store('outlet-photos', 'public');
@@ -299,33 +324,52 @@ new class extends Component {
 
         $token = Str::random(64);
 
-        $audit = BrandAudit::create([
-            'session_token' => $token,
-            'ip_address'    => request()->ip(),
-            'brand_name'    => $this->brandName,
-            'city'          => $this->city,
-            'service_type'  => $this->serviceType,
-            'touchpoints'   => [
-                'instagram_url'            => $this->instagramUrl,
-                'website_url'              => $this->websiteUrl,
-                'tiktok_url'               => $this->tiktokUrl,
-                'gmaps_url'                => $this->gmapsUrl,
-                'whatsapp_business_active' => $this->whatsappBusiness,
-                'outlet_photo_paths'       => array_merge($outerPaths, $innerPaths),
-                'outlet_photo_outer_paths' => $outerPaths,
-                'outlet_photo_inner_paths' => $innerPaths,
-            ],
-            // BB73: persist operator declarations only when at least one
-            // field was filled in. Null column means "operator skipped" so
-            // ExperienceScorer (BB75) treats every signal as undeclared.
-            'operator_declarations' => $this->collectOperatorDeclarations(),
-            'status'        => BrandAudit::STATUS_PENDING,
-            'expires_at'    => now()->addDays(30),
-        ]);
+        // BB82: audit row + credit debit must be a single transaction so a
+        // crash between the two cannot leave a paid-for audit with no row,
+        // or a row charged against a user that does not own it.
+        $audit = DB::transaction(function () use ($token, $outerPaths, $innerPaths, $ledger) {
+            $audit = BrandAudit::create([
+                'session_token'   => $token,
+                'user_id'         => Auth::id(),
+                'ip_address'      => request()->ip(),
+                'brand_name'      => $this->brandName,
+                'city'            => $this->city,
+                'service_type'    => $this->serviceType,
+                'touchpoints'     => [
+                    'instagram_url'            => $this->instagramUrl,
+                    'website_url'              => $this->websiteUrl,
+                    'tiktok_url'               => $this->tiktokUrl,
+                    'gmaps_url'                => $this->gmapsUrl,
+                    'whatsapp_business_active' => $this->whatsappBusiness,
+                    'outlet_photo_paths'       => array_merge($outerPaths, $innerPaths),
+                    'outlet_photo_outer_paths' => $outerPaths,
+                    'outlet_photo_inner_paths' => $innerPaths,
+                ],
+                'operator_declarations' => $this->collectOperatorDeclarations(),
+                'status'        => BrandAudit::STATUS_PENDING,
+                'expires_at'    => now()->addDays(30),
+            ]);
+
+            if (! $ledger->charge(Auth::user(), $audit)) {
+                // Defensive: the pre-check above guarantees balance >= 1,
+                // but a concurrent admin "remove credits" could change
+                // state between the check and the charge. Throwing aborts
+                // the transaction so neither the audit nor the debit
+                // commits and the user sees the insufficient-credits modal.
+                throw new \RuntimeException('Credit charge failed despite pre-check.');
+            }
+
+            return $audit;
+        });
 
         AnalyzeBrand::dispatch($audit->id);
 
         $this->redirect(route('audit.show', ['token' => $token]), navigate: true);
+    }
+
+    public function dismissInsufficientCreditsModal(): void
+    {
+        $this->showInsufficientCreditsModal = false;
     }
 
     public function pollStatus(): void
@@ -584,6 +628,46 @@ new class extends Component {
 
     {{-- ===== STEP 1: FORM ===== --}}
     @if ($step === 'touchpoint_inputs')
+        {{-- BB82: sign-in gate. Guests see a single-CTA card; signed-in
+             users see the full form. The wizard's submit() server-side
+             re-checks auth + balance, so the gate cannot be bypassed by
+             editing the client state. --}}
+        @guest
+            <section class="max-w-3xl mx-auto">
+                <div class="mb-8 text-center">
+                    <h1 style="font-size: 30px; font-weight: 600; color: var(--text-primary); letter-spacing: -0.01em;">Brand Health Check</h1>
+                    <p style="font-size: 15px; color: var(--text-secondary); margin-top: 8px; line-height: 1.6;">
+                        Masuk dengan akun Google untuk memulai audit pertama. Audit pertama gratis — tidak perlu kartu kredit.
+                    </p>
+                </div>
+                <div class="nui-card p-10 flex flex-col items-center gap-6 text-center">
+                    <div style="width: 64px; height: 64px; border-radius: 50%; background: var(--chimera-50); display: flex; align-items: center; justify-content: center;">
+                        <i class="ti ti-shield-check" style="font-size: 32px; color: var(--chimera-600);"></i>
+                    </div>
+                    <div>
+                        <h2 style="font-size: 20px; font-weight: 600; color: var(--text-primary);">Masuk untuk Mulai</h2>
+                        <p style="font-size: 14px; color: var(--text-secondary); margin-top: 6px; max-width: 360px;">
+                            Riwayat audit dan kredit Anda tersimpan di akun Google. Tidak ada password baru yang perlu diingat.
+                        </p>
+                    </div>
+                    @if (session('auth_error'))
+                        <div style="font-size: 13px; color: var(--color-danger); padding: 8px 14px; border: 1px solid var(--color-danger); border-radius: var(--radius-md);">
+                            {{ session('auth_error') }}
+                        </div>
+                    @endif
+                    <a
+                        href="{{ route('auth.google.redirect') }}"
+                        class="nui-btn-primary rounded-pill"
+                        style="font-size: 15px; font-weight: 500; padding: 12px 24px; display: inline-flex; align-items: center; gap: 10px;"
+                    >
+                        <i class="ti ti-brand-google"></i>
+                        Masuk dengan Google
+                    </a>
+                </div>
+            </section>
+        @endguest
+
+        @auth
         <section class="max-w-3xl mx-auto">
             <div class="mb-8">
                 <h1 style="font-size: 30px; font-weight: 600; color: var(--text-primary); letter-spacing: -0.01em;">Brand Health Check</h1>
@@ -983,6 +1067,30 @@ new class extends Component {
                 </form>
             </div>
         </section>
+        @endauth
+
+        {{-- BB82: insufficient-credits modal shown when a signed-in user
+             with balance < 1 tries to submit. The Phase 12b top-up flow
+             will replace the placeholder copy with a Xendit CTA. --}}
+        @if ($showInsufficientCreditsModal)
+            <div class="fixed inset-0 z-40 flex items-center justify-center p-6" style="background: rgba(15,20,17,0.55);" wire:click.self="dismissInsufficientCreditsModal">
+                <div class="nui-card max-w-md w-full p-8 text-center" style="position: relative;">
+                    <button type="button" wire:click="dismissInsufficientCreditsModal" style="position: absolute; top: 12px; right: 14px; background: none; border: none; color: var(--text-tertiary); font-size: 22px; cursor: pointer; line-height: 1;" aria-label="Tutup">
+                        <i class="ti ti-x"></i>
+                    </button>
+                    <div style="width: 56px; height: 56px; margin: 0 auto 16px; border-radius: 50%; background: var(--surface-muted); display: flex; align-items: center; justify-content: center;">
+                        <i class="ti ti-coin-off" style="font-size: 28px; color: var(--color-warning);"></i>
+                    </div>
+                    <h2 style="font-size: 20px; font-weight: 600; color: var(--text-primary);">Kredit Anda tidak cukup</h2>
+                    <p style="font-size: 14px; color: var(--text-secondary); margin-top: 8px; line-height: 1.6;">
+                        Audit baru membutuhkan 1 kredit. Saldo Anda saat ini 0. Top up kredit akan tersedia segera — sementara ini hubungi tim Nema untuk menambah saldo manual.
+                    </p>
+                    <button type="button" wire:click="dismissInsufficientCreditsModal" class="nui-btn-secondary rounded-pill" style="margin-top: 20px; font-size: 14px; padding: 10px 20px;">
+                        Mengerti
+                    </button>
+                </div>
+            </div>
+        @endif
     @endif
 
     {{-- ===== STEP 2: ANALYZING (BB21 live progress) ===== --}}
