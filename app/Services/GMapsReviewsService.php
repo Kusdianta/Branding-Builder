@@ -38,7 +38,7 @@ use Throwable;
  *   captcha_blocked           — CAPTCHA / consent interstitial
  *   scrape_failed             — catch-all; detail in gmaps_reviews.error
  */
-final class GMapsReviewsService
+class GMapsReviewsService
 {
     /**
      * Hardcoded by spec — 1 fallback credential attempt on

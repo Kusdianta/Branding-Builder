@@ -39,7 +39,7 @@ use Throwable;
  *  - profile_not_found            → IG handle 404
  *  - audit_failed                 → catch-all; detail in instagram_audit.error
  */
-final class InstagramProfileAuditService
+class InstagramProfileAuditService
 {
     /**
      * Hardcoded by spec — 1 fallback credential attempt on login_wall_hit.
