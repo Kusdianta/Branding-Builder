@@ -46,6 +46,12 @@ return [
     'google' => [
         'maps_api_key' => env('GOOGLE_MAPS_API_KEY'),
 
+        // BB89 — Places Autocomplete country bias (ISO 3166-1 alpha-2).
+        // Narrows the wizard's Step 1 search to a single country so the
+        // results are dense and relevant. Indonesia by default. Read by
+        // MapsConfigComposer and injected into wizard views only.
+        'maps_country_bias' => env('GOOGLE_MAPS_COUNTRY_BIAS', 'id'),
+
         // BB81 — Google OAuth (Phase 12a). The redirect URL is env-driven so
         // dev (Tailscale Funnel HTTPS) and prod (subdomain HTTPS) can both
         // work without code changes. Google rejects non-HTTPS callbacks for

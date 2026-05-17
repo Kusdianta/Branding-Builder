@@ -6,8 +6,10 @@ namespace App\Providers;
 
 use App\Services\HubCredentialsClient;
 use App\Services\HubUsageLogger;
+use App\View\Composers\MapsConfigComposer;
 use Illuminate\Auth\Middleware\Authenticate;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
 use Livewire\Volt\Volt;
 
@@ -50,5 +52,13 @@ class AppServiceProvider extends ServiceProvider
         Authenticate::redirectUsing(static function (): string {
             return route('auth.google.redirect');
         });
+
+        // BB89 — scope the Places API key + country bias to the wizard
+        // and its step partials only. Other views (admin, /audits history,
+        // result/processing screens) don't need the key in scope.
+        View::composer(
+            ['livewire.brand-audit-wizard', 'livewire.audit-wizard.*'],
+            MapsConfigComposer::class,
+        );
     }
 }
