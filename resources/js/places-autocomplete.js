@@ -66,7 +66,12 @@ function reshapePlace(place) {
         name,
         formatted_address: place?.formattedAddress ?? place?.formatted_address ?? null,
         geometry: lat !== null && lng !== null ? { location: { lat, lng } } : null,
-        website: place?.websiteUri ?? place?.website ?? null,
+        // The response object keys match the requested fetchFields, so
+        // place.websiteURI is canonical for new-API responses. Legacy
+        // place.website / place.websiteUri kept as fallbacks for the
+        // manual server-side PlacesApiService path which returns the
+        // older shape.
+        website: place?.websiteURI ?? place?.websiteUri ?? place?.website ?? null,
         international_phone_number:
             place?.internationalPhoneNumber ?? place?.international_phone_number ?? null,
         types: place?.types ?? [],
@@ -134,12 +139,18 @@ function mountInto(el) {
                 placeholder: 'Cari nama bisnis di Google Maps...',
             },
             fetchFields: [
+                // BB99.3 — Google's New Places JS Place class field
+                // names use UPPERCASE for acronyms (URI, ID). Requesting
+                // 'websiteUri' triggers 'Unknown fields requested:
+                // websiteUri' on selection. The other fields here are
+                // already correctly cased per the spec at
+                // /maps/documentation/javascript/place-class#fetch-place-details.
                 'id',
                 'displayName',
                 'formattedAddress',
                 'addressComponents',
                 'location',
-                'websiteUri',
+                'websiteURI',
                 'internationalPhoneNumber',
                 'types',
             ],
