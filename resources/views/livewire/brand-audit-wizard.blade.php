@@ -1057,6 +1057,26 @@ new class extends Component {
         @endif
     @endif
 
+    {{-- ═══════════════════════════════════════════════════════════════
+         BB98 DEPRECATION NOTICE — Legacy v1 single-page form block.
+
+         This block is UNREACHABLE for new audits (default $step is now
+         'wizard' per BB91). It survives only so any in-flight v1 audit
+         session (pre-2026-05-17, before Phase 12c shipped) can still
+         submit. Audits older than 30 days expire automatically via the
+         expires_at column, so this block becomes safe to delete once
+         the BB91 deploy is ~30 days old — target removal in Phase 12d.
+
+         Removal procedure: delete from the line below through the
+         matching @endif for ($step === 'touchpoint_inputs'), plus the
+         v1 $rules/$messages keys (outletPhotos*, declEkspres*,
+         instagramUrl, websiteUrl, gmapsUrl, whatsappBusiness,
+         brandName), the $outletPhotos* + decl* + brand_name +
+         instagram/website/tiktok/gmaps Url public properties on the
+         Volt class, removePhoto(), and collectOperatorDeclarations().
+         Leave 'mixed' in the serviceType IN: rule until v1 audits roll
+         out of the 30-day window.
+         ═══════════════════════════════════════════════════════════════ --}}
     @if ($step === 'touchpoint_inputs')
         {{-- BB82: sign-in gate. Guests see a single-CTA card; signed-in
              users see the full form. The wizard's submit() server-side
