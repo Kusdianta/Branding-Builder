@@ -146,10 +146,32 @@ new class extends Component {
     // Step 4 — optional free-form context for the LLM analysis layer.
     public ?string $notes = null;
 
+    /**
+     * BB93 — Step 2 service type catalogue. The wizard renders one
+     * card per entry; clicking sets $serviceType to the slug. Emoji
+     * icons are intentional per the Phase 12c spec (SVG migration is
+     * Phase 12d backlog). Slugs match the BrandAudit.service_type
+     * string column — the rule below in $rules constrains writes.
+     *
+     * @var list<array{slug:string,label:string,icon:string,subtitle:string}>
+     */
+    public array $availableServiceTypes = [
+        ['slug' => 'kiloan',       'label' => 'Kiloan',       'icon' => '🧺', 'subtitle' => 'Per kg'],
+        ['slug' => 'self_service', 'label' => 'Self Service', 'icon' => '🪙', 'subtitle' => 'Cuci sendiri'],
+        ['slug' => 'satuan',       'label' => 'Satuan',       'icon' => '👔', 'subtitle' => 'Per pakaian'],
+        ['slug' => 'express',      'label' => 'Express',      'icon' => '⚡', 'subtitle' => '3-6 jam selesai'],
+        ['slug' => 'premium',      'label' => 'Premium',      'icon' => '💎', 'subtitle' => 'Kain halus'],
+        ['slug' => 'campuran',     'label' => 'Campuran',     'icon' => '🎯', 'subtitle' => 'Beberapa jenis'],
+    ];
+
     protected array $rules = [
         'brandName'              => 'required|string|max:100',
         'city'                   => 'nullable|string|max:100',
-        'serviceType'            => 'required|string|in:kiloan,satuan,express,premium,mixed',
+        // BB93 — v2 wizard adds 'self_service' + 'campuran'. 'mixed' is
+        // kept on the validator so any in-flight legacy v1 submission
+        // (where serviceType defaulted to a 'mixed' string) still
+        // passes. New v2 audits use 'campuran' as the canonical slug.
+        'serviceType'            => 'required|string|in:kiloan,self_service,satuan,express,premium,campuran,mixed',
         'instagramUrl'           => 'nullable|url|max:500',
         'websiteUrl'             => 'nullable|url|max:500',
         'tiktokUrl'              => 'nullable|url|max:500',
@@ -433,7 +455,16 @@ new class extends Component {
                 );
             }
         }
-        // Steps 2, 3, 4 — validation lands in BB93/BB94/BB95.
+        if ($this->wizardStep === 2) {
+            $validSlugs = array_column($this->availableServiceTypes, 'slug');
+            if (! in_array($this->serviceType, $validSlugs, true)) {
+                $this->addError('serviceType', 'Pilih salah satu jenis layanan.');
+                throw new \Illuminate\Validation\ValidationException(
+                    validator: \Illuminate\Support\Facades\Validator::make([], []),
+                );
+            }
+        }
+        // Steps 3, 4 — validation lands in BB94/BB95.
     }
 
     public function submit(CreditLedger $ledger): void
