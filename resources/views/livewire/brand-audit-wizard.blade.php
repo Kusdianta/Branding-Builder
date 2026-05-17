@@ -530,87 +530,103 @@ new class extends Component {
                 );
             }
         }
-        // Steps 3, 4 — validation lands in BB94/BB95.
+        // BB94 — Step 3 social handles are optional, so no gate.
+        // BB95 — Step 4 notes are optional, so no gate; submit() does
+        // the final cross-step validation.
     }
 
+    /**
+     * BB95 — v2 submit pipeline. Replaces the BB82 v1 form-upload
+     * flow entirely. The v1 'touchpoint_inputs' UI is now unreachable
+     * (step default is 'wizard'); this method consumes only the v2
+     * state placeId/placeName/.../serviceType/instagramUsername/
+     * tiktokUsername/notes.
+     *
+     * Differences from the v1 submit() (which this replaces):
+     *   - No file uploads (photos come from FetchPlacesApiJob via the
+     *     resolved place_id).
+     *   - No "at least 2 of 5 touchpoint signals" rule — place_id is
+     *     mandatory and provides the canonical anchor by itself.
+     *   - touchpoints is now DERIVED from place_* + Step 3 inputs
+     *     (per operator-confirmed option (i): downstream readers
+     *     unchanged, single source of truth lives in place_*).
+     *   - operator_declarations is null (v1 wizard exposed declarations
+     *     via separate form fields; v2 wizard surfaces them later as
+     *     a follow-up question in the results dashboard — out of scope
+     *     for Phase 12c).
+     *   - wizard_version stamped 'v2' so audit history view (BB97)
+     *     can branch render path correctly.
+     */
     public function submit(CreditLedger $ledger): void
     {
-        // BB82: gate audit creation on Google sign-in + a credit balance.
-        // Server-side check is the source of truth — the template hides
-        // the form for guests, but we still re-verify here in case the
-        // client posts past the gate (Livewire fingerprint replay, etc.).
         if (! Auth::check()) {
             $this->redirect(route('auth.google.redirect'));
             return;
         }
 
-        $this->validate();
-
-        // "At least 2 of 5 touchpoint signals" rule from Phase 4 spec
-        $signals = 0;
-        $signals += $this->gmapsUrl     ? 1 : 0;
-        $signals += $this->instagramUrl ? 1 : 0;
-        $signals += $this->websiteUrl   ? 1 : 0;
-        $signals += $this->tiktokUrl    ? 1 : 0;
-        $signals += $this->whatsappBusiness ? 1 : 0;
-
-        if ($signals < 2) {
-            $this->addError('gmapsUrl', 'Minimal 2 dari 5 touchpoint harus diisi (Google Maps, Instagram, website, TikTok, atau WhatsApp Business).');
+        if (! $this->placeId) {
+            // Step 1 wasn't completed (or state was wiped). Bounce
+            // the user back to Step 1 with a helpful message.
+            $this->wizardStep = 1;
+            $this->addError('placeId', 'Pilih bisnis dulu di langkah 1.');
             return;
         }
 
-        // BB82: balance check after touchpoint validation so users do not
-        // lose form state when balance is low — they see the modal then
-        // can still edit + retry after a top-up.
+        $validSlugs = array_column($this->availableServiceTypes, 'slug');
+        if (! in_array($this->serviceType, $validSlugs, true)) {
+            $this->wizardStep = 2;
+            $this->addError('serviceType', 'Pilih jenis layanan.');
+            return;
+        }
+
+        // BB82 balance gate — preserved verbatim.
         if ((int) Auth::user()->credits_balance < 1) {
             $this->showInsufficientCreditsModal = true;
             return;
         }
 
-        $outerPaths = [];
-        foreach ($this->outletPhotosOuter as $photo) {
-            $outerPaths[] = $photo->store('outlet-photos', 'public');
-        }
+        $token        = Str::random(64);
+        $derivedCity  = $this->deriveCityFromPlaceRaw($this->placeRaw);
+        $touchpoints  = $this->deriveTouchpoints();
 
-        $innerPaths = [];
-        foreach ($this->outletPhotosInner as $photo) {
-            $innerPaths[] = $photo->store('outlet-photos', 'public');
-        }
-
-        $token = Str::random(64);
-
-        // BB82: audit row + credit debit must be a single transaction so a
-        // crash between the two cannot leave a paid-for audit with no row,
-        // or a row charged against a user that does not own it.
-        $audit = DB::transaction(function () use ($token, $outerPaths, $innerPaths, $ledger) {
+        $audit = DB::transaction(function () use ($token, $touchpoints, $derivedCity, $ledger) {
             $audit = BrandAudit::create([
-                'session_token'   => $token,
-                'user_id'         => Auth::id(),
-                'ip_address'      => request()->ip(),
-                'brand_name'      => $this->brandName,
-                'city'            => $this->city,
-                'service_type'    => $this->serviceType,
-                'touchpoints'     => [
-                    'instagram_url'            => $this->instagramUrl,
-                    'website_url'              => $this->websiteUrl,
-                    'tiktok_url'               => $this->tiktokUrl,
-                    'gmaps_url'                => $this->gmapsUrl,
-                    'whatsapp_business_active' => $this->whatsappBusiness,
-                    'outlet_photo_paths'       => array_merge($outerPaths, $innerPaths),
-                    'outlet_photo_outer_paths' => $outerPaths,
-                    'outlet_photo_inner_paths' => $innerPaths,
-                ],
-                'operator_declarations' => $this->collectOperatorDeclarations(),
-                'status'        => BrandAudit::STATUS_PENDING,
-                'expires_at'    => now()->addDays(30),
+                'session_token'    => $token,
+                'user_id'          => Auth::id(),
+                'ip_address'       => request()->ip(),
+
+                // Legacy compat — brand_name surfaces in PDFs, /audits
+                // history, and admin exports. place_name is the canonical
+                // source for v2; brand_name mirrors it so existing readers
+                // keep working without a sweep.
+                'brand_name'       => $this->placeName ?? '',
+                'city'             => $derivedCity,
+                'service_type'     => $this->serviceType,
+                'touchpoints'      => $touchpoints,
+                'operator_declarations' => null,
+
+                // v2 anchor fields (BB90).
+                'place_id'          => $this->placeId,
+                'place_name'        => $this->placeName,
+                'place_address'     => $this->placeAddress,
+                'place_lat'         => $this->placeLat,
+                'place_lng'         => $this->placeLng,
+                'place_phone'       => $this->placePhone,
+                'place_website'     => $this->placeWebsite,
+                'place_categories'  => $this->placeCategories,
+                'place_raw'         => $this->placeRaw,
+
+                'notes'           => $this->notes !== null && trim($this->notes) !== '' ? trim($this->notes) : null,
+                'wizard_version'  => BrandAudit::WIZARD_V2,
+
+                'status'          => BrandAudit::STATUS_PENDING,
+                'expires_at'      => now()->addDays(30),
             ]);
 
             if (! $ledger->charge(Auth::user(), $audit)) {
-                // Defensive: the pre-check above guarantees balance >= 1,
-                // but a concurrent admin "remove credits" could change
-                // state between the check and the charge. Throwing aborts
-                // the transaction so neither the audit nor the debit
-                // commits and the user sees the insufficient-credits modal.
+                // Defensive: concurrent admin "remove credits" between
+                // pre-check and charge — abort transaction so neither
+                // the row nor the debit commits.
                 throw new \RuntimeException('Credit charge failed despite pre-check.');
             }
 
@@ -620,6 +636,74 @@ new class extends Component {
         AnalyzeBrand::dispatch($audit->id);
 
         $this->redirect(route('audit.show', ['token' => $token]), navigate: true);
+    }
+
+    /**
+     * BB95 — assemble the legacy touchpoints[] shape from v2 state so
+     * downstream readers (FetchInstagramAuditJob, FetchWebsiteJob,
+     * scoring services) don't need to know about place_*. Per
+     * operator decision (i): place_* is the single source of truth;
+     * touchpoints is a derived view rebuilt on every submit.
+     *
+     * @return array<string,mixed>
+     */
+    private function deriveTouchpoints(): array
+    {
+        $instagramUrl = $this->instagramUsername
+            ? 'https://www.instagram.com/' . $this->instagramUsername
+            : null;
+        $tiktokUrl = $this->tiktokUsername
+            ? 'https://www.tiktok.com/@' . $this->tiktokUsername
+            : null;
+        $gmapsUrl = $this->placeId
+            ? 'https://www.google.com/maps/place/?q=place_id:' . $this->placeId
+            : null;
+
+        return [
+            'gmaps_url'                => $gmapsUrl,
+            'instagram_url'            => $instagramUrl,
+            'tiktok_url'               => $tiktokUrl,
+            'website_url'              => $this->placeWebsite ?: null,
+            'whatsapp_business_active' => false,
+            'outlet_photo_paths'       => [],
+            'outlet_photo_outer_paths' => [],
+            'outlet_photo_inner_paths' => [],
+        ];
+    }
+
+    /**
+     * Derive a display-ready city name from the Places address_components
+     * array. Walks the components looking for administrative_area_level_2
+     * (Indonesian "Kabupaten/Kota") first, then falls back to 'locality',
+     * then 'administrative_area_level_1' (province). Returns null when
+     * no matching component is found.
+     *
+     * @param array<string,mixed>|null $placeRaw
+     */
+    private function deriveCityFromPlaceRaw(?array $placeRaw): ?string
+    {
+        if (! is_array($placeRaw)) {
+            return null;
+        }
+        $components = $placeRaw['address_components'] ?? [];
+        if (! is_array($components)) {
+            return null;
+        }
+
+        $byTypePriority = ['administrative_area_level_2', 'locality', 'administrative_area_level_1'];
+        foreach ($byTypePriority as $wantedType) {
+            foreach ($components as $c) {
+                if (! is_array($c)) {
+                    continue;
+                }
+                $types = $c['types'] ?? [];
+                if (! is_array($types) || ! in_array($wantedType, $types, true)) {
+                    continue;
+                }
+                return (string) ($c['long_name'] ?? $c['longText'] ?? '') ?: null;
+            }
+        }
+        return null;
     }
 
     public function dismissInsufficientCreditsModal(): void
@@ -943,6 +1027,30 @@ new class extends Component {
                 @endif
             @endguest
         </div>
+
+        {{-- BB95: insufficient-credits modal lifted from the v1 block
+             so a signed-in user with 0 credits sees the same explainer
+             when they click "Mulai Analisis" on Step 4. Identical
+             markup; consolidating to a shared partial is BB98 cleanup. --}}
+        @if ($showInsufficientCreditsModal)
+            <div class="fixed inset-0 z-40 flex items-center justify-center p-6" style="background: rgba(15,20,17,0.55);" wire:click.self="dismissInsufficientCreditsModal">
+                <div class="nui-card max-w-md w-full p-8 text-center" style="position: relative;">
+                    <button type="button" wire:click="dismissInsufficientCreditsModal" style="position: absolute; top: 12px; right: 14px; background: none; border: none; color: var(--text-tertiary); font-size: 22px; cursor: pointer; line-height: 1;" aria-label="Tutup">
+                        <i class="ti ti-x"></i>
+                    </button>
+                    <div style="width: 56px; height: 56px; margin: 0 auto 16px; border-radius: 50%; background: var(--surface-muted); display: flex; align-items: center; justify-content: center;">
+                        <i class="ti ti-coin-off" style="font-size: 28px; color: var(--color-warning);"></i>
+                    </div>
+                    <h2 style="font-size: 20px; font-weight: 600; color: var(--text-primary);">Kredit Anda tidak cukup</h2>
+                    <p style="font-size: 14px; color: var(--text-secondary); margin-top: 8px; line-height: 1.6;">
+                        Audit baru membutuhkan 1 kredit. Saldo Anda saat ini 0. Top up kredit akan tersedia segera — sementara ini hubungi tim Nema untuk menambah saldo manual.
+                    </p>
+                    <button type="button" wire:click="dismissInsufficientCreditsModal" class="nui-btn-secondary rounded-pill" style="margin-top: 20px; font-size: 14px; padding: 10px 20px;">
+                        Mengerti
+                    </button>
+                </div>
+            </div>
+        @endif
     @endif
 
     @if ($step === 'touchpoint_inputs')
