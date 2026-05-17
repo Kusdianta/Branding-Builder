@@ -442,6 +442,72 @@ new class extends Component {
     }
 
     /**
+     * BB94 — Step 3 input normalizer. If the user pasted a full
+     * profile URL, strip it to the username segment. Idempotent so
+     * a re-render doesn't double-strip a previously-normalized
+     * value. Returns null for empty/whitespace input.
+     */
+    public function updatedInstagramUsername(): void
+    {
+        $this->instagramUsername = $this->normalizeUsername($this->instagramUsername, 'instagram');
+    }
+
+    public function updatedTiktokUsername(): void
+    {
+        $this->tiktokUsername = $this->normalizeUsername($this->tiktokUsername, 'tiktok');
+    }
+
+    private function normalizeUsername(?string $input, string $platform): ?string
+    {
+        if ($input === null) {
+            return null;
+        }
+        $trimmed = trim($input);
+        if ($trimmed === '') {
+            return null;
+        }
+
+        // Strip URLs first — if a URL was pasted, extract the
+        // username segment, otherwise leave the raw string alone for
+        // the @-prefix + character filter below to handle.
+        if (preg_match('#^https?://#i', $trimmed)) {
+            $extracted = match ($platform) {
+                'instagram' => preg_replace(
+                    '#^https?://(?:www\.)?instagram\.com/@?([A-Za-z0-9_.]+).*$#i',
+                    '$1',
+                    $trimmed,
+                ),
+                'tiktok'    => preg_replace(
+                    '#^https?://(?:www\.|vm\.)?tiktok\.com/@?([A-Za-z0-9_.]+).*$#i',
+                    '$1',
+                    $trimmed,
+                ),
+                default     => $trimmed,
+            };
+            // If preg_replace returned the original (no match), the URL
+            // was malformed — clear so the validation surfaces an error.
+            if ($extracted === $trimmed) {
+                return null;
+            }
+            $trimmed = (string) $extracted;
+        }
+
+        // Strip leading @ if present after URL handling.
+        $trimmed = ltrim($trimmed, '@');
+
+        // Drop anything past a slash/space/query — defensive against
+        // partial pastes like 'instagram.com/foo'.
+        $trimmed = preg_replace('#[\s/?#].*$#', '', $trimmed) ?? $trimmed;
+
+        // Final character whitelist — both IG and TT allow [A-Za-z0-9._]
+        // and limit to 30 chars (IG's stricter ceiling).
+        $trimmed = preg_replace('#[^A-Za-z0-9_.]#', '', $trimmed) ?? '';
+        $trimmed = mb_substr($trimmed, 0, 30);
+
+        return $trimmed === '' ? null : $trimmed;
+    }
+
+    /**
      * BB91 skeleton — per-step validation hook called by nextStep().
      * Step 1 requires placeId; Steps 2–4 fill in BB93–95.
      */
