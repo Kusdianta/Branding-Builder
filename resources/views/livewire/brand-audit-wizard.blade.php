@@ -6,6 +6,7 @@ use App\Jobs\AnalyzeBrand;
 use App\Models\AuditStep;
 use App\Models\BrandAudit;
 use App\Services\CreditLedger;
+use App\Services\PlacesApiService;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -386,14 +387,36 @@ new class extends Component {
     }
 
     /**
-     * BB92 entry point — paste a maps.app.goo.gl shortlink or full
-     * google.com/maps URL and resolve it to a place_id via the server-
-     * side Places Text Search + Place Details fallback. Skeleton in
-     * BB91; body lands in BB92.
+     * BB92 — paste a maps.app.goo.gl shortlink or full google.com/maps
+     * URL and resolve it via the server-side PlacesApiService (Text
+     * Search → Place Details). Hydrates place_* state on success;
+     * surfaces a user-friendly Indonesian error on failure.
      */
-    public function submitManualGmapsUrl(): void
+    public function submitManualGmapsUrl(PlacesApiService $places): void
     {
-        $this->manualResolveError = 'Belum tersambung — fitur tempel link akan aktif setelah BB92.';
+        $this->manualResolveError = null;
+        $url = trim((string) $this->manualGmapsUrl);
+
+        if ($url === '') {
+            $this->manualResolveError = 'Tempel dulu link Google Maps di kolom di atas.';
+            return;
+        }
+
+        // Only allow google.com/maps or maps.app.goo.gl URLs through.
+        if (! preg_match('#^https?://(www\.)?(google\.[a-z.]+/maps|maps\.app\.goo\.gl)/#i', $url)) {
+            $this->manualResolveError = 'Link harus dari Google Maps (google.com/maps atau maps.app.goo.gl).';
+            return;
+        }
+
+        $payload = $places->resolveManualUrl($url);
+        if (! $payload || empty($payload['place_id'])) {
+            $this->manualResolveError = 'Link tidak valid atau bisnis tidak ditemukan. Coba pencarian di atas.';
+            return;
+        }
+
+        $this->selectPlace($payload);
+        // Successful manual resolution closes the fallback panel.
+        $this->showManualFallback = false;
     }
 
     /**

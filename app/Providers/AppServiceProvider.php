@@ -6,6 +6,7 @@ namespace App\Providers;
 
 use App\Services\HubCredentialsClient;
 use App\Services\HubUsageLogger;
+use App\Services\PlacesApiService;
 use App\View\Composers\MapsConfigComposer;
 use Illuminate\Auth\Middleware\Authenticate;
 use Illuminate\Contracts\Foundation\Application;
@@ -36,6 +37,18 @@ class AppServiceProvider extends ServiceProvider
             return new HubUsageLogger(
                 baseUrl: (string) config('services.hub.url', 'http://nema-hub.test'),
                 apiKey: (string) config('services.hub.inbound_api_key', ''),
+            );
+        });
+
+        // BB92: PlacesApiService — server-side Google Places client for
+        // the wizard's manual google.com/maps URL fallback path. Reads
+        // services.google.maps_api_key (the same key the JS bundle uses
+        // for the autocomplete-driven path) so cost can be tracked
+        // against one referrer-restricted key in the GCP console.
+        $this->app->singleton(PlacesApiService::class, static function (Application $app): PlacesApiService {
+            return new PlacesApiService(
+                apiKey: (string) config('services.google.maps_api_key', ''),
+                timeoutSeconds: (float) config('services.google.maps_timeout', 10.0),
             );
         });
     }
