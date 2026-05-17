@@ -359,7 +359,9 @@ new class extends Component {
 
     public function nextStep(): void
     {
-        $this->validateCurrentWizardStep();
+        if (! $this->validateCurrentWizardStep()) {
+            return;
+        }
         $this->wizardStep = min($this->totalWizardSteps, $this->wizardStep + 1);
     }
 
@@ -496,8 +498,10 @@ new class extends Component {
         $trimmed = ltrim($trimmed, '@');
 
         // Drop anything past a slash/space/query — defensive against
-        // partial pastes like 'instagram.com/foo'.
-        $trimmed = preg_replace('#[\s/?#].*$#', '', $trimmed) ?? $trimmed;
+        // partial pastes like 'instagram.com/foo'. Tilde delimiter is
+        // used so the '#' fragment marker can appear unescaped inside
+        // the character class.
+        $trimmed = preg_replace('~[\s/?#].*$~', '', $trimmed) ?? $trimmed;
 
         // Final character whitelist — both IG and TT allow [A-Za-z0-9._]
         // and limit to 30 chars (IG's stricter ceiling).
@@ -508,31 +512,31 @@ new class extends Component {
     }
 
     /**
-     * BB91 skeleton — per-step validation hook called by nextStep().
-     * Step 1 requires placeId; Steps 2–4 fill in BB93–95.
+     * BB91 + fix from BB97 — per-step validation hook called by
+     * nextStep(). Returns false (and registers an error on the
+     * relevant key) when the current step is incomplete so the caller
+     * can short-circuit without throwing. Throwing a ValidationException
+     * was the v1 idea but it conflicted with Livewire's hydration:
+     * the error bag was rolled back along with the exception, so the
+     * UI showed nothing.
      */
-    private function validateCurrentWizardStep(): void
+    private function validateCurrentWizardStep(): bool
     {
-        if ($this->wizardStep === 1) {
-            if (! $this->placeId) {
-                $this->addError('placeId', 'Pilih bisnismu dulu dari daftar Google Maps.');
-                throw new \Illuminate\Validation\ValidationException(
-                    validator: \Illuminate\Support\Facades\Validator::make([], []),
-                );
-            }
+        if ($this->wizardStep === 1 && ! $this->placeId) {
+            $this->addError('placeId', 'Pilih bisnismu dulu dari daftar Google Maps.');
+            return false;
         }
         if ($this->wizardStep === 2) {
             $validSlugs = array_column($this->availableServiceTypes, 'slug');
             if (! in_array($this->serviceType, $validSlugs, true)) {
                 $this->addError('serviceType', 'Pilih salah satu jenis layanan.');
-                throw new \Illuminate\Validation\ValidationException(
-                    validator: \Illuminate\Support\Facades\Validator::make([], []),
-                );
+                return false;
             }
         }
         // BB94 — Step 3 social handles are optional, so no gate.
         // BB95 — Step 4 notes are optional, so no gate; submit() does
         // the final cross-step validation.
+        return true;
     }
 
     /**

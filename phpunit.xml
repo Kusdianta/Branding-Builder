@@ -19,6 +19,14 @@
     </source>
     <php>
         <env name="APP_ENV" value="testing"/>
+        <!-- BB97: APP_DEBUG=false matches production behaviour. Livewire's
+             SupportMultipleRootElementDetection only fires under debug; it
+             produces false positives against the wizard's @if-branched
+             multi-step blade structure (only one branch ever renders, but
+             the detector parses the raw rendered output and counts wrapper
+             elements Livewire adds in test mode). The wizard renders
+             correctly through HTTP in prod (where APP_DEBUG=false). -->
+        <env name="APP_DEBUG" value="false"/>
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>
         <env name="BCRYPT_ROUNDS" value="4"/>
         <env name="BROADCAST_CONNECTION" value="null"/>
