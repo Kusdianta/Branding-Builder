@@ -2314,7 +2314,15 @@ new class extends Component {
         </div>
     @endif
 
-    {{-- ===== MODAL: RECOMMENDATIONS (kit-driven, only visible when triggered) ===== --}}
+    {{-- ===== MODAL: RECOMMENDATIONS (kit-driven, only visible when triggered) =====
+         Phase 12c hot-fix: wrapped in @if ($step === 'dashboard') so the
+         x-nui-modal wrapper element doesn't render as a second top-level
+         child of <div class="relative"> during the wizard / analyzing
+         steps. The modal is only opened from pillar cards on the
+         dashboard, so guarding it here is structurally correct as well
+         as fixing the multi-root render error.
+         ============================================================== --}}
+    @if ($step === 'dashboard')
     <x-nui-modal name="recommendations" maxWidth="lg">
         @if ($modalPillar)
             <div class="flex items-start justify-between" style="margin-bottom: 20px;">
@@ -2373,5 +2381,6 @@ new class extends Component {
             @endif
         @endif
     </x-nui-modal>
+    @endif
 
 </div>
