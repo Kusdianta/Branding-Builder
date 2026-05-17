@@ -29,16 +29,38 @@ class BrandAudit extends Model
      */
     public const STATUS_VALIDATION_WARNING = 'validation_warning';
 
+    /**
+     * Wizard schema generations.
+     *
+     * V1 = pre-Phase-12c single-page form: required city + free-text
+     *      touchpoint URLs + photo uploads.
+     * V2 = Phase-12c 4-step wizard: anchored by Google place_id, all
+     *      other fields hydrated from Places Details + Step 3 inputs.
+     */
+    public const WIZARD_V1 = 'v1';
+    public const WIZARD_V2 = 'v2';
+
     protected $fillable = [
         'session_token',
         'user_id',
         'credits_charged',
         'ip_address',
         'brand_name',
+        'place_id',
+        'place_name',
+        'place_address',
+        'place_lat',
+        'place_lng',
+        'place_phone',
+        'place_website',
+        'place_categories',
+        'place_raw',
         'city',
         'service_type',
         'touchpoints',
         'operator_declarations',
+        'notes',
+        'wizard_version',
         'status',
         'pillar_scores',
         'sub_bucket_scores',
@@ -66,6 +88,10 @@ class BrandAudit extends Model
         return [
             'touchpoints'           => 'array',
             'operator_declarations' => 'array',
+            'place_categories'      => 'array',
+            'place_raw'             => 'array',
+            'place_lat'             => 'decimal:7',
+            'place_lng'             => 'decimal:7',
             'pillar_scores'         => 'array',
             'sub_bucket_scores'  => 'array',
             'score_breakdown'    => 'array',
@@ -81,6 +107,19 @@ class BrandAudit extends Model
             'competitive_positioning' => 'array',
             'expires_at'              => 'datetime',
         ];
+    }
+
+    /**
+     * @deprecated Phase 12c BB90 — V2 audits derive a display-ready
+     * location from place_address; the standalone city column is kept
+     * only for legacy V1 audit rendering and admin/CSV exports. New
+     * code should read place_address (formatted by Google) or
+     * place_raw['address_components'] for structured access. The
+     * column will not be dropped because pre-12c audits depend on it.
+     */
+    public function isV2(): bool
+    {
+        return $this->wizard_version === self::WIZARD_V2;
     }
 
     public function brandKit(): HasOne
