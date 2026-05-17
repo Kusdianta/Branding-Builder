@@ -1568,16 +1568,95 @@ new class extends Component {
                 'failed'  => 'var(--color-danger)',
                 default   => 'var(--text-tertiary)',
             };
+
+            // BB96 — derive a single high-level "Pomelli phase" from the
+            // 15-step audit_steps progression. The detail grid below is
+            // unchanged (operators can still drill in step-by-step), but
+            // the primary above-the-fold UI is now one badge + label.
+            $pomelliActiveStep = null;
+            $pomelliLastDoneStep = null;
+            foreach ($auditSteps as $s) {
+                if ($s['status'] === 'running' && $pomelliActiveStep === null) {
+                    $pomelliActiveStep = $s;
+                }
+                if ($s['status'] === 'done') {
+                    $pomelliLastDoneStep = $s;
+                }
+            }
+            $pomelliKey = $pomelliActiveStep['key'] ?? $pomelliLastDoneStep['key'] ?? null;
+
+            $pomelliPhase = (function (?string $key, string $status): array {
+                if (in_array($status, ['done', 'validation_warning'], true)) {
+                    return ['icon' => '✅', 'label' => 'Selesai! Mengarahkan ke hasil…', 'caption' => 'Audit lengkap.'];
+                }
+                if ($status === 'failed') {
+                    return ['icon' => '✗', 'label' => 'Audit gagal di tengah jalan', 'caption' => 'Cek detail di bawah untuk troubleshoot.'];
+                }
+                if ($key === null) {
+                    return ['icon' => '⚙️', 'label' => 'Memulai analisis…', 'caption' => 'Mempersiapkan pipeline.'];
+                }
+                return match (true) {
+                    str_starts_with($key, 'gather_') => ['icon' => '🌐', 'label' => 'Menganalisis Google Maps & sosial mediamu', 'caption' => 'Mengumpulkan ulasan, foto, dan konten.'],
+                    in_array($key, ['analyze_instagram', 'extract_service_signals'], true) => ['icon' => '✨', 'label' => 'Menganalisis brand DNA-mu', 'caption' => 'AI sedang mengekstrak sinyal brand.'],
+                    $key === 'validate_evidence' => ['icon' => '🔎', 'label' => 'Memvalidasi data brand', 'caption' => 'Cross-check brand name dengan listing.'],
+                    str_starts_with($key, 'score_') => ['icon' => '📊', 'label' => 'Menyusun skor pilar brand', 'caption' => 'Konsistensi · Recall · Experience · Digital.'],
+                    in_array($key, ['generate_recommendations', 'generate_quick_wins', 'generate_positioning'], true) => ['icon' => '💡', 'label' => 'Menyusun insight & rekomendasi', 'caption' => '5 rekomendasi prioritas + quick wins.'],
+                    $key === 'generate_pdf' => ['icon' => '📄', 'label' => 'Membuat activation kit PDF', 'caption' => 'Hampir selesai.'],
+                    default => ['icon' => '⚙️', 'label' => 'Menganalisis…', 'caption' => null],
+                };
+            })($pomelliKey, $auditStatus);
+
+            // Source link for the audited place — only visible when the
+            // user reached the analyzing screen via a v2 wizard (or any
+            // legacy audit that happens to have a stored gmaps_url in
+            // touchpoints, which is the common case).
+            $pomelliSourceName = $placeName ?? $brandName ?? null;
+            $pomelliSourceUrl  = isset($placeId) && $placeId
+                ? 'https://www.google.com/maps/place/?q=place_id:' . $placeId
+                : null;
         @endphp
         <div @if (! in_array($auditStatus, ['done', 'failed'])) wire:poll.2000ms="pollStatus" @endif class="max-w-3xl mx-auto py-12">
-            <div class="text-center mb-10">
-                <h2 style="font-size: 24px; font-weight: 600; color: var(--text-primary);">
-                    Menganalisis brand <em>{{ $brandName }}</em>
-                </h2>
-                <p style="font-size: 14px; color: var(--text-secondary); margin-top: 8px;">
-                    Pipeline berjalan dalam 5 fase berurutan. Halaman ini otomatis update setiap 2 detik.
+            {{-- BB96 Pomelli-style hero. --}}
+            <div style="text-align: center; padding: 24px 16px 32px;">
+                <h1 style="font-size: 36px; font-weight: 600; line-height: 1.15; color: var(--text-primary); margin: 0 0 12px;">
+                    Menganalisis bisnismu
+                </h1>
+                <p style="font-size: 16px; color: var(--text-secondary); line-height: 1.5; max-width: 480px; margin: 0 auto;">
+                    Saya sedang meneliti dan menganalisis. Ini mungkin butuh beberapa menit.
+                </p>
+
+                <div class="pomelli-badge" style="display: inline-flex; align-items: center; gap: 12px; margin-top: 28px; padding: 14px 24px; background: var(--surface-card); border: 1px solid var(--chimera-200); border-radius: var(--radius-pill); box-shadow: var(--shadow-popover); font-size: 15px; font-weight: 500; color: var(--text-primary);">
+                    <span style="font-size: 22px; line-height: 1;">{{ $pomelliPhase['icon'] }}</span>
+                    <span>{{ $pomelliPhase['label'] }}</span>
+                </div>
+
+                @if (! empty($pomelliPhase['caption']))
+                    <p style="font-size: 12px; color: var(--text-tertiary); margin: 12px 0 0;">{{ $pomelliPhase['caption'] }}</p>
+                @endif
+
+                @if ($pomelliSourceName && $pomelliSourceUrl)
+                    <a href="{{ $pomelliSourceUrl }}" target="_blank" rel="noopener" style="display: inline-flex; align-items: center; gap: 6px; margin-top: 20px; font-size: 13px; color: var(--text-secondary); text-decoration: none; padding: 6px 14px; border-radius: var(--radius-pill); border: 1px solid var(--border-default); background: var(--surface-card);">
+                        <i class="ti ti-link" style="font-size: 12px;"></i> {{ $pomelliSourceName }}
+                    </a>
+                @endif
+
+                <p style="font-size: 12px; color: var(--text-tertiary); margin: 24px 0 0;">
+                    Bisa kembali nanti — hasilnya tersimpan otomatis di
+                    <a href="{{ route('audits.index') }}" wire:navigate style="color: var(--text-secondary); text-decoration: underline;">Riwayat audit</a>.
                 </p>
             </div>
+
+            <style>
+                @keyframes pomelli-pulse {
+                    0%, 100% { box-shadow: var(--shadow-popover), 0 0 0 0 rgba(61, 137, 72, 0.45); }
+                    50%      { box-shadow: var(--shadow-popover), 0 0 0 14px rgba(61, 137, 72, 0); }
+                }
+                .pomelli-badge { animation: pomelli-pulse 2.2s ease-in-out infinite; }
+            </style>
+
+            <p style="text-align: center; font-size: 13px; color: var(--text-tertiary); margin: 28px 0 16px;">
+                <i class="ti ti-list-details" style="font-size: 13px;"></i> Detail teknis per langkah pipeline:
+            </p>
 
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                 {{-- BB72: render the 5-phase tracks (gather / analyze /
