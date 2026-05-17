@@ -18,7 +18,13 @@ layout('layouts.audit');
 new class extends Component {
     use WithFileUploads;
 
-    public string $step = 'touchpoint_inputs';
+    // Phase 12c BB91 — top-level view state. 'wizard' = new v2 4-step
+    // flow (default for new audits). 'analyzing' / 'dashboard' are
+    // reached via mount(token) when an existing audit is loaded.
+    // 'touchpoint_inputs' is the legacy v1 single-page form, kept in
+    // place for any in-flight session but unreachable by default — BB98
+    // cleanup deletes that code path.
+    public string $step = 'wizard';
 
     // Form fields
     public string $brandName        = '';
@@ -93,6 +99,51 @@ new class extends Component {
     // zero credits. The wizard renders an "Sisa kredit habis" modal that
     // explains the manual top-up path until Phase 12b ships Xendit.
     public bool    $showInsufficientCreditsModal = false;
+
+    // ─────────────────────────────────────────────────────────────────
+    // Phase 12c BB91 — v2 wizard state (4-step Pomelli-style flow).
+    // ─────────────────────────────────────────────────────────────────
+    //
+    // Step 1 — Cari bisnismu (Places Autocomplete + maps.app.goo.gl
+    //          shortlink fallback). placeId is the authoritative anchor;
+    //          all other place_* fields hydrate from Places Details.
+    // Step 2 — Jenis layanan (card-based service_type select, incl.
+    //          self_service).
+    // Step 3 — Akun sosialmu (optional IG + TT username, server-side
+    //          URL stripping via updated hooks).
+    // Step 4 — Catatan tambahan + submit (charges credit, dispatches
+    //          AnalyzeBrand, transitions to 'analyzing').
+    //
+    // wizardStep is the integer sub-state inside $step === 'wizard'.
+    // ─────────────────────────────────────────────────────────────────
+
+    public int $wizardStep = 1;
+    public int $totalWizardSteps = 4;
+
+    // Step 1 — Place anchor.
+    public ?string $placeId         = null;
+    public ?string $placeName       = null;
+    public ?string $placeAddress    = null;
+    public ?float  $placeLat        = null;
+    public ?float  $placeLng        = null;
+    public ?string $placePhone      = null;
+    public ?string $placeWebsite    = null;
+    /** @var list<string> */
+    public array   $placeCategories = [];
+    /** @var array<string,mixed>|null */
+    public ?array  $placeRaw        = null;
+
+    // Step 1 fallback path — paste a maps.app.goo.gl or google.com/maps URL.
+    public string $manualGmapsUrl     = '';
+    public bool   $showManualFallback = false;
+    public ?string $manualResolveError = null;
+
+    // Step 3 — username-only inputs (URLs stripped server-side).
+    public ?string $instagramUsername = null;
+    public ?string $tiktokUsername    = null;
+
+    // Step 4 — optional free-form context for the LLM analysis layer.
+    public ?string $notes = null;
 
     protected array $rules = [
         'brandName'              => 'required|string|max:100',
@@ -276,6 +327,90 @@ new class extends Component {
             array_splice($arr, $index, 1);
             $this->{$prop} = $arr;
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Phase 12c BB91 — wizard step navigation + Step-1 place selection.
+    // BB92-95 fill in the validation + Places API resolution bodies.
+    // ─────────────────────────────────────────────────────────────────
+
+    public function nextStep(): void
+    {
+        $this->validateCurrentWizardStep();
+        $this->wizardStep = min($this->totalWizardSteps, $this->wizardStep + 1);
+    }
+
+    public function previousStep(): void
+    {
+        $this->wizardStep = max(1, $this->wizardStep - 1);
+    }
+
+    /**
+     * Called from the Places Autocomplete onResponse handler in the
+     * Step 1 partial. Hydrates the place_* state from the Place Details
+     * payload Google returns to the client.
+     *
+     * @param array<string,mixed> $placeData
+     */
+    public function selectPlace(array $placeData): void
+    {
+        $this->placeId        = isset($placeData['place_id']) ? (string) $placeData['place_id'] : null;
+        $this->placeName      = isset($placeData['name']) ? (string) $placeData['name'] : null;
+        $this->placeAddress   = isset($placeData['formatted_address']) ? (string) $placeData['formatted_address'] : null;
+        $this->placePhone     = isset($placeData['international_phone_number']) ? (string) $placeData['international_phone_number'] : null;
+        $this->placeWebsite   = isset($placeData['website']) ? (string) $placeData['website'] : null;
+        $this->placeCategories = array_values(array_map('strval', (array) ($placeData['types'] ?? [])));
+
+        $loc = $placeData['geometry']['location'] ?? null;
+        $this->placeLat = isset($loc['lat']) ? (float) $loc['lat'] : null;
+        $this->placeLng = isset($loc['lng']) ? (float) $loc['lng'] : null;
+
+        $this->placeRaw = is_array($placeData) ? $placeData : null;
+
+        // Successful selection cancels any pending manual-fallback state.
+        $this->showManualFallback  = false;
+        $this->manualResolveError  = null;
+    }
+
+    public function clearSelectedPlace(): void
+    {
+        $this->placeId         = null;
+        $this->placeName       = null;
+        $this->placeAddress    = null;
+        $this->placeLat        = null;
+        $this->placeLng        = null;
+        $this->placePhone      = null;
+        $this->placeWebsite    = null;
+        $this->placeCategories = [];
+        $this->placeRaw        = null;
+    }
+
+    /**
+     * BB92 entry point — paste a maps.app.goo.gl shortlink or full
+     * google.com/maps URL and resolve it to a place_id via the server-
+     * side Places Text Search + Place Details fallback. Skeleton in
+     * BB91; body lands in BB92.
+     */
+    public function submitManualGmapsUrl(): void
+    {
+        $this->manualResolveError = 'Belum tersambung — fitur tempel link akan aktif setelah BB92.';
+    }
+
+    /**
+     * BB91 skeleton — per-step validation hook called by nextStep().
+     * Step 1 requires placeId; Steps 2–4 fill in BB93–95.
+     */
+    private function validateCurrentWizardStep(): void
+    {
+        if ($this->wizardStep === 1) {
+            if (! $this->placeId) {
+                $this->addError('placeId', 'Pilih bisnismu dulu dari daftar Google Maps.');
+                throw new \Illuminate\Validation\ValidationException(
+                    validator: \Illuminate\Support\Facades\Validator::make([], []),
+                );
+            }
+        }
+        // Steps 2, 3, 4 — validation lands in BB93/BB94/BB95.
     }
 
     public function submit(CreditLedger $ledger): void
@@ -627,6 +762,69 @@ new class extends Component {
     </style>
 
     {{-- ===== STEP 1: FORM ===== --}}
+    {{-- ───────────────────────────────────────────────────────────
+         Phase 12c BB91 — v2 wizard shell. The legacy v1 form block
+         below is unreachable when $step === 'wizard' (initial default
+         for new audits). It survives so any in-flight v1 session
+         keeps working, and is deleted in BB98 cleanup.
+         ─────────────────────────────────────────────────────────── --}}
+    @if ($step === 'wizard')
+        <div class="max-w-2xl mx-auto py-12 px-4" x-data="{}">
+
+            {{-- Progress dots --}}
+            <div class="flex items-center justify-center gap-2 mb-8">
+                @for ($i = 1; $i <= $totalWizardSteps; $i++)
+                    <span
+                        class="block rounded-full transition-all"
+                        @if ($i === $wizardStep)
+                            style="width: 24px; height: 8px; background: var(--chimera-500);"
+                        @elseif ($i < $wizardStep)
+                            style="width: 8px; height: 8px; background: var(--chimera-200);"
+                        @else
+                            style="width: 8px; height: 8px; background: var(--border-default);"
+                        @endif
+                    ></span>
+                @endfor
+            </div>
+
+            {{-- Back button (Steps 2–4 only) --}}
+            @if ($wizardStep > 1)
+                <button
+                    type="button"
+                    wire:click="previousStep"
+                    class="mb-6"
+                    style="font-size: 13px; color: var(--text-secondary); background: none; border: none; cursor: pointer; padding: 4px 0;"
+                >
+                    <i class="ti ti-arrow-left" style="font-size: 13px;"></i> Kembali
+                </button>
+            @endif
+
+            {{-- Auth gate: render sign-in CTA for guests, wizard for signed-in users. --}}
+            @guest
+                <div style="text-align: center; padding: 32px 24px; border: 1px solid var(--border-default); border-radius: var(--radius-lg); background: var(--surface-card);">
+                    <h2 style="font-size: 24px; font-weight: 600; margin: 0 0 12px;">Masuk dulu untuk mulai audit</h2>
+                    <p style="font-size: 15px; color: var(--text-secondary); margin: 0 0 24px;">Saya akan menyimpan hasil audit di akun Google kamu.</p>
+                    <a
+                        href="{{ route('auth.google.redirect') }}"
+                        style="display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; background: var(--chimera-500); color: var(--text-on-primary); border-radius: var(--radius-pill); text-decoration: none; font-size: 14px; font-weight: 500;"
+                    >
+                        <i class="ti ti-brand-google"></i> Masuk dengan Google
+                    </a>
+                </div>
+            @else
+                @if ($wizardStep === 1)
+                    @include('livewire.audit-wizard.step-1-find-business')
+                @elseif ($wizardStep === 2)
+                    @include('livewire.audit-wizard.step-2-service-type')
+                @elseif ($wizardStep === 3)
+                    @include('livewire.audit-wizard.step-3-social')
+                @elseif ($wizardStep === 4)
+                    @include('livewire.audit-wizard.step-4-notes')
+                @endif
+            @endguest
+        </div>
+    @endif
+
     @if ($step === 'touchpoint_inputs')
         {{-- BB82: sign-in gate. Guests see a single-CTA card; signed-in
              users see the full form. The wizard's submit() server-side
