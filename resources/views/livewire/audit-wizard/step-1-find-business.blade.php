@@ -1,15 +1,18 @@
 {{--
-    BB99 — Step 1: Find Business.
+    BB99.1 — Step 1: Find Business.
 
-    Primary path: places-autocomplete-js mounts inside #places-autocomplete-container
-    and pipes selections back via $wire.call('selectPlace', ...).
+    Primary path: places-autocomplete-js mounts inside
+    #places-autocomplete-container. Config (apiKey, countryBias) is
+    passed via DOM data attributes, NOT via a @script call — see the
+    rationale in resources/js/places-autocomplete.js. Net effect:
+    no @script directive in this partial means no morph-cycle
+    re-execution, no Blade parsing surprises, and the container's
+    own dataset survives across Livewire roundtrips because of
+    wire:ignore.
 
-    Fallback path: "Tidak ketemu?" toggle reveals a URL paste input that
-    PlacesApiService resolves server-side to the same payload shape.
-
-    NOTE on the inline init block: the JS comment must not contain the
-    literal token at-script (Blade parses it as a directive and truncates
-    the captured payload). Keep comments inside this block plain prose.
+    Fallback path: "Tidak ketemu?" toggle reveals a URL paste input
+    that PlacesApiService resolves server-side to the same payload
+    shape selectPlace() consumes from the autocomplete onResponse.
 --}}
 <div class="bb-step bb-step-1" x-data="{}">
     <h2 class="bb-step-title">Cari bisnismu di Google Maps</h2>
@@ -37,11 +40,16 @@
             </button>
         </div>
     @elseif (! $showManualFallback)
-        {{-- Autocomplete container. wire:ignore so Livewire doesn't tear
-             down the library-injected input on every roundtrip. --}}
-        <div wire:ignore>
-            <div id="places-autocomplete-container"></div>
-        </div>
+        {{-- Autocomplete container. wire:ignore so Livewire doesn't
+             tear down the library-injected input on every roundtrip;
+             the data-* attributes are read once by the JS module when
+             the MutationObserver sees this node enter the DOM. --}}
+        <div
+            id="places-autocomplete-container"
+            wire:ignore
+            data-api-key="{{ $googleMapsApiKey ?? '' }}"
+            data-country-bias="{{ $googleMapsCountryBias ?? 'id' }}"
+        ></div>
 
         @error('placeId')
             <p class="bb-error">{{ $message }}</p>
@@ -58,45 +66,6 @@
                 Tidak ketemu? Tempel link Google Maps
             </button>
         </div>
-
-        @script
-            <script>
-                (function () {
-                    const apiKey = @js($googleMapsApiKey ?? '');
-                    const countryBias = @js($googleMapsCountryBias ?? 'id');
-                    if (!apiKey) {
-                        return;
-                    }
-
-                    function mount() {
-                        if (typeof window.bbInitPlacesAutocomplete !== 'function') {
-                            console.error('[wizard] bbInitPlacesAutocomplete missing - did npm run build run?');
-                            return;
-                        }
-                        if (!document.getElementById('places-autocomplete-container')) {
-                            return;
-                        }
-                        if (window.__bbWizardAutocompleteInited) return;
-                        window.__bbWizardAutocompleteInited = true;
-                        window.bbInitPlacesAutocomplete({
-                            containerId: 'places-autocomplete-container',
-                            livewireComponent: $wire,
-                            apiKey,
-                            countryBias,
-                        });
-                    }
-
-                    // Run on next animation frame so Livewire has finished
-                    // committing the wire:ignore subtree before the library
-                    // walks the DOM.
-                    if (typeof requestAnimationFrame === 'function') {
-                        requestAnimationFrame(mount);
-                    } else {
-                        setTimeout(mount, 0);
-                    }
-                })();
-            </script>
-        @endscript
     @else
         {{-- Manual google.com/maps URL fallback --}}
         <div class="bb-field">
