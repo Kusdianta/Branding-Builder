@@ -977,59 +977,48 @@ new class extends Component {
          keeps working, and is deleted in BB98 cleanup.
          ─────────────────────────────────────────────────────────── --}}
     @if ($step === 'wizard')
-        <div class="max-w-2xl mx-auto py-12 px-4" x-data="{}">
-
+        <div class="bb-wizard" x-data="{}">
             {{-- Progress dots --}}
-            <div class="flex items-center justify-center gap-2 mb-8">
+            <div class="bb-progress">
                 @for ($i = 1; $i <= $totalWizardSteps; $i++)
-                    <span
-                        class="block rounded-full transition-all"
-                        @if ($i === $wizardStep)
-                            style="width: 24px; height: 8px; background: var(--chimera-500);"
-                        @elseif ($i < $wizardStep)
-                            style="width: 8px; height: 8px; background: var(--chimera-200);"
-                        @else
-                            style="width: 8px; height: 8px; background: var(--border-default);"
-                        @endif
-                    ></span>
+                    <span class="bb-progress-dot
+                        @if ($i === $wizardStep) is-active
+                        @elseif ($i < $wizardStep) is-done
+                        @endif"></span>
                 @endfor
             </div>
 
-            {{-- Back button (Steps 2–4 only) --}}
-            @if ($wizardStep > 1)
-                <button
-                    type="button"
-                    wire:click="previousStep"
-                    class="mb-6"
-                    style="font-size: 13px; color: var(--text-secondary); background: none; border: none; cursor: pointer; padding: 4px 0;"
-                >
-                    <i class="ti ti-arrow-left" style="font-size: 13px;"></i> Kembali
-                </button>
-            @endif
+            <div class="bb-wizard-card">
+                {{-- Back button (Steps 2–4 only, hidden for guests) --}}
+                @auth
+                    @if ($wizardStep > 1)
+                        <button type="button" wire:click="previousStep" class="bb-back">
+                            <i class="ti ti-arrow-left"></i> Kembali
+                        </button>
+                    @endif
+                @endauth
 
-            {{-- Auth gate: render sign-in CTA for guests, wizard for signed-in users. --}}
-            @guest
-                <div style="text-align: center; padding: 32px 24px; border: 1px solid var(--border-default); border-radius: var(--radius-lg); background: var(--surface-card);">
-                    <h2 style="font-size: 24px; font-weight: 600; margin: 0 0 12px;">Masuk dulu untuk mulai audit</h2>
-                    <p style="font-size: 15px; color: var(--text-secondary); margin: 0 0 24px;">Saya akan menyimpan hasil audit di akun Google kamu.</p>
-                    <a
-                        href="{{ route('auth.google.redirect') }}"
-                        style="display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; background: var(--chimera-500); color: var(--text-on-primary); border-radius: var(--radius-pill); text-decoration: none; font-size: 14px; font-weight: 500;"
-                    >
-                        <i class="ti ti-brand-google"></i> Masuk dengan Google
-                    </a>
-                </div>
-            @else
-                @if ($wizardStep === 1)
-                    @include('livewire.audit-wizard.step-1-find-business')
-                @elseif ($wizardStep === 2)
-                    @include('livewire.audit-wizard.step-2-service-type')
-                @elseif ($wizardStep === 3)
-                    @include('livewire.audit-wizard.step-3-social')
-                @elseif ($wizardStep === 4)
-                    @include('livewire.audit-wizard.step-4-notes')
-                @endif
-            @endguest
+                {{-- Auth gate: sign-in CTA for guests, partial cluster for signed-in. --}}
+                @guest
+                    <div class="bb-auth-panel">
+                        <h2>Masuk dulu untuk mulai audit</h2>
+                        <p>Saya akan menyimpan hasil audit di akun Google kamu.</p>
+                        <a href="{{ route('auth.google.redirect') }}" class="signin">
+                            <i class="ti ti-brand-google"></i> Masuk dengan Google
+                        </a>
+                    </div>
+                @else
+                    @if ($wizardStep === 1)
+                        @include('livewire.audit-wizard.step-1-find-business')
+                    @elseif ($wizardStep === 2)
+                        @include('livewire.audit-wizard.step-2-service-type')
+                    @elseif ($wizardStep === 3)
+                        @include('livewire.audit-wizard.step-3-social')
+                    @elseif ($wizardStep === 4)
+                        @include('livewire.audit-wizard.step-4-notes')
+                    @endif
+                @endguest
+            </div>
         </div>
 
         {{-- BB95: insufficient-credits modal lifted from the v1 block

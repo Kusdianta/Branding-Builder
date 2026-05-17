@@ -1,0 +1,423 @@
+/*
+ * BB99 — Audit wizard component classes.
+ *
+ * The wizard's per-step partials use these classes instead of the
+ * inline styles BB91-BB95 shipped with. Inline styles made every step
+ * partial look hand-wired and produced inconsistent spacing. This
+ * file is the single source of truth for the wizard's visual system.
+ *
+ * Reads CSS custom properties from nema-ui-kit/css/tokens.css (loaded
+ * by the layout via /vendor/nema-ui-kit/css/tokens.css). All colors,
+ * radii, shadows resolve through the Chimera design token palette.
+ */
+
+/* ─── Wizard container + card chrome ───────────────────────────── */
+
+.bb-wizard {
+    max-width: 560px;
+    margin: 0 auto;
+    padding: 24px 16px 64px;
+}
+@media (min-width: 768px) {
+    .bb-wizard { padding: 40px 24px 80px; }
+}
+
+.bb-wizard-card {
+    background: var(--surface-card);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-xl);
+    padding: 28px 24px;
+    box-shadow: var(--shadow-card);
+}
+@media (min-width: 768px) {
+    .bb-wizard-card { padding: 36px 32px; }
+}
+
+/* ─── Progress dots ─────────────────────────────────────────────── */
+
+.bb-progress {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    margin: 0 auto 20px;
+}
+.bb-progress-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: var(--radius-pill);
+    background: var(--border-default);
+    transition: width 0.2s ease, background 0.2s ease;
+}
+.bb-progress-dot.is-active {
+    background: var(--chimera-500);
+    width: 28px;
+}
+.bb-progress-dot.is-done {
+    background: var(--chimera-300, var(--chimera-200));
+}
+
+/* ─── Back button ──────────────────────────────────────────────── */
+
+.bb-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: none;
+    border: none;
+    color: var(--text-tertiary);
+    font-size: 13px;
+    cursor: pointer;
+    padding: 4px 8px 4px 0;
+    border-radius: var(--radius-sm);
+    transition: color 0.15s ease;
+    margin: 0 0 12px;
+    font-family: var(--font-sans);
+}
+.bb-back:hover { color: var(--text-primary); }
+
+/* ─── Step headings ────────────────────────────────────────────── */
+
+.bb-step-title {
+    font-size: 24px;
+    font-weight: 600;
+    line-height: 1.2;
+    color: var(--text-primary);
+    margin: 0 0 8px;
+    letter-spacing: -0.01em;
+}
+@media (min-width: 768px) {
+    .bb-step-title { font-size: 28px; }
+}
+.bb-step-sub {
+    font-size: 14px;
+    color: var(--text-secondary);
+    line-height: 1.55;
+    margin: 0 0 24px;
+}
+
+/* ─── Inputs ───────────────────────────────────────────────────── */
+
+.bb-input,
+.bb-textarea {
+    width: 100%;
+    padding: 13px 16px;
+    font-size: 15px;
+    color: var(--text-primary);
+    background: var(--surface-card);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    transition: border-color 0.15s, box-shadow 0.15s;
+    font-family: var(--font-sans);
+    box-sizing: border-box;
+}
+.bb-textarea {
+    min-height: 110px;
+    line-height: 1.55;
+    resize: vertical;
+}
+.bb-input:focus,
+.bb-textarea:focus {
+    outline: none;
+    border-color: var(--chimera-500);
+    box-shadow: 0 0 0 3px rgba(61, 137, 72, 0.15);
+}
+
+/* Prefixed input ("@" for socials) */
+.bb-input-prefix {
+    display: flex;
+    align-items: stretch;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    background: var(--surface-card);
+    overflow: hidden;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+.bb-input-prefix:focus-within {
+    border-color: var(--chimera-500);
+    box-shadow: 0 0 0 3px rgba(61, 137, 72, 0.15);
+}
+.bb-input-prefix > .prefix {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 14px;
+    background: var(--surface-muted);
+    color: var(--text-tertiary);
+    font-size: 15px;
+    border-right: 1px solid var(--border-default);
+}
+.bb-input-prefix > input {
+    flex: 1;
+    padding: 13px 16px;
+    font-size: 15px;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    min-width: 0;
+}
+
+/* Field-group wrapper for label + input */
+.bb-field { margin: 0 0 16px; }
+.bb-field > label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    margin: 0 0 6px;
+}
+
+/* ─── Buttons ──────────────────────────────────────────────────── */
+
+.bb-btn-primary,
+.bb-btn-secondary,
+.bb-btn-ghost {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-family: var(--font-sans);
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    border: none;
+}
+
+.bb-btn-primary {
+    padding: 12px 24px;
+    background: var(--chimera-500);
+    color: var(--text-on-primary);
+    border-radius: var(--radius-pill);
+    font-size: 15px;
+}
+.bb-btn-primary:hover:not(:disabled) { background: var(--chimera-600); }
+.bb-btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.bb-btn-secondary {
+    padding: 12px 24px;
+    background: var(--surface-card);
+    color: var(--text-primary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-pill);
+    font-size: 14px;
+}
+.bb-btn-secondary:hover:not(:disabled) { border-color: var(--border-strong); }
+.bb-btn-secondary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.bb-btn-ghost {
+    padding: 8px 12px;
+    background: none;
+    color: var(--text-secondary);
+    font-size: 13px;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    border-radius: var(--radius-sm);
+}
+.bb-btn-ghost:hover { color: var(--text-primary); }
+
+/* ─── Feedback helpers ─────────────────────────────────────────── */
+
+.bb-error {
+    font-size: 12px;
+    color: var(--color-danger);
+    margin: 6px 0 0;
+}
+.bb-hint {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    margin: 8px 0 0;
+    line-height: 1.5;
+}
+.bb-hint code {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-secondary);
+    background: var(--surface-muted);
+    padding: 1px 5px;
+    border-radius: 3px;
+}
+
+.bb-warning-banner {
+    margin: 16px 0 0;
+    padding: 12px 16px;
+    border-radius: var(--radius-md);
+    background: #FEF3C7;
+    border: 1px solid #F59E0B;
+    color: #92400E;
+    font-size: 13px;
+    line-height: 1.5;
+}
+.bb-warning-banner code {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    background: rgba(255,255,255,0.6);
+    padding: 1px 6px;
+    border-radius: 3px;
+}
+
+/* ─── Service-type cards ───────────────────────────────────────── */
+
+.bb-svc-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+@media (min-width: 640px) {
+    .bb-svc-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+}
+.bb-svc-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 16px 14px;
+    min-height: 104px;
+    background: var(--surface-card);
+    border: 2px solid var(--border-default);
+    border-radius: var(--radius-lg);
+    cursor: pointer;
+    text-align: left;
+    transition: border-color 0.15s, background 0.15s;
+    font-family: var(--font-sans);
+}
+.bb-svc-card:hover { border-color: var(--chimera-200); }
+.bb-svc-card.is-selected {
+    border-color: var(--chimera-500);
+    background: var(--chimera-50);
+}
+.bb-svc-card .icon { font-size: 26px; line-height: 1; margin-bottom: 2px; }
+.bb-svc-card .label {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+}
+.bb-svc-card .sub {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.3;
+    margin: 0;
+}
+
+/* ─── Place preview (after selection on Step 1) ────────────────── */
+
+.bb-place-preview {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 16px 18px;
+    border: 1px solid var(--chimera-200);
+    border-radius: var(--radius-lg);
+    background: var(--chimera-50);
+}
+.bb-place-preview .pin {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: var(--chimera-500);
+    color: var(--text-on-primary);
+    flex-shrink: 0;
+    font-size: 20px;
+}
+.bb-place-preview .name {
+    display: block;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    line-height: 1.3;
+}
+.bb-place-preview .addr {
+    margin: 4px 0 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.45;
+}
+.bb-place-preview .change {
+    margin-top: 8px;
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: 12px;
+    color: var(--chimera-700);
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    font-family: var(--font-sans);
+}
+
+/* ─── Action footer ────────────────────────────────────────────── */
+
+.bb-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    margin-top: 28px;
+}
+.bb-actions.between { justify-content: space-between; }
+.bb-actions.start   { justify-content: flex-start; }
+
+/* ─── Guest auth-gate panel ───────────────────────────────────── */
+
+.bb-auth-panel {
+    text-align: center;
+    padding: 8px 0 0;
+}
+.bb-auth-panel h2 {
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0 0 8px;
+    letter-spacing: -0.01em;
+}
+.bb-auth-panel p {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin: 0 0 24px;
+    line-height: 1.55;
+}
+.bb-auth-panel .signin {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 22px;
+    background: var(--surface-inverse);
+    color: var(--text-on-inverse);
+    border-radius: var(--radius-pill);
+    text-decoration: none;
+    font-size: 14px;
+    font-weight: 500;
+    transition: opacity 0.15s ease;
+}
+.bb-auth-panel .signin:hover { opacity: 0.9; }
+
+/* ─── places-autocomplete-js style overrides ───────────────────── */
+
+#places-autocomplete-container { width: 100%; }
+#places-autocomplete-container input,
+#places-autocomplete-container .pac-target-input,
+#places-autocomplete-container [role="combobox"] {
+    width: 100% !important;
+    padding: 13px 16px !important;
+    font-size: 15px !important;
+    border: 1px solid var(--border-default) !important;
+    border-radius: var(--radius-md) !important;
+    background: var(--surface-card) !important;
+    color: var(--text-primary) !important;
+    font-family: var(--font-sans) !important;
+    line-height: 1.4 !important;
+    box-sizing: border-box !important;
+}
+#places-autocomplete-container input:focus,
+#places-autocomplete-container .pac-target-input:focus {
+    outline: none !important;
+    border-color: var(--chimera-500) !important;
+    box-shadow: 0 0 0 3px rgba(61, 137, 72, 0.15) !important;
+}

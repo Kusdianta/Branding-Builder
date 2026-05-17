@@ -1,76 +1,63 @@
 {{--
-    BB92 — Step 1: Find Business.
+    BB99 — Step 1: Find Business.
 
-    Primary path: places-autocomplete-js mounts into the container div
-    and pipes selections back via $wire.call('selectPlace', ...). The
-    library handles session-token lifecycle so we get autocomplete
-    keystrokes at session pricing + a single billed Place Details call
-    on selection.
+    Primary path: places-autocomplete-js mounts inside #places-autocomplete-container
+    and pipes selections back via $wire.call('selectPlace', ...).
 
-    Fallback path: "Tidak ketemu?" link toggles a URL paste input that
-    the server-side PlacesApiService resolves to the same payload shape
-    (maps.app.goo.gl shortlink, google.com/maps/place/..., or cid=...).
+    Fallback path: "Tidak ketemu?" toggle reveals a URL paste input that
+    PlacesApiService resolves server-side to the same payload shape.
 
-    The two paths converge on selectPlace() → place_* state.
+    NOTE on the inline init block: the JS comment must not contain the
+    literal token at-script (Blade parses it as a directive and truncates
+    the captured payload). Keep comments inside this block plain prose.
 --}}
-<div class="step step-1" x-data="{}">
-    <h2 style="font-size: 28px; font-weight: 600; line-height: 1.2; margin: 0 0 8px;">Cari bisnismu di Google Maps</h2>
-    <p style="font-size: 15px; color: var(--text-secondary); margin: 0 0 24px;">Saya akan mengambil semua info dari listing Maps kamu.</p>
+<div class="bb-step bb-step-1" x-data="{}">
+    <h2 class="bb-step-title">Cari bisnismu di Google Maps</h2>
+    <p class="bb-step-sub">Saya akan mengambil semua info dari listing Maps kamu.</p>
 
     @if ($placeId)
         {{-- Selected place preview --}}
-        <div style="display: flex; gap: 16px; padding: 16px 20px; border: 1px solid var(--chimera-200); border-radius: var(--radius-lg); background: var(--chimera-50);">
-            <span style="display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 50%; background: var(--chimera-500); color: var(--text-on-primary); flex-shrink: 0;">
-                <i class="ti ti-map-pin" style="font-size: 20px;"></i>
-            </span>
+        <div class="bb-place-preview">
+            <span class="pin"><i class="ti ti-map-pin"></i></span>
             <div style="flex: 1; min-width: 0;">
-                <strong style="display: block; font-size: 16px; color: var(--text-primary); line-height: 1.3;">{{ $placeName ?? 'Bisnis terpilih' }}</strong>
+                <strong class="name">{{ $placeName ?? 'Bisnis terpilih' }}</strong>
                 @if ($placeAddress)
-                    <p style="margin: 4px 0 0; font-size: 13px; color: var(--text-secondary); line-height: 1.4;">{{ $placeAddress }}</p>
+                    <p class="addr">{{ $placeAddress }}</p>
                 @endif
-                <button
-                    type="button"
-                    wire:click="clearSelectedPlace"
-                    style="margin-top: 8px; background: none; border: none; padding: 0; font-size: 12px; color: var(--chimera-700); cursor: pointer; text-decoration: underline;"
-                >
-                    Pilih bisnis lain
+                <button type="button" wire:click="clearSelectedPlace" class="change">
+                    Ganti bisnis
                 </button>
             </div>
         </div>
 
-        <button
-            type="button"
-            wire:click="nextStep"
-            style="margin-top: 24px; padding: 12px 24px; background: var(--chimera-500); color: var(--text-on-primary); border-radius: var(--radius-pill); border: none; cursor: pointer; font-size: 15px; font-weight: 500; display: inline-flex; align-items: center; gap: 8px;"
-        >
-            Lanjutkan
-            <i class="ti ti-arrow-right" style="font-size: 16px;"></i>
-        </button>
+        <div class="bb-actions">
+            <button type="button" wire:click="nextStep" class="bb-btn-primary">
+                Lanjutkan
+                <i class="ti ti-arrow-right"></i>
+            </button>
+        </div>
     @elseif (! $showManualFallback)
-        {{-- Autocomplete path. wire:ignore keeps Livewire from rebuilding
-             the autocomplete-injected DOM on every roundtrip; the inner
-             div is mounted by the library, not by Livewire. --}}
+        {{-- Autocomplete container. wire:ignore so Livewire doesn't tear
+             down the library-injected input on every roundtrip. --}}
         <div wire:ignore>
             <div id="places-autocomplete-container"></div>
         </div>
 
         @error('placeId')
-            <p style="font-size: 12px; color: var(--color-danger); margin: 8px 0 0;">{{ $message }}</p>
+            <p class="bb-error">{{ $message }}</p>
         @enderror
 
         @if (empty($googleMapsApiKey))
-            <div style="margin-top: 12px; padding: 12px 16px; border-radius: var(--radius-md); background: #FEF3C7; border: 1px solid #F59E0B; color: #92400E; font-size: 13px;">
+            <div class="bb-warning-banner">
                 <strong>Catatan operator:</strong> <code>GOOGLE_MAPS_API_KEY</code> belum di-set di <code>.env</code>. Autocomplete tidak akan aktif sampai key dipaste.
             </div>
         @endif
 
-        <button
-            type="button"
-            wire:click="$toggle('showManualFallback')"
-            style="margin-top: 16px; background: none; border: none; padding: 0; font-size: 13px; color: var(--text-secondary); cursor: pointer; text-decoration: underline;"
-        >
-            Tidak ketemu? Tempel link Google Maps
-        </button>
+        <div class="bb-actions between">
+            <button type="button" wire:click="$toggle('showManualFallback')" class="bb-btn-ghost">
+                Tidak ketemu? Tempel link Google Maps
+            </button>
+        </div>
 
         @script
             <script>
@@ -78,54 +65,69 @@
                     const apiKey = @js($googleMapsApiKey ?? '');
                     const countryBias = @js($googleMapsCountryBias ?? 'id');
                     if (!apiKey) {
-                        return; // banner above already warns the operator.
-                    }
-                    if (typeof window.bbInitPlacesAutocomplete !== 'function') {
-                        console.error('[wizard] bbInitPlacesAutocomplete not loaded — did npm run build run?');
                         return;
                     }
-                    // $wire is the Livewire component handle scoped to this @script block.
-                    window.bbInitPlacesAutocomplete({
-                        containerId: 'places-autocomplete-container',
-                        livewireComponent: $wire,
-                        apiKey,
-                        countryBias,
-                    });
+
+                    function mount() {
+                        if (typeof window.bbInitPlacesAutocomplete !== 'function') {
+                            console.error('[wizard] bbInitPlacesAutocomplete missing - did npm run build run?');
+                            return;
+                        }
+                        if (!document.getElementById('places-autocomplete-container')) {
+                            return;
+                        }
+                        if (window.__bbWizardAutocompleteInited) return;
+                        window.__bbWizardAutocompleteInited = true;
+                        window.bbInitPlacesAutocomplete({
+                            containerId: 'places-autocomplete-container',
+                            livewireComponent: $wire,
+                            apiKey,
+                            countryBias,
+                        });
+                    }
+
+                    // Run on next animation frame so Livewire has finished
+                    // committing the wire:ignore subtree before the library
+                    // walks the DOM.
+                    if (typeof requestAnimationFrame === 'function') {
+                        requestAnimationFrame(mount);
+                    } else {
+                        setTimeout(mount, 0);
+                    }
                 })();
             </script>
         @endscript
     @else
         {{-- Manual google.com/maps URL fallback --}}
-        <label for="manual-gmaps-url" style="display: block; font-size: 13px; font-weight: 500; color: var(--text-primary); margin-bottom: 6px;">Link Google Maps</label>
-        <input
-            type="url"
-            id="manual-gmaps-url"
-            wire:model="manualGmapsUrl"
-            placeholder="https://maps.app.goo.gl/... atau https://google.com/maps/..."
-            style="width: 100%; padding: 10px 14px; font-size: 14px; border: 1px solid var(--border-default); border-radius: var(--radius-md); background: var(--surface-card); color: var(--text-primary);"
-        />
+        <div class="bb-field">
+            <label for="manual-gmaps-url">
+                <i class="ti ti-link"></i> Link Google Maps
+            </label>
+            <input
+                type="url"
+                id="manual-gmaps-url"
+                wire:model="manualGmapsUrl"
+                placeholder="https://maps.app.goo.gl/... atau https://google.com/maps/..."
+                class="bb-input"
+            />
+            @if ($manualResolveError)
+                <p class="bb-error">{{ $manualResolveError }}</p>
+            @endif
+        </div>
 
-        @if ($manualResolveError)
-            <p style="font-size: 12px; color: var(--color-danger); margin: 8px 0 0;">{{ $manualResolveError }}</p>
-        @endif
-
-        <div style="margin-top: 16px; display: flex; align-items: center; gap: 12px;">
+        <div class="bb-actions between">
+            <button type="button" wire:click="$toggle('showManualFallback')" class="bb-btn-ghost">
+                <i class="ti ti-arrow-left"></i> Kembali ke pencarian
+            </button>
             <button
                 type="button"
                 wire:click="submitManualGmapsUrl"
                 wire:loading.attr="disabled"
                 wire:target="submitManualGmapsUrl"
-                style="padding: 10px 20px; background: var(--chimera-500); color: var(--text-on-primary); border-radius: var(--radius-pill); border: none; cursor: pointer; font-size: 14px; font-weight: 500;"
+                class="bb-btn-primary"
             >
-                <span wire:loading.remove wire:target="submitManualGmapsUrl">Verifikasi &amp; Lanjutkan</span>
+                <span wire:loading.remove wire:target="submitManualGmapsUrl">Verifikasi & Lanjutkan</span>
                 <span wire:loading wire:target="submitManualGmapsUrl">Memverifikasi…</span>
-            </button>
-            <button
-                type="button"
-                wire:click="$toggle('showManualFallback')"
-                style="background: none; border: none; padding: 0; font-size: 13px; color: var(--text-secondary); cursor: pointer; text-decoration: underline;"
-            >
-                ← Kembali ke pencarian
             </button>
         </div>
     @endif
