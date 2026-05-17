@@ -118,9 +118,16 @@ function mountInto(el) {
             containerId: el.id,
             googleMapsApiKey: apiKey,
             requestParams: {
+                // BB99.2 — places-autocomplete-js wraps the legacy Google
+                // Maps JS SDK, not the New Places REST API, so the legacy
+                // param names apply here: `language` + `region`, NOT the
+                // REST-style `languageCode` + `regionCode` (those throw
+                // 'InvalidValueError: unknown property languageCode' on
+                // every keystroke). `includedRegionCodes` IS REST-style
+                // on a different surface, so it stays.
                 includedRegionCodes: [countryBias],
-                languageCode: 'id',
-                regionCode: countryBias,
+                language: 'id',
+                region: countryBias,
                 includedPrimaryTypes: ['establishment'],
             },
             options: {
