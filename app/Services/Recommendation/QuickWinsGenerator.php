@@ -57,6 +57,7 @@ Kamu adalah brand consultant untuk bisnis laundry di Indonesia. Hasilkan 5-7 "ke
 - Action: kalimat aktif, mulai dengan verb. Format imperative ("Tambahkan...", "Pin...", "Balas...", "Update...").
 - Hasilkan 5-7 items. Lebih dari 7 = noise.
 - Bahasa Indonesia, register saya/kita.
+- HANYA evaluasi touchpoint yang tercantum di blok "Touchpoints AKTIF" pada user prompt. JANGAN menyebut atau memberi rekomendasi untuk touchpoint yang TIDAK terdaftar (contoh: kalau WhatsApp atau TikTok tidak ada, jangan menyinggungnya sama sekali — termasuk jangan menyebut "ketidakjelasan", "belum ada", atau bahasa serupa).
 
 Return ONLY this JSON:
 {
@@ -93,22 +94,49 @@ PROMPT;
             );
         }
 
+        $touchpointBlock = $this->renderActiveTouchpoints($touchpoints);
+
         return <<<TEXT
 Brand: {$audit->brand_name}
 City: {$audit->city}
 Overall score: {$audit->overall_score}/100
 Pillar terlemah: {$weakestPillar} (skor {$weakestScore})
 
-Touchpoints:
-  - instagram_url: {$this->str($touchpoints['instagram_url'] ?? null)}
-  - website_url:   {$this->str($touchpoints['website_url'] ?? null)}
-  - gmaps_url:     {$this->str($touchpoints['gmaps_url'] ?? null)}
-  - tiktok_url:    {$this->str($touchpoints['tiktok_url'] ?? null)}
-  - whatsapp_business_active: {$this->bool($touchpoints['whatsapp_business_active'] ?? false)}
+Touchpoints AKTIF (HANYA evaluasi yang tercantum di sini):
+{$touchpointBlock}
 {$igSnippet}
 
-Hasilkan 5-7 quick wins yang fokus pada pillar terlemah.
+Hasilkan 5-7 quick wins yang fokus pada pillar terlemah, berdasarkan touchpoint aktif di atas.
 TEXT;
+    }
+
+    /**
+     * BB104: render only touchpoints that the operator actually provided
+     * so the LLM cannot manufacture commentary about missing signals.
+     *
+     * @param array<string,mixed> $touchpoints
+     */
+    private function renderActiveTouchpoints(array $touchpoints): string
+    {
+        $candidates = [
+            'instagram_url' => $touchpoints['instagram_url'] ?? null,
+            'website_url'   => $touchpoints['website_url']   ?? null,
+            'gmaps_url'     => $touchpoints['gmaps_url']     ?? null,
+            'tiktok_url'    => $touchpoints['tiktok_url']    ?? null,
+            'whatsapp_url'  => $touchpoints['whatsapp_url']  ?? null,
+        ];
+
+        $lines = [];
+        foreach ($candidates as $key => $value) {
+            if ($value === null || $value === '' || $value === false) {
+                continue;
+            }
+            $lines[] = sprintf('  - %s: %s', $key, (string) $value);
+        }
+
+        return $lines === []
+            ? '  (tidak ada touchpoint digital aktif yang diberikan)'
+            : implode("\n", $lines);
     }
 
     private function str(mixed $v): string

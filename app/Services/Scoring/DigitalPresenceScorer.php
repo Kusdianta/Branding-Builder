@@ -10,6 +10,11 @@ use App\Models\ScoringRubric;
 /**
  * Deterministic scorer for the Digital Presence pillar.
  * Presence-based only — no LLM call for the score itself.
+ *
+ * Phase 12c.1 BB101 — TikTok demoted from a primary signal (cap 10)
+ * to a bonus signal (cap 3). Reflects the reality for Indonesian
+ * UMKM laundries: TikTok presence is not load-bearing, and absence
+ * shouldn't materially penalise the pillar score.
  */
 final class DigitalPresenceScorer
 {
@@ -36,7 +41,9 @@ final class DigitalPresenceScorer
         $instagram = $hasIg       ? 20 : 0;
         $website   = $hasWebsite  ? 20 : 0;
         $wa        = $hasWa       ? 15 : 0;
-        $tiktok    = $hasTiktok   ? 10 : 0;
+        // BB101: tiktok demoted 10 → 3. Absence contributes zero (no
+        // penalty), presence contributes only a small bonus.
+        $tiktok    = $hasTiktok   ? 3 : 0;
 
         $reviewBonus = match (true) {
             $reviewCount >= 50 => 15,
@@ -60,7 +67,7 @@ final class DigitalPresenceScorer
             'has_instagram' => $this->presenceEntry('has_instagram', $hasIg,      20, 'Instagram'),
             'has_website'   => $this->presenceEntry('has_website',   $hasWebsite, 20, 'Website'),
             'has_wa'        => $this->presenceEntry('has_wa',        $hasWa,      15, 'WhatsApp Business'),
-            'has_tiktok'    => $this->presenceEntry('has_tiktok',    $hasTiktok,  10, 'TikTok'),
+            'has_tiktok'    => $this->presenceEntry('has_tiktok',    $hasTiktok,  3,  'TikTok (bonus)'),
             'review_bonus'  => [
                 'score'      => $reviewBonus,
                 'cap'        => 15,

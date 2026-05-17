@@ -234,10 +234,20 @@ class RecommendationGeneratorTest extends TestCase
         $this->assertStringContainsString('brand-experience: 30/100', $prompt);
         $this->assertStringContainsString('digital-presence: 60/100', $prompt);
 
-        // Touchpoint state surfaces (presence/absence drives the
-        // Aktifkan WhatsApp Business / Lengkapi Website type recs).
+        // BB104: only present touchpoints surface in the prompt. The
+        // legacy "website_url: (kosong)" / "whatsapp_business_active: false"
+        // lines were removed because they triggered the LLM to
+        // hallucinate absence commentary ("ketidakjelasan status
+        // WhatsApp Business" etc). Recommendations like "Lengkapi
+        // Website" are now derived from the pillar score gap (Digital
+        // Presence == 60/100 says enough) rather than from a literal
+        // "(kosong)" marker in the prompt body.
+        $this->assertStringContainsString('Touchpoints AKTIF', $prompt);
         $this->assertStringContainsString('instagram_url: https://www.instagram.com/lessworry.id/', $prompt);
-        $this->assertStringContainsString('website_url:   (kosong)', $prompt);
+        $this->assertStringContainsString('gmaps_url: https://maps.app.goo.gl/x', $prompt);
+        $this->assertStringNotContainsString('website_url',  $prompt);
+        $this->assertStringNotContainsString('whatsapp_business_active', $prompt);
+        $this->assertStringNotContainsString('(kosong)', $prompt);
     }
 
     #[Test]

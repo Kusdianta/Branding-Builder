@@ -4,12 +4,22 @@ declare(strict_types=1);
 
 use App\Http\Controllers\AuditController;
 use App\Http\Controllers\Auth\GoogleAuthController;
+use App\Http\Controllers\HandleCheckController;
 use Illuminate\Support\Facades\Route;
 use Livewire\Volt\Volt;
 
 Route::get('/health', fn () => response('ok', 200))->name('health');
 
 Volt::route('/', 'brand-audit-wizard')->name('home');
+
+// Phase 12c.1 BB100/BB101 — wizard Step 3 handle availability checks.
+// Public (anonymous wizard flow); abuse-throttled at 30/min/IP.
+Route::post('/check-handle/instagram', [HandleCheckController::class, 'instagram'])
+    ->middleware('throttle:30,1')
+    ->name('check-handle.instagram');
+Route::post('/check-handle/tiktok', [HandleCheckController::class, 'tiktok'])
+    ->middleware('throttle:30,1')
+    ->name('check-handle.tiktok');
 
 // BB81 — Google OAuth entry points.
 Route::get('/auth/google', [GoogleAuthController::class, 'redirect'])->name('auth.google.redirect');

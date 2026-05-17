@@ -259,6 +259,108 @@
     border-radius: 3px;
 }
 
+/* ─── BB100/BB101/BB102 — Step 3 handle check + WhatsApp ───────── */
+
+[x-cloak] { display: none !important; }
+
+.bb-input-prefix > input.bb-input-ok {
+    /* The wrapping bb-input-prefix already owns the border, but a
+       successful availability check should still tint the inner field
+       so the user sees the green flag near the cursor. */
+    background: rgba(61, 137, 72, 0.05);
+}
+.bb-input-prefix > input.bb-input-bad {
+    background: rgba(194, 78, 58, 0.05);
+}
+.bb-input-prefix:has(> input.bb-input-ok) { border-color: var(--chimera-500); }
+.bb-input-prefix:has(> input.bb-input-bad) { border-color: var(--color-danger); }
+
+.bb-status-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 12px 0 4px;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1;
+    color: var(--text-tertiary);
+}
+.bb-status-icon.ok   { color: var(--chimera-600); }
+.bb-status-icon.bad  { color: var(--color-danger); }
+.bb-status-icon.warn { color: var(--color-warning); }
+
+.bb-handle-preview {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 10px 0 0;
+    padding: 10px 12px;
+    background: var(--surface-muted);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+}
+.bb-handle-preview img {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    object-fit: cover;
+    background: var(--surface-card);
+    border: 1px solid var(--border-default);
+    flex-shrink: 0;
+}
+.bb-handle-preview__text {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.bb-handle-preview__text strong {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.bb-handle-preview__text p {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.bb-handle-preview__text a {
+    color: var(--chimera-600);
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+.bb-handle-preview__text a:hover { text-decoration: underline; }
+
+.bb-field--optional > label {
+    /* Slightly muted compared to required labels so TikTok visually
+       reads as a bonus signal even before the badge is parsed. */
+    color: var(--text-secondary);
+}
+
+.bb-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    margin-left: 6px;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    border-radius: var(--radius-pill);
+    text-transform: lowercase;
+    background: var(--surface-muted);
+    color: var(--text-tertiary);
+    border: 1px solid var(--border-default);
+}
+.bb-badge--muted { color: var(--text-tertiary); }
+
 /* ─── Service-type cards ───────────────────────────────────────── */
 
 .bb-svc-grid {

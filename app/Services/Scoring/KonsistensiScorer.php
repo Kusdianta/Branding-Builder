@@ -88,19 +88,35 @@ class KonsistensiScorer
     /**
      * BB58: fallback text-only path with score cap.
      *
+     * BB104: only forward touchpoint signals that are actually present.
+     * Empty URLs and a false whatsapp_business_active flag are dropped
+     * so the LLM prompt builder (ClaudeService::renderInputsAsText)
+     * does not surface them as "(tidak tersedia)" lines that the model
+     * has historically converted into hallucinated absence commentary.
+     *
      * @param list<string> $dataSource
      */
     private function scoreFallback(array $evidence, array $context, array $dataSource): PillarScore
     {
         $inputs = [
-            'brand_name'               => (string) ($context['brand_name'] ?? ''),
-            'instagram_url'            => (string) ($context['instagram_url'] ?? ''),
-            'website_url'              => (string) ($context['website_url'] ?? ''),
-            'gmaps_url'                => (string) ($context['gmaps_url'] ?? ''),
-            'whatsapp_business_active' => (bool) ($context['whatsapp_business_active'] ?? false),
-            'tiktok_url'               => (string) ($context['tiktok_url'] ?? ''),
-            'outlet_photo_paths'       => (array) ($context['outlet_photo_paths'] ?? []),
+            'brand_name'         => (string) ($context['brand_name'] ?? ''),
+            'outlet_photo_paths' => (array) ($context['outlet_photo_paths'] ?? []),
         ];
+
+        foreach ([
+            'instagram_url' => $context['instagram_url'] ?? null,
+            'website_url'   => $context['website_url']   ?? null,
+            'gmaps_url'     => $context['gmaps_url']     ?? null,
+            'tiktok_url'    => $context['tiktok_url']    ?? null,
+        ] as $key => $value) {
+            if (is_string($value) && trim($value) !== '') {
+                $inputs[$key] = $value;
+            }
+        }
+
+        if ((bool) ($context['whatsapp_business_active'] ?? false)) {
+            $inputs['whatsapp_business_active'] = true;
+        }
 
         $score = $this->score($inputs);
 

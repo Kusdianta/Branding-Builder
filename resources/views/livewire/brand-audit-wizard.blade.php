@@ -143,6 +143,12 @@ new class extends Component {
     public ?string $instagramUsername = null;
     public ?string $tiktokUsername    = null;
 
+    // BB102 — Step 3 WhatsApp Business number (Indonesian local part,
+    // i.e. without +62 / 0 prefix). Normalized in updatedWhatsappNumber()
+    // and surfaced as whatsapp_url / whatsapp_number / whatsapp_business_active
+    // in deriveTouchpoints(). Optional; null when the operator skipped.
+    public ?string $whatsappNumber    = null;
+
     // Step 4 — optional free-form context for the LLM analysis layer.
     public ?string $notes = null;
 
@@ -192,6 +198,10 @@ new class extends Component {
         'declSopKeluhanUrl'      => 'nullable|url|max:500',
         'declPriceList'          => 'nullable|boolean',
         'declPriceListUrl'       => 'nullable|url|max:500',
+        // BB102 — Step 3 WhatsApp local part (Indonesian mobile, no
+        // country code, no leading zero). normalizeWhatsApp() strips
+        // formatting before the validator sees it.
+        'whatsappNumber'         => 'nullable|string|regex:/^8\d{8,11}$/',
     ];
 
     protected array $messages = [
@@ -200,6 +210,7 @@ new class extends Component {
         'websiteUrl.url'         => 'Format URL website tidak valid.',
         'tiktokUrl.url'          => 'Format URL TikTok tidak valid.',
         'gmapsUrl.url'           => 'Format URL Google Maps tidak valid.',
+        'whatsappNumber.regex'   => 'Nomor WhatsApp tidak valid. Contoh: 8123456789.',
         'outletPhotosOuter.max'  => 'Maksimal 3 foto outlet luar.',
         'outletPhotosOuter.*.image' => 'File harus berupa gambar.',
         'outletPhotosOuter.*.mimes' => 'Format harus JPG, PNG, atau WEBP.',
@@ -459,6 +470,40 @@ new class extends Component {
         $this->tiktokUsername = $this->normalizeUsername($this->tiktokUsername, 'tiktok');
     }
 
+    /**
+     * BB102 — strip non-digits, then strip leading 0 / 62 / +62. The
+     * result is stored as the local Indonesian mobile part (starts
+     * with 8). Empty / invalid input becomes null so downstream
+     * derivation knows the field was not provided.
+     *
+     * Validation pattern enforced here is intentionally permissive
+     * (8 + 8–11 more digits). wa.me's own resolver is the ultimate
+     * authority on whether the number is on WhatsApp; we only filter
+     * obvious garbage so the UI doesn't show a wa.me link to nowhere.
+     */
+    public function updatedWhatsappNumber(): void
+    {
+        $this->whatsappNumber = $this->normalizeWhatsApp($this->whatsappNumber);
+    }
+
+    private function normalizeWhatsApp(?string $input): ?string
+    {
+        if ($input === null) {
+            return null;
+        }
+        $digits = preg_replace('/[^\d]/', '', $input);
+        if ($digits === null || $digits === '') {
+            return null;
+        }
+        // Strip leading 0, 62, or +62 (the + was already dropped above).
+        $digits = preg_replace('/^(?:62|0)/', '', $digits) ?? $digits;
+
+        if (! preg_match('/^8\d{8,11}$/', $digits)) {
+            return null;
+        }
+        return $digits;
+    }
+
     private function normalizeUsername(?string $input, string $platform): ?string
     {
         if ($input === null) {
@@ -663,12 +708,24 @@ new class extends Component {
             ? 'https://www.google.com/maps/place/?q=place_id:' . $this->placeId
             : null;
 
+        // BB102 — whatsapp_business_active is derived from whatsappNumber
+        // presence so existing scorers (DigitalPresenceScorer.has_wa,
+        // KonsistensiScorer.kehadiran_digital) award their WA points when
+        // the operator filled the new Step 3 field. whatsapp_url is the
+        // canonical wa.me deeplink consumed by recommendation copy and
+        // the activation kit PDF; whatsapp_number is the E.164-ish form
+        // (62 + local part, no plus sign) for log/export use.
+        $whatsappE164 = $this->whatsappNumber ? '62' . $this->whatsappNumber : null;
+        $whatsappUrl  = $whatsappE164 ? 'https://wa.me/' . $whatsappE164 : null;
+
         return [
             'gmaps_url'                => $gmapsUrl,
             'instagram_url'            => $instagramUrl,
             'tiktok_url'               => $tiktokUrl,
             'website_url'              => $this->placeWebsite ?: null,
-            'whatsapp_business_active' => false,
+            'whatsapp_url'             => $whatsappUrl,
+            'whatsapp_number'          => $whatsappE164,
+            'whatsapp_business_active' => $whatsappUrl !== null,
             'outlet_photo_paths'       => [],
             'outlet_photo_outer_paths' => [],
             'outlet_photo_inner_paths' => [],
@@ -1899,11 +1956,15 @@ new class extends Component {
                     // Sourced from config:
                     //   pillar_weights — Konsistensi 35 / Recall 35 / Experience 20 / Digital 10
                     //   pillar_sub_buckets — see config/branding.php:40-73
+                    // Phase 12c.1 BB103 — pillar methodology copy in Indonesian
+                    // (saya/kita register). BB101 demotion is reflected: TikTok
+                    // is removed from the Konsistensi "kehadiran digital" list
+                    // and reframed as a bonus signal in Digital Presence.
                     $pillarMethodology = [
-                        'brand-konsistensi' => 'Brand Konsistensi (35% of overall score) measures how unified your brand identity is across digital touchpoints — the strongest predictor of long-term recall in customer interviews. Kehadiran Digital (40 pts) carries the highest weight because consistent presence across IG + Website + GMaps + WA + TikTok signals a real operating brand, not a side hustle. Konsistensi Visual (35 pts) judges whether logo, color, and tone hold together when a customer scans across channels. Kelengkapan Layanan (15 pts) and Transparansi Harga (10 pts) round out the score with specific operational signals.',
-                        'brand-recall' => 'Brand Recall (35% of overall score) measures how easily potential customers recognize your brand when searching for laundry services. Search Recall (35 pts) carries the highest weight because Google Autocomplete demand is the strongest proxy for true brand awareness in your area. Rating (25 pts) and Jumlah Review (15 pts) reflect cumulative social proof. Kata Kunci Positif di Ulasan (15 pts) and Sentimen (10 pts) measure qualitative reception drawn from up to 30 scraped GMaps reviews per audit.',
-                        'brand-experience' => 'Brand Experience (20% of overall score) measures the operational signals customers encounter when interacting with the brand. Every audit starts at a Dasar of 30 pts, with bonuses fired by LLM analysis of touchpoint copy: Variasi Layanan (+15), SOP Keluhan (+15), Antar Jemput (+12), Layanan Ekspres (+10), Daftar Harga (+10). Penalty deltas — Pakaian Hilang (−10), Keterlambatan (−8), No-Response WA (−8) — are deterministic, fired only when the GMaps review corpus contains explicit complaints.',
-                        'digital-presence' => 'Digital Presence (10% of overall score) measures how discoverable and complete your brand is across the channels customers actually check. Weights reflect platform impact for laundry SMBs: Google Maps (25 pts — discovery driver #1), Instagram (20 pts), Website (20 pts), WhatsApp Business (15 pts — direct order channel), TikTok (10 pts — emerging). A Bonus Review of up to 15 extra pts fires when the GMaps listing has accumulated meaningful review volume.',
+                        'brand-konsistensi' => 'Brand Konsistensi (35% dari skor total) mengukur seberapa kompak identitas brand kita di seluruh touchpoint digital — prediktor terkuat untuk recall jangka panjang dalam wawancara pelanggan. Kehadiran Digital (40 pts) punya bobot tertinggi karena konsistensi presence di Instagram + Website + Google Maps + WhatsApp menandakan brand yang benar-benar beroperasi, bukan sambilan. Konsistensi Visual (35 pts) menilai apakah logo, warna, dan tone tetap menyatu saat pelanggan menyapu pandang antar kanal. Kelengkapan Layanan (15 pts) dan Transparansi Harga (10 pts) melengkapi skor dengan sinyal operasional yang spesifik.',
+                        'brand-recall' => 'Brand Recall (35% dari skor total) mengukur seberapa mudah calon pelanggan mengenali brand kita ketika mencari jasa laundry. Search Recall (35 pts) punya bobot tertinggi karena permintaan Google Autocomplete adalah proxy terkuat untuk kesadaran brand yang nyata di area kita. Rating (25 pts) dan Jumlah Review (15 pts) mencerminkan akumulasi social proof. Kata Kunci Positif di Ulasan (15 pts) dan Sentimen (10 pts) mengukur kualitas penerimaan yang diambil dari hingga 30 review Google Maps yang di-scrape per audit.',
+                        'brand-experience' => 'Brand Experience (20% dari skor total) mengukur sinyal operasional yang pelanggan rasakan saat berinteraksi dengan brand. Setiap audit mulai dari Dasar 30 pts, dengan bonus yang dipicu analisis LLM atas copy di touchpoint: Variasi Layanan (+15), SOP Keluhan (+15), Antar Jemput (+12), Layanan Ekspres (+10), Daftar Harga (+10). Penalti — Pakaian Hilang (−10), Keterlambatan (−8), No-Response WA (−8) — bersifat deterministik dan hanya tercetak ketika korpus review Google Maps memuat keluhan eksplisit.',
+                        'digital-presence' => 'Digital Presence (10% dari skor total) mengukur seberapa mudah brand kita ditemukan dan selengkap apa kehadirannya di kanal yang benar-benar dicek pelanggan. Bobotnya mencerminkan dampak platform untuk UMKM laundry: Google Maps (25 pts — driver penemuan utama), Instagram (20 pts), Website (20 pts), WhatsApp Business (15 pts — kanal pesan langsung). TikTok (bonus 3 pts) bersifat opsional dan tidak menjadi penalti kalau belum ada. Bonus Review hingga 15 pts tambahan tercetak saat listing Google Maps sudah mengakumulasi volume review yang signifikan.',
                     ];
                 @endphp
                 <div class="grid grid-cols-1 gap-6 mb-12">

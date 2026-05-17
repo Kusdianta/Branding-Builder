@@ -1468,7 +1468,22 @@ SYS;
         foreach ($inputs as $key => $value) {
             if ($key === 'outlet_photo_paths') {
                 $count   = is_array($value) ? count($value) : 0;
+                if ($count === 0) {
+                    // BB104: omit empty photo counts so the LLM does not
+                    // editorialize about missing outlet photography.
+                    continue;
+                }
                 $lines[] = sprintf('- outlet_photo_count: %d (terlampir sebagai gambar di bawah)', $count);
+                continue;
+            }
+
+            // BB104: omit absent touchpoint signals entirely. Surfacing
+            // them as "(tidak tersedia)" was the original trigger for
+            // hallucinated commentary like "ketidakjelasan status
+            // WhatsApp Business". The system prompt now instructs the
+            // LLM to evaluate ONLY the listed signals, which only works
+            // if absent signals are genuinely absent from the prompt.
+            if ($value === null || $value === '' || $value === false) {
                 continue;
             }
 
@@ -1477,15 +1492,12 @@ SYS;
                 continue;
             }
 
-            if ($value === null || $value === '') {
-                $lines[] = sprintf('- %s: (tidak tersedia)', $key);
-                continue;
-            }
-
             $lines[] = sprintf('- %s: %s', $key, (string) $value);
         }
 
         $lines[] = '';
+        $lines[] = 'PENTING: data di atas adalah SATU-SATUNYA touchpoint yang harus dievaluasi.';
+        $lines[] = 'Jangan menyebut, menilai, atau berasumsi tentang touchpoint yang tidak terdaftar di atas (contoh: jangan berkomentar tentang TikTok atau WhatsApp jika tidak ada di daftar).';
         $lines[] = 'Berikan skor sesuai rubrik dan kembalikan dalam format JSON yang sudah ditentukan.';
 
         return implode("\n", $lines);
