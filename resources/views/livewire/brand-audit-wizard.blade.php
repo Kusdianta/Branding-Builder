@@ -2005,7 +2005,7 @@ new class extends Component {
                                  primary content. --}}
                             @if ($methodology !== null)
                                 <div style="margin-bottom: 16px; padding: 12px 14px; background: var(--surface-muted); border-left: 3px solid var(--chimera-200); border-radius: var(--radius-sm);">
-                                    <p style="font-size: 10px; font-weight: 600; color: var(--chimera-700); letter-spacing: 0.4px; text-transform: uppercase; margin: 0 0 6px;">About this score</p>
+                                    <p style="font-size: 10px; font-weight: 600; color: var(--chimera-700); letter-spacing: 0.4px; text-transform: uppercase; margin: 0 0 6px;">Tentang skor ini</p>
                                     <p style="font-size: 12px; color: var(--text-secondary); line-height: 1.6; margin: 0;">{{ $methodology }}</p>
                                 </div>
                             @endif
