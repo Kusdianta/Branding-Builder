@@ -6,6 +6,8 @@ use App\Jobs\AnalyzeBrand;
 use App\Models\AuditStep;
 use App\Models\BrandAudit;
 use App\Services\CreditLedger;
+use App\Services\HandleCheckers\InstagramHandleChecker;
+use App\Services\HandleCheckers\TikTokHandleChecker;
 use App\Services\PlacesApiService;
 use App\Services\PlatformHealthChecker;
 use Illuminate\Support\Facades\Auth;
@@ -159,6 +161,26 @@ new class extends Component {
     // and surfaced as whatsapp_url / whatsapp_number / whatsapp_business_active
     // in deriveTouchpoints(). Optional; null when the operator skipped.
     public ?string $whatsappNumber    = null;
+
+    // BB106 — Step 3 verification state, driven by Volt. Replaces the
+    // BB100/BB102 Alpine state machines (step3Gate/igHandleChecker/
+    // whatsappValidator/ttHandleChecker) that produced phantom
+    // `checkFormat is not defined` errors on certain morph paths.
+    //
+    // IG / TT enum: idle | checking | found | not_found | error
+    //   - idle      → never checked or field edited since last check
+    //   - checking  → request in flight
+    //   - found     → HandleChecker confirmed the profile exists
+    //   - not_found → HandleChecker confirmed the profile does not exist
+    //   - error     → worker unreachable, rate-limited, or unparseable
+    //
+    // whatsappValidity enum: idle | valid | invalid
+    //   - format-only check (no worker call); recomputed in
+    //     updatedWhatsappNumber() from the raw input BEFORE
+    //     normalizeWhatsApp() collapses empty + invalid to null.
+    public string $igCheckStatus    = 'idle';
+    public string $ttCheckStatus    = 'idle';
+    public string $whatsappValidity = 'idle';
 
     // Step 4 — optional free-form context for the LLM analysis layer.
     public ?string $notes = null;
@@ -496,11 +518,15 @@ new class extends Component {
     public function updatedInstagramUsername(): void
     {
         $this->instagramUsername = $this->normalizeUsername($this->instagramUsername, 'instagram');
+        // BB106 — any edit invalidates the previous check result.
+        $this->igCheckStatus = 'idle';
     }
 
     public function updatedTiktokUsername(): void
     {
         $this->tiktokUsername = $this->normalizeUsername($this->tiktokUsername, 'tiktok');
+        // BB106 — any edit invalidates the previous check result.
+        $this->ttCheckStatus = 'idle';
     }
 
     /**
@@ -516,7 +542,18 @@ new class extends Component {
      */
     public function updatedWhatsappNumber(): void
     {
-        $this->whatsappNumber = $this->normalizeWhatsApp($this->whatsappNumber);
+        // BB106 — distinguish empty (idle) from invalid (invalid) BEFORE
+        // normalizeWhatsApp() collapses both to null. Without this peek
+        // the gate cannot tell "operator left WA blank → allowed" apart
+        // from "operator typed 12345 → blocked".
+        $rawDigits = preg_replace('/[^\d]/', '', (string) $this->whatsappNumber) ?? '';
+
+        $this->whatsappNumber   = $this->normalizeWhatsApp($this->whatsappNumber);
+        $this->whatsappValidity = match (true) {
+            $rawDigits === ''               => 'idle',
+            $this->whatsappNumber !== null  => 'valid',
+            default                         => 'invalid',
+        };
     }
 
     private function normalizeWhatsApp(?string $input): ?string
@@ -590,6 +627,117 @@ new class extends Component {
     }
 
     /**
+     * BB106 — explicit Instagram handle verification, triggered by the
+     * Step 3 "Cek dulu" button. Pure server-side roundtrip (no Alpine);
+     * InstagramHandleChecker owns the HTTP scrape, parsing, and caching.
+     *
+     * No-op when the field is empty so a stray button click during a
+     * Livewire morph cannot flip status off 'idle'.
+     */
+    public function checkInstagram(InstagramHandleChecker $checker): void
+    {
+        if (! $this->instagramUsername) {
+            $this->igCheckStatus = 'idle';
+            return;
+        }
+        $this->igCheckStatus = 'checking';
+        $result = $checker->check($this->instagramUsername);
+        $this->igCheckStatus = $this->mapHandleStatus($result->exists, $result->status);
+    }
+
+    public function checkTiktok(TikTokHandleChecker $checker): void
+    {
+        if (! $this->tiktokUsername) {
+            $this->ttCheckStatus = 'idle';
+            return;
+        }
+        $this->ttCheckStatus = 'checking';
+        $result = $checker->check($this->tiktokUsername);
+        $this->ttCheckStatus = $this->mapHandleStatus($result->exists, $result->status);
+    }
+
+    /**
+     * BB106 — collapse the DTO (exists, status) pair into the Volt enum.
+     * Mirrors the old Alpine fetchHandle() resolver: only a clean
+     * exists=true + status='found' clears the gate; everything else
+     * blocks (not_found = correct rejection; error = transport failure).
+     */
+    private function mapHandleStatus(bool $exists, string $status): string
+    {
+        if ($exists && $status === 'found') {
+            return 'found';
+        }
+        if ($status === 'not_found') {
+            return 'not_found';
+        }
+        return 'error';
+    }
+
+    /**
+     * BB106 — "Lewati semua" path. Nulls all three Step 3 fields so
+     * the gate is satisfied (all-empty always passes) before calling
+     * nextStep(). Separate from nextStep() because nextStep() honours
+     * the gate; this method intentionally bypasses by emptying first.
+     */
+    public function skipStep3(): void
+    {
+        $this->instagramUsername = null;
+        $this->tiktokUsername    = null;
+        $this->whatsappNumber    = null;
+        $this->igCheckStatus     = 'idle';
+        $this->ttCheckStatus     = 'idle';
+        $this->whatsappValidity  = 'idle';
+        $this->nextStep();
+    }
+
+    /**
+     * BB106 — Step 3 gate. Empty fields always pass (opt-out); filled
+     * fields must have been explicitly verified. The :disabled binding
+     * on the Lanjutkan button uses this; validateCurrentWizardStep()
+     * uses it as the server-side guard so a stray morph cannot bypass.
+     */
+    public function getCanAdvanceFromStep3Property(): bool
+    {
+        if ($this->instagramUsername && $this->igCheckStatus !== 'found') return false;
+        if ($this->tiktokUsername    && $this->ttCheckStatus !== 'found') return false;
+        // BB106 — gate on validity, not field presence. normalizeWhatsApp()
+        // collapses both empty and malformed input to null; without this
+        // check, typing "12345" silently passes the gate because
+        // whatsappNumber goes back to null after the hook runs.
+        if ($this->whatsappValidity === 'invalid') return false;
+        return true;
+    }
+
+    /**
+     * BB106 — single muted hint string below the Lanjutkan button.
+     * Returns null when the gate is satisfied. Centralises the
+     * "why is the button disabled" copy in one ordered branch so the
+     * Blade has no inline @if ladder.
+     */
+    public function getStep3BlockReasonProperty(): ?string
+    {
+        if ($this->igCheckStatus === 'checking' || $this->ttCheckStatus === 'checking') {
+            return 'Sebentar, sedang mengecek...';
+        }
+        if ($this->instagramUsername && $this->igCheckStatus === 'idle') {
+            return 'Klik "Cek dulu" pada Instagram sebelum lanjut.';
+        }
+        if ($this->tiktokUsername && $this->ttCheckStatus === 'idle') {
+            return 'Klik "Cek dulu" pada TikTok sebelum lanjut.';
+        }
+        if ($this->igCheckStatus === 'not_found' || $this->ttCheckStatus === 'not_found') {
+            return 'Periksa lagi handle yang ditandai merah.';
+        }
+        if ($this->igCheckStatus === 'error' || $this->ttCheckStatus === 'error') {
+            return 'Worker tidak bisa cek sekarang. Pastikan worker aktif lalu coba lagi.';
+        }
+        if ($this->whatsappValidity === 'invalid') {
+            return 'Format nomor WhatsApp belum valid.';
+        }
+        return null;
+    }
+
+    /**
      * BB91 + fix from BB97 — per-step validation hook called by
      * nextStep(). Returns false (and registers an error on the
      * relevant key) when the current step is incomplete so the caller
@@ -611,7 +759,15 @@ new class extends Component {
                 return false;
             }
         }
-        // BB94 — Step 3 social handles are optional, so no gate.
+        // BB106 — Step 3 server-side mirror of $canAdvanceFromStep3.
+        // The skipStep3() path nulls the fields first so the gate
+        // passes naturally; this branch only fires when the operator
+        // hits Lanjutkan with an unverified handle or invalid WA.
+        if ($this->wizardStep === 3 && ! $this->canAdvanceFromStep3) {
+            // No addError() — the inline $step3BlockReason hint in the
+            // partial already explains what's wrong.
+            return false;
+        }
         // BB95 — Step 4 notes are optional, so no gate; submit() does
         // the final cross-step validation.
         return true;

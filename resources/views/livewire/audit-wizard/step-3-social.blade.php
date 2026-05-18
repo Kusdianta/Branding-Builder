@@ -1,96 +1,110 @@
 {{--
-    BB100/BB101/BB102 — Step 3: Social handles + WhatsApp.
-    BB105 Part 1 — Lanjutkan is now a gate: a filled-but-failed field
-    blocks the button. Empty fields are always allowed (opt-out).
+    BB106 — Step 3: Social handles + WhatsApp.
 
-    Each block owns its own Alpine component:
-      - igHandleChecker   : POSTs to /check-handle/instagram on debounce
-      - ttHandleChecker   : POSTs to /check-handle/tiktok on debounce
-      - whatsappValidator : pure client-side Indonesian-mobile format check
+    Full rewrite. The BB100/BB101/BB102 Alpine state machines
+    (step3Gate / igHandleChecker / whatsappValidator / ttHandleChecker)
+    are gone. All state lives in the Volt component:
 
-    Aggregation: the wrapping `step3Gate()` component holds the three child
-    statuses and computes `gateBlocked` + a single `helperText`. Children
-    use `x-effect` to dispatch their status into the parent on every change.
+      - $instagramUsername / $igCheckStatus
+      - $tiktokUsername    / $ttCheckStatus
+      - $whatsappNumber    / $whatsappValidity
 
-    Alpine owns the input value and the visual status indicator. Each
-    component pushes the verified value to the Livewire wire model on
-    blur via $wire.set so the server-side normalisers
-    (updatedInstagramUsername / updatedTiktokUsername / updatedWhatsappNumber)
-    still run and the value persists into submit()'s deriveTouchpoints().
+    Verification is triggered ONLY by the operator clicking "Cek dulu"
+    (wire:click="checkInstagram" / "checkTiktok"). No debounced fetch,
+    no x-data, no morph-race teardown hazards.
 
-    BB105: method names `validate()` and `commit()` were both bare in
-    `@input`/`@blur` directives and have historically tripped Alpine
-    scope edge cases. Renamed to `checkFormat()` / `commitWhatsapp()` /
-    `commitHandle()` so the directive expressions are unambiguous.
-
-    The CSRF token is passed in via @js so we don't depend on a global
-    <meta name="csrf-token"> tag (the nema-ui-kit layout does not emit one).
+    The English↔Indonesian status copy is centralized in $socialLabels
+    and $waLabels below so adding a new status (or rewording one)
+    touches one place.
 --}}
 @php
-    $csrfToken = csrf_token();
+    // BB106 — single source of truth for status copy. Add a new state
+    // here and the four indicator slots pick it up automatically.
+    $socialLabels = [
+        'idle'      => null,   // no badge while never-checked
+        'checking'  => ['text' => 'Mengecek...',     'tone' => 'warn'],
+        'found'     => ['text' => 'Ditemukan',       'tone' => 'ok'],
+        'not_found' => ['text' => 'Tidak ditemukan', 'tone' => 'bad'],
+        'error'     => ['text' => 'Tidak bisa cek',  'tone' => 'warn'],
+    ];
+    $waLabels = [
+        'idle'    => null,
+        'valid'   => ['text' => 'Format OK',    'tone' => 'ok'],
+        'invalid' => ['text' => 'Format salah', 'tone' => 'bad'],
+    ];
+
+    $igLabel = $socialLabels[$igCheckStatus] ?? null;
+    $ttLabel = $socialLabels[$ttCheckStatus] ?? null;
+    $waLabel = $waLabels[$whatsappValidity] ?? null;
 @endphp
 
-<div class="bb-step bb-step-3" x-data="step3Gate()">
+<div class="bb-step bb-step-3">
     <h2 class="bb-step-title">Akun sosial & WhatsApp?</h2>
     <p class="bb-step-sub">Semuanya opsional. Saya cek dulu sebelum lanjut biar audit tidak salah sasaran.</p>
 
     {{-- ============================================================
-         BB100 — Instagram (primary signal, availability check)
+         Instagram — primary signal, manual verification
          ============================================================ --}}
-    <div class="bb-field"
-         x-data="igHandleChecker(@js($instagramUsername), @js($csrfToken))"
-         x-init="init()"
-         x-effect="$dispatch('step3-status', { field: 'ig', status: status })">
+    <div class="bb-field">
         <label for="instagram-username">
             <i class="ti ti-brand-instagram"></i> Instagram
         </label>
-        <div class="bb-input-prefix">
-            <span class="prefix">@</span>
-            <input
-                type="text"
-                id="instagram-username"
-                x-model="username"
-                @input.debounce.500ms="check()"
-                @blur="commitHandle()"
-                placeholder="namaakun"
-                autocomplete="off"
-                autocapitalize="off"
-                spellcheck="false"
-                :class="{ 'bb-input-ok': status === 'found', 'bb-input-bad': status === 'not_found' }"
-            />
-            <span class="bb-status-icon"
-                  x-show="status !== 'idle'"
-                  x-text="statusIcon()"
-                  :class="statusClass()"></span>
-        </div>
-
-        <div class="bb-handle-preview" x-show="status === 'found'" x-cloak>
-            <template x-if="profilePicUrl">
-                <img :src="profilePicUrl" alt="" referrerpolicy="no-referrer" />
-            </template>
-            <div class="bb-handle-preview__text">
-                <strong x-text="displayName || ('@' + username)"></strong>
-                <p x-text="followerLine()"></p>
+        <div class="bb-input-with-button">
+            <div class="bb-input-prefix">
+                <span class="prefix">@</span>
+                <input
+                    type="text"
+                    id="instagram-username"
+                    wire:model.live.debounce.300ms="instagramUsername"
+                    placeholder="namaakun"
+                    autocomplete="off"
+                    autocapitalize="off"
+                    spellcheck="false"
+                    @class([
+                        'bb-input-ok'  => $igCheckStatus === 'found',
+                        'bb-input-bad' => $igCheckStatus === 'not_found',
+                    ])
+                />
             </div>
+            <button
+                type="button"
+                wire:click="checkInstagram"
+                wire:loading.attr="disabled"
+                wire:target="checkInstagram"
+                @disabled(empty($instagramUsername) || $igCheckStatus === 'checking')
+                class="bb-btn-check"
+            >
+                <span wire:loading.remove wire:target="checkInstagram">Cek dulu</span>
+                <span wire:loading wire:target="checkInstagram">Mengecek...</span>
+            </button>
         </div>
 
-        <p class="bb-error" x-show="status === 'not_found'" x-cloak>
-            Akun @<span x-text="username"></span> tidak ditemukan di Instagram. Periksa lagi atau kosongkan.
-        </p>
-        <p class="bb-hint" x-show="status === 'error'" x-cloak>
-            Worker tidak bisa cek sekarang. Pastikan worker aktif lalu coba lagi.
-        </p>
+        @if ($igLabel)
+            <div class="bb-status-row">
+                <span class="bb-status-pill bb-status-pill--{{ $igLabel['tone'] }}">
+                    {{ $igLabel['text'] }}
+                </span>
+            </div>
+        @endif
+
+        @if ($igCheckStatus === 'not_found')
+            <p class="bb-error">
+                Akun @{{ $instagramUsername }} tidak ditemukan di Instagram. Periksa lagi atau kosongkan.
+            </p>
+        @endif
+        @if ($igCheckStatus === 'error')
+            <p class="bb-hint">
+                Worker tidak bisa cek sekarang. Pastikan worker aktif lalu coba lagi.
+            </p>
+        @endif
 
         @error('instagramUsername')<p class="bb-error">{{ $message }}</p>@enderror
     </div>
 
     {{-- ============================================================
-         BB102 — WhatsApp Business number
+         WhatsApp Business — format-only validation, no worker call
          ============================================================ --}}
-    <div class="bb-field"
-         x-data="whatsappValidator(@js($whatsappNumber))"
-         x-init="init()"
-         x-effect="$dispatch('step3-status', { field: 'wa', status: status })">
+    <div class="bb-field">
         <label for="whatsapp-number">
             <i class="ti ti-brand-whatsapp"></i> WhatsApp Business
         </label>
@@ -99,85 +113,98 @@
             <input
                 type="tel"
                 id="whatsapp-number"
-                x-model="number"
-                @input.debounce.300ms="checkFormat()"
-                @blur="commitWhatsapp()"
+                wire:model.live.debounce.300ms="whatsappNumber"
                 placeholder="8123456789"
                 inputmode="numeric"
                 autocomplete="off"
-                :class="{ 'bb-input-ok': status === 'valid', 'bb-input-bad': status === 'invalid' }"
+                @class([
+                    'bb-input-ok'  => $whatsappValidity === 'valid',
+                    'bb-input-bad' => $whatsappValidity === 'invalid',
+                ])
             />
-            <span class="bb-status-icon"
-                  x-show="status === 'valid' || status === 'invalid'"
-                  x-text="status === 'valid' ? '✓' : '✗'"
-                  :class="status === 'valid' ? 'ok' : 'bad'"></span>
         </div>
 
-        <div class="bb-handle-preview" x-show="status === 'valid'" x-cloak>
-            <div class="bb-handle-preview__text">
-                <strong>Nomor terformat: <span x-text="'+62 ' + number"></span></strong>
-                <p>
-                    <a :href="waLink()" target="_blank" rel="noopener">
+        @if ($waLabel)
+            <div class="bb-status-row">
+                <span class="bb-status-pill bb-status-pill--{{ $waLabel['tone'] }}">
+                    {{ $waLabel['text'] }}
+                </span>
+                @if ($whatsappValidity === 'valid' && $whatsappNumber)
+                    <a href="https://wa.me/62{{ $whatsappNumber }}"
+                       target="_blank"
+                       rel="noopener"
+                       class="bb-link-inline">
                         <i class="ti ti-external-link"></i>
-                        Buka wa.me untuk verifikasi manual
+                        Buka di WhatsApp untuk pastikan aktif
                     </a>
-                </p>
+                @endif
             </div>
-        </div>
+        @endif
 
-        <p class="bb-error" x-show="status === 'invalid'" x-cloak>
-            Format tidak valid. Contoh: <code>8123456789</code> (tanpa +62 atau 0 di depan).
-        </p>
+        @if ($whatsappValidity === 'invalid')
+            <p class="bb-error">
+                Format tidak valid. Contoh: <code>8123456789</code> (tanpa +62 atau 0 di depan).
+            </p>
+        @endif
         @error('whatsappNumber')<p class="bb-error">{{ $message }}</p>@enderror
     </div>
 
     {{-- ============================================================
-         BB101 — TikTok (bonus signal, availability check)
+         TikTok — bonus signal, manual verification
          ============================================================ --}}
-    <div class="bb-field bb-field--optional"
-         x-data="ttHandleChecker(@js($tiktokUsername), @js($csrfToken))"
-         x-init="init()"
-         x-effect="$dispatch('step3-status', { field: 'tt', status: status })">
+    <div class="bb-field bb-field--optional">
         <label for="tiktok-username">
             <i class="ti ti-brand-tiktok"></i> TikTok
             <span class="bb-badge bb-badge--muted">opsional · bonus</span>
         </label>
-        <div class="bb-input-prefix">
-            <span class="prefix">@</span>
-            <input
-                type="text"
-                id="tiktok-username"
-                x-model="username"
-                @input.debounce.500ms="check()"
-                @blur="commitHandle()"
-                placeholder="namaakun"
-                autocomplete="off"
-                autocapitalize="off"
-                spellcheck="false"
-                :class="{ 'bb-input-ok': status === 'found', 'bb-input-bad': status === 'not_found' }"
-            />
-            <span class="bb-status-icon"
-                  x-show="status !== 'idle'"
-                  x-text="statusIcon()"
-                  :class="statusClass()"></span>
-        </div>
-
-        <div class="bb-handle-preview" x-show="status === 'found'" x-cloak>
-            <template x-if="profilePicUrl">
-                <img :src="profilePicUrl" alt="" referrerpolicy="no-referrer" />
-            </template>
-            <div class="bb-handle-preview__text">
-                <strong x-text="displayName || ('@' + username)"></strong>
-                <p x-text="followerLine()"></p>
+        <div class="bb-input-with-button">
+            <div class="bb-input-prefix">
+                <span class="prefix">@</span>
+                <input
+                    type="text"
+                    id="tiktok-username"
+                    wire:model.live.debounce.300ms="tiktokUsername"
+                    placeholder="namaakun"
+                    autocomplete="off"
+                    autocapitalize="off"
+                    spellcheck="false"
+                    @class([
+                        'bb-input-ok'  => $ttCheckStatus === 'found',
+                        'bb-input-bad' => $ttCheckStatus === 'not_found',
+                    ])
+                />
             </div>
+            <button
+                type="button"
+                wire:click="checkTiktok"
+                wire:loading.attr="disabled"
+                wire:target="checkTiktok"
+                @disabled(empty($tiktokUsername) || $ttCheckStatus === 'checking')
+                class="bb-btn-check"
+            >
+                <span wire:loading.remove wire:target="checkTiktok">Cek dulu</span>
+                <span wire:loading wire:target="checkTiktok">Mengecek...</span>
+            </button>
         </div>
 
-        <p class="bb-error" x-show="status === 'not_found'" x-cloak>
-            Akun @<span x-text="username"></span> tidak ditemukan di TikTok. Periksa lagi atau kosongkan.
-        </p>
-        <p class="bb-hint" x-show="status === 'error'" x-cloak>
-            Worker tidak bisa cek sekarang. Pastikan worker aktif lalu coba lagi.
-        </p>
+        @if ($ttLabel)
+            <div class="bb-status-row">
+                <span class="bb-status-pill bb-status-pill--{{ $ttLabel['tone'] }}">
+                    {{ $ttLabel['text'] }}
+                </span>
+            </div>
+        @endif
+
+        @if ($ttCheckStatus === 'not_found')
+            <p class="bb-error">
+                Akun @{{ $tiktokUsername }} tidak ditemukan di TikTok. Periksa lagi atau kosongkan.
+            </p>
+        @endif
+        @if ($ttCheckStatus === 'error')
+            <p class="bb-hint">
+                Worker tidak bisa cek sekarang. Pastikan worker aktif lalu coba lagi.
+            </p>
+        @endif
 
         @error('tiktokUsername')<p class="bb-error">{{ $message }}</p>@enderror
     </div>
@@ -187,215 +214,26 @@
     </p>
 
     <div class="bb-actions between">
-        {{-- Lewati always works — empties all three Step 3 fields conceptually. --}}
-        <button type="button" wire:click="nextStep" class="bb-btn-ghost">Lewati</button>
+        {{-- "Lewati semua" nulls all three fields server-side so the
+             gate passes; this is the explicit opt-out path. --}}
+        <button type="button" wire:click="skipStep3" class="bb-btn-ghost">Lewati semua</button>
 
-        {{-- Lanjutkan is gated by Alpine on the wrapping x-data. --}}
+        {{-- Lanjutkan honours the gate via @disabled + server-side
+             validateCurrentWizardStep() Step 3 branch. Both layers
+             must agree; the server is authoritative. --}}
         <button type="button"
                 wire:click="nextStep"
-                class="bb-btn-primary"
-                :disabled="gateBlocked"
-                :class="{ 'bb-btn-disabled': gateBlocked }">
+                @disabled(! $this->canAdvanceFromStep3)
+                @class([
+                    'bb-btn-primary',
+                    'bb-btn-disabled' => ! $this->canAdvanceFromStep3,
+                ])>
             Lanjutkan
             <i class="ti ti-arrow-right"></i>
         </button>
     </div>
 
-    <p class="bb-hint bb-hint--gate" x-show="helperText" x-text="helperText" x-cloak></p>
+    @if ($this->step3BlockReason)
+        <p class="bb-hint bb-hint--gate">{{ $this->step3BlockReason }}</p>
+    @endif
 </div>
-
-@once
-    @push('scripts')
-    <script>
-    (function () {
-        // ----- BB105 Part 1: parent gate aggregator ------------------------
-        window.step3Gate = function () {
-            return {
-                // Children dispatch into here via x-effect on their root div.
-                igStatus: 'idle',   // idle | checking | found | not_found | error
-                ttStatus: 'idle',   // idle | checking | found | not_found | error
-                waStatus: 'idle',   // idle | valid | invalid
-                init() {
-                    this.$el.addEventListener('step3-status', (e) => {
-                        const d = e.detail || {};
-                        if (d.field === 'ig') this.igStatus = d.status;
-                        if (d.field === 'tt') this.ttStatus = d.status;
-                        if (d.field === 'wa') this.waStatus = d.status;
-                    });
-                },
-                get gateBlocked() {
-                    return this._handleBlocks(this.igStatus)
-                        || this._handleBlocks(this.ttStatus)
-                        || this.waStatus === 'invalid';
-                },
-                _handleBlocks(s) {
-                    return s === 'not_found' || s === 'checking' || s === 'error';
-                },
-                get helperText() {
-                    if (this.igStatus === 'checking' || this.ttStatus === 'checking') {
-                        return 'Sebentar, sedang mengecek...';
-                    }
-                    if (this.igStatus === 'not_found' || this.ttStatus === 'not_found') {
-                        return 'Periksa lagi handle yang ditandai merah.';
-                    }
-                    if (this.igStatus === 'error' || this.ttStatus === 'error') {
-                        return 'Worker tidak bisa cek sekarang. Pastikan worker aktif lalu coba lagi.';
-                    }
-                    if (this.waStatus === 'invalid') {
-                        return 'Format nomor WhatsApp belum valid.';
-                    }
-                    return '';
-                },
-            };
-        };
-
-        // ----- Shared handle-check fetcher (IG + TT) -----------------------
-        async function fetchHandle(endpoint, username, csrfToken) {
-            const response = await fetch(endpoint, {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json',
-                    'X-CSRF-TOKEN': csrfToken,
-                    'X-Requested-With': 'XMLHttpRequest',
-                },
-                body: JSON.stringify({ username }),
-            });
-            if (response.status === 422) {
-                return { status: 'not_found', exists: false };
-            }
-            if (!response.ok) {
-                return { status: 'error', exists: false };
-            }
-            return await response.json();
-        }
-
-        function formatFollowers(count) {
-            if (!Number.isFinite(count) || count <= 0) return null;
-            if (count >= 1_000_000) return (count / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M';
-            if (count >= 1_000)     return (count / 1_000).toFixed(1).replace(/\.0$/, '') + 'K';
-            return String(count);
-        }
-
-        function buildHandleComponent(endpoint, wireKey) {
-            return function handleChecker(initialValue, csrfToken) {
-                return {
-                    username: initialValue || '',
-                    status: 'idle',          // idle | checking | found | not_found | error
-                    displayName: '',
-                    profilePicUrl: '',
-                    followerCount: 0,
-                    _lastChecked: null,
-                    _abort: null,
-                    init() {
-                        // Run an initial check if the wizard was mounted with
-                        // a pre-filled value (back-navigated from Step 4).
-                        if (this.username && this.username.length >= 2) {
-                            this.check();
-                        }
-                    },
-                    statusIcon() {
-                        return {
-                            checking:  '…',
-                            found:     '✓',
-                            not_found: '✗',
-                            error:     '!',
-                        }[this.status] || '';
-                    },
-                    statusClass() {
-                        return {
-                            ok:  this.status === 'found',
-                            bad: this.status === 'not_found',
-                            warn: this.status === 'error',
-                        };
-                    },
-                    followerLine() {
-                        const followers = formatFollowers(this.followerCount);
-                        if (followers) return '@' + this.username + ' · ' + followers + ' pengikut';
-                        return '@' + this.username;
-                    },
-                    async check() {
-                        const value = (this.username || '').trim().replace(/^@/, '');
-                        if (value === '' || value.length < 2) {
-                            this.status = 'idle';
-                            return;
-                        }
-                        if (value === this._lastChecked) return;
-                        this._lastChecked = value;
-                        this.status = 'checking';
-                        try {
-                            if (this._abort) this._abort.abort();
-                            const controller = new AbortController();
-                            this._abort = controller;
-                            const data = await fetchHandle(endpoint, value, csrfToken);
-                            if (controller.signal.aborted) return;
-                            if (data.exists === true && data.status === 'found') {
-                                this.status = 'found';
-                                this.displayName  = data.display_name    || '';
-                                this.profilePicUrl = data.profile_pic_url || '';
-                                this.followerCount = data.follower_count  || 0;
-                            } else if (data.status === 'not_found') {
-                                this.status = 'not_found';
-                                this.displayName = '';
-                                this.profilePicUrl = '';
-                                this.followerCount = 0;
-                            } else {
-                                this.status = 'error';
-                            }
-                        } catch (e) {
-                            if (e.name === 'AbortError') return;
-                            this.status = 'error';
-                        }
-                    },
-                    commitHandle() {
-                        // Push current value into Livewire so the server-side
-                        // normaliser hook fires and the value survives submit().
-                        if (this.$wire && typeof this.$wire.set === 'function') {
-                            const value = this.username && this.username.trim() !== ''
-                                ? this.username
-                                : null;
-                            this.$wire.set(wireKey, value);
-                        }
-                    },
-                };
-            };
-        }
-
-        window.igHandleChecker = buildHandleComponent('/check-handle/instagram', 'instagramUsername');
-        window.ttHandleChecker = buildHandleComponent('/check-handle/tiktok',    'tiktokUsername');
-
-        // ----- WhatsApp client-side format validator -----------------------
-        window.whatsappValidator = function (initialValue) {
-            return {
-                number: initialValue || '',
-                status: 'idle',     // idle | valid | invalid
-                init() {
-                    if (this.number) this.checkFormat();
-                },
-                checkFormat() {
-                    const digits = (this.number || '').replace(/[^\d]/g, '').replace(/^(?:62|0)/, '');
-                    if (digits === '') {
-                        this.status = 'idle';
-                        this.number = '';
-                        return;
-                    }
-                    this.number = digits;
-                    this.status = /^8\d{8,11}$/.test(digits) ? 'valid' : 'invalid';
-                },
-                waLink() {
-                    return 'https://wa.me/62' + this.number;
-                },
-                commitWhatsapp() {
-                    if (this.$wire && typeof this.$wire.set === 'function') {
-                        const digits = (this.number || '').replace(/[^\d]/g, '').replace(/^(?:62|0)/, '');
-                        const ok = /^8\d{8,11}$/.test(digits);
-                        this.$wire.set('whatsappNumber', ok ? digits : null);
-                    }
-                },
-            };
-        };
-    })();
-    </script>
-    @endpush
-@endonce
