@@ -175,10 +175,40 @@ class HandleCheckTest extends TestCase
             ),
         ]);
 
-        $this->postJson('/check-handle/instagram', ['username' => 'nasa'])->assertOk();
-        $this->postJson('/check-handle/instagram', ['username' => 'nasa'])->assertOk();
+        // BB107.1 — second call must hit cache (Http::assertSentCount(1)) AND
+        // return the same JSON shape (round-trip the array, not the object).
+        $first  = $this->postJson('/check-handle/instagram', ['username' => 'nasa']);
+        $second = $this->postJson('/check-handle/instagram', ['username' => 'nasa']);
+
+        $first->assertOk();
+        $second->assertOk();
+        $this->assertSame($first->json(), $second->json(), 'cache round-trip preserves shape');
 
         Http::assertSentCount(1);
+    }
+
+    #[Test]
+    public function instagram_corrupt_cache_entry_is_evicted_and_refetched(): void
+    {
+        // BB107.1 — simulate a pre-fix cache entry that came back as a
+        // serialized DTO object (or any non-array). The checker must
+        // notice, evict, re-fetch, and re-cache as an array. Without
+        // this defence, every request after the corrupt write would
+        // crash with the TypeError that prompted BB107.1.
+        \Illuminate\Support\Facades\Cache::put('ig-handle:nasa', 'corrupt-non-array-payload', 3600);
+
+        Http::fake([
+            'instagram.com/api/v1/users/web_profile_info*' => Http::response(
+                $this->igFoundFixture(),
+                200,
+                ['Content-Type' => 'application/json'],
+            ),
+        ]);
+
+        $response = $this->postJson('/check-handle/instagram', ['username' => 'nasa']);
+
+        $response->assertOk()->assertJson(['status' => 'found', 'exists' => true]);
+        $this->assertIsArray(\Illuminate\Support\Facades\Cache::get('ig-handle:nasa'));
     }
 
     // ─── TikTok (unchanged from BB101; BB108 will rewrite) ───────────

@@ -70,4 +70,27 @@ final readonly class InstagramHandleResult
             checkedAt:     now()->toIso8601String(),
         );
     }
+
+    /**
+     * BB107.1 — reconstruct from the toArray() shape. The cache layer
+     * stores the array form (not the serialized object) so the value
+     * survives autoload-classmap drift between Herd PHP-FPM workers,
+     * OPcache staleness, and class signature changes. Symmetric with
+     * toArray(); same key names.
+     *
+     * @param array<string,mixed> $data
+     */
+    public static function fromArray(array $data): self
+    {
+        return new self(
+            username:      (string) ($data['username'] ?? ''),
+            status:        (string) ($data['status'] ?? 'error'),
+            exists:        (bool) ($data['exists'] ?? false),
+            displayName:   isset($data['display_name'])    ? (string) $data['display_name']    : null,
+            profilePicUrl: isset($data['profile_pic_url']) ? (string) $data['profile_pic_url'] : null,
+            followerCount: isset($data['follower_count'])  ? (int) $data['follower_count']     : null,
+            isBusiness:    isset($data['is_business'])     ? (bool) $data['is_business']       : null,
+            checkedAt:     isset($data['checked_at'])      ? (string) $data['checked_at']      : null,
+        );
+    }
 }

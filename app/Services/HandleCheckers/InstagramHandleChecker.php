@@ -57,11 +57,30 @@ final class InstagramHandleChecker
             return InstagramHandleResult::error($username);
         }
 
-        return Cache::remember(
+        // BB107.1 — cache the toArray() shape, not the DTO object.
+        // Serializing the DTO directly was producing __PHP_Incomplete_Class
+        // on certain Herd PHP-FPM workers (autoload-classmap drift between
+        // the writer process and a later reader process). A plain array
+        // round-trips cleanly through native serialize/unserialize without
+        // any class-resolution requirement at deserialize time, so the
+        // cache is immune to that whole failure class.
+        $payload = Cache::remember(
             "ig-handle:{$normalized}",
             self::CACHE_TTL_SECONDS,
-            fn () => $this->fetchAndParse($normalized),
+            fn () => $this->fetchAndParse($normalized)->toArray(),
         );
+
+        // Defensive: if a pre-BB107.1 entry (serialized DTO that came back
+        // as __PHP_Incomplete_Class) slipped through Cache::remember as a
+        // non-array, evict it and re-compute fresh. Belt-and-suspenders —
+        // cache:clear at deploy should already have wiped these.
+        if (! is_array($payload)) {
+            Cache::forget("ig-handle:{$normalized}");
+            $payload = $this->fetchAndParse($normalized)->toArray();
+            Cache::put("ig-handle:{$normalized}", $payload, self::CACHE_TTL_SECONDS);
+        }
+
+        return InstagramHandleResult::fromArray($payload);
     }
 
     private function normalize(string $raw): ?string
