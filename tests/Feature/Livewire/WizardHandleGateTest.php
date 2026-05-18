@@ -143,7 +143,11 @@ class WizardHandleGateTest extends TestCase
     public function check_instagram_flips_status_to_found_when_checker_returns_found(): void
     {
         Http::fake([
-            'instagram.com/nasa/*' => Http::response($this->igProfileHtml('nasa', 'NASA'), 200),
+            'instagram.com/api/v1/users/web_profile_info*' => Http::response(
+                $this->igProfileJson('nasa', 'NASA'),
+                200,
+                ['Content-Type' => 'application/json'],
+            ),
         ]);
 
         $this->authedComponent()
@@ -156,7 +160,7 @@ class WizardHandleGateTest extends TestCase
     public function check_instagram_flips_status_to_not_found_when_checker_returns_not_found(): void
     {
         Http::fake([
-            'instagram.com/xxxasdjkahsdkjahsdkjasd/*' => Http::response('Page not found', 404),
+            'instagram.com/api/v1/users/web_profile_info*' => Http::response('', 404),
         ]);
 
         $this->authedComponent()
@@ -169,7 +173,7 @@ class WizardHandleGateTest extends TestCase
     public function check_instagram_flips_status_to_error_when_checker_returns_error(): void
     {
         Http::fake([
-            'instagram.com/*' => Http::response('upstream meltdown', 500),
+            'instagram.com/api/v1/users/web_profile_info*' => Http::response('upstream meltdown', 500),
         ]);
 
         $this->authedComponent()
@@ -310,18 +314,24 @@ class WizardHandleGateTest extends TestCase
     // ─── helpers ─────────────────────────────────────────────────────
 
     /**
-     * Minimal Instagram profile HTML the BB100 parser accepts as "found".
-     * The parser reads og:title for display_name and og:image for the
-     * pic; anything else is optional. Pattern mirrors BB100/BB101's
-     * HandleCheckTest happy-path stubs.
+     * BB107 — minimal `web_profile_info` JSON the rewritten checker
+     * accepts as "found". Mirrors the live endpoint shape but trimmed
+     * to the fields the parser reads.
      */
-    private function igProfileHtml(string $username, string $displayName): string
+    private function igProfileJson(string $username, string $displayName): string
     {
-        return '<html><head>'
-            . '<meta property="og:title" content="' . $displayName . ' (@' . $username . ') • Instagram photos and videos">'
-            . '<meta property="og:image" content="https://example.test/' . $username . '.jpg">'
-            . '<meta property="og:description" content="100 Followers, 50 Following, 10 Posts">'
-            . '</head></html>';
+        return json_encode([
+            'data' => [
+                'user' => [
+                    'username'            => $username,
+                    'full_name'           => $displayName,
+                    'profile_pic_url'     => "https://example.test/{$username}.jpg",
+                    'profile_pic_url_hd'  => "https://example.test/{$username}_hd.jpg",
+                    'is_business_account' => false,
+                    'edge_followed_by'    => ['count' => 100],
+                ],
+            ],
+        ], JSON_THROW_ON_ERROR);
     }
 
     private function ttProfileHtml(string $username, string $displayName): string

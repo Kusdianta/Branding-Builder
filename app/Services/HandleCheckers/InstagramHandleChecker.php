@@ -11,27 +11,44 @@ use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
- * BB100 — Instagram username availability check via direct HTTP.
+ * BB100 → BB107 — Instagram username availability check.
  *
- * Hits https://www.instagram.com/{username}/ with a realistic UA, then
- * parses og:title / og:image / meta description tags out of the HTML.
- * Instagram's 404 page serves an "Page not found" sentinel inside
- * og:title so detection works without relying on status code (which
- * occasionally returns 200 with a soft-404 body).
+ * BB107 ROOT CAUSE FIX:
+ * The original BB100 implementation hit https://www.instagram.com/{username}/
+ * and parsed og:title from the HTML head. Instagram stopped serving og:title
+ * (and any other profile-specific markup) in the unauthenticated HTML response
+ * sometime in 2025–2026: real handles AND fake handles both return an
+ * identical ~806KB SPA shell that loads profile data via authenticated JS.
+ * Effect: every check returned "not_found", regardless of whether the handle
+ * existed. HandleCheckTest stayed green because it fed the parser synthetic
+ * HTML that still matched the old contract (fixture rot).
+ *
+ * BB107 fix: switch to Instagram's `web_profile_info` JSON endpoint:
+ *   GET https://www.instagram.com/api/v1/users/web_profile_info/?username=X
+ *   Header: x-ig-app-id: 936619743392459   (the public IG web app ID)
+ *
+ * Behaviour:
+ *   - real handle  → 200 OK + JSON `{ data: { user: { ... } } }`
+ *   - fake handle  → 200 OK + HTML body containing
+ *                    "<title>Page Not Found • Instagram</title>"
+ *   - rate-limited → 429 / 5xx / non-JSON / login wall → returns 'error'
+ *                    (NOT 'not_found' — avoids false negatives, lets the
+ *                    UI show "tidak bisa cek" while the operator can still
+ *                    submit the audit).
+ *
+ * The endpoint is undocumented; if Instagram changes it, the
+ * `RUN_LIVE_NETWORK_TESTS=true` smoke test in tests/Feature/Http/
+ * InstagramLiveSmokeTest.php surfaces the break early.
  *
  * Caching: 1 hour per username. Cheap server-side, avoids hammering IG.
- *
- * Limitation accepted by the Phase 12c.1 spec: anonymous HTTP is
- * rate-limited and occasionally returns a login wall. The "error"
- * result lets the frontend gracefully degrade — the user can still
- * submit the audit. Worker delegation (Option B) is 12d backlog.
  */
 final class InstagramHandleChecker
 {
     private const CACHE_TTL_SECONDS = 3600;
     private const REQUEST_TIMEOUT_SECONDS = 8;
-    private const PROFILE_URL = 'https://www.instagram.com/%s/';
+    private const PROFILE_INFO_URL = 'https://www.instagram.com/api/v1/users/web_profile_info/?username=%s';
     private const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36';
+    private const IG_APP_ID = '936619743392459';
 
     public function check(string $username): InstagramHandleResult
     {
@@ -61,11 +78,12 @@ final class InstagramHandleChecker
         try {
             $response = Http::withUserAgent(self::USER_AGENT)
                 ->withHeaders([
-                    'Accept'          => 'text/html,application/xhtml+xml',
+                    'x-ig-app-id'     => self::IG_APP_ID,
+                    'Accept'          => 'application/json, text/plain, */*',
                     'Accept-Language' => 'en-US,en;q=0.9',
                 ])
                 ->timeout(self::REQUEST_TIMEOUT_SECONDS)
-                ->get(sprintf(self::PROFILE_URL, $username));
+                ->get(sprintf(self::PROFILE_INFO_URL, $username));
         } catch (RequestException|Throwable $e) {
             Log::warning('InstagramHandleChecker transport error', [
                 'username' => $username,
@@ -79,110 +97,74 @@ final class InstagramHandleChecker
         }
 
         if (! $response->successful()) {
-            // 429 / 5xx / login wall — treat as transient error so the
-            // frontend doesn't show a false "not found" verdict.
+            // 429 / 5xx — transient. Do not claim not_found.
+            Log::info('InstagramHandleChecker non-2xx', [
+                'username' => $username,
+                'status'   => $response->status(),
+            ]);
             return InstagramHandleResult::error($username);
         }
 
-        $html = $response->body();
-        $ogTitle = $this->extractMeta($html, 'og:title');
+        // Fake handles return 200 with an HTML "Page Not Found" body — the
+        // endpoint redirects to the standard 404 page rather than returning
+        // a structured JSON 404. Sniff content-type + body so we don't try
+        // to JSON-decode HTML.
+        $contentType = strtolower($response->header('Content-Type') ?? '');
+        $body        = $response->body();
 
-        // Instagram's soft-404 also returns 200 but with a "Page Not Found"
-        // og:title — catch that branch explicitly.
-        if ($ogTitle === null || str_contains(strtolower($ogTitle), 'page not found')) {
+        if (str_contains($contentType, 'text/html')
+            || str_contains($body, 'Page Not Found')
+        ) {
             return InstagramHandleResult::notFound($username);
         }
 
-        $description = $this->extractMeta($html, 'og:description')
-            ?? $this->extractMetaName($html, 'description');
+        $json = $response->json();
+        if (! is_array($json)) {
+            // Endpoint returned 2xx with non-JSON, non-HTML body. Login wall
+            // / new sentinel page. Treat as inconclusive rather than 404.
+            Log::info('InstagramHandleChecker unparseable body', [
+                'username' => $username,
+                'len'      => strlen($body),
+            ]);
+            return InstagramHandleResult::error($username);
+        }
+
+        $user = $json['data']['user'] ?? null;
+        if (! is_array($user)) {
+            // {data: {user: null}} would also be a soft-404 sentinel, though
+            // in practice the endpoint emits the HTML 404 page instead.
+            return InstagramHandleResult::notFound($username);
+        }
 
         return new InstagramHandleResult(
             username:      $username,
             status:        'found',
             exists:        true,
-            displayName:   $this->parseDisplayName($ogTitle, $username),
-            profilePicUrl: $this->extractMeta($html, 'og:image'),
-            followerCount: $this->parseFollowerCount($description),
-            isBusiness:    $this->detectBusinessHint($html),
+            displayName:   $this->stringOrNull($user['full_name'] ?? null),
+            profilePicUrl: $this->stringOrNull(
+                $user['profile_pic_url_hd'] ?? $user['profile_pic_url'] ?? null,
+            ),
+            followerCount: $this->intOrNull($user['edge_followed_by']['count'] ?? null),
+            isBusiness:    isset($user['is_business_account'])
+                ? (bool) $user['is_business_account']
+                : null,
             checkedAt:     now()->toIso8601String(),
         );
     }
 
-    private function extractMeta(string $html, string $property): ?string
+    private function stringOrNull(mixed $value): ?string
     {
-        $quoted = preg_quote($property, '/');
-        if (preg_match(
-            '/<meta\s+property=["\']' . $quoted . '["\']\s+content=["\']([^"\']+)["\']/i',
-            $html,
-            $m,
-        )) {
-            return html_entity_decode($m[1], ENT_QUOTES | ENT_HTML5);
-        }
-        if (preg_match(
-            '/<meta\s+content=["\']([^"\']+)["\']\s+property=["\']' . $quoted . '["\']/i',
-            $html,
-            $m,
-        )) {
-            return html_entity_decode($m[1], ENT_QUOTES | ENT_HTML5);
-        }
-        return null;
-    }
-
-    private function extractMetaName(string $html, string $name): ?string
-    {
-        $quoted = preg_quote($name, '/');
-        if (preg_match(
-            '/<meta\s+name=["\']' . $quoted . '["\']\s+content=["\']([^"\']+)["\']/i',
-            $html,
-            $m,
-        )) {
-            return html_entity_decode($m[1], ENT_QUOTES | ENT_HTML5);
-        }
-        return null;
-    }
-
-    /**
-     * og:title is typically "Display Name (@username) • Instagram photos and videos"
-     * or "@username • Instagram photos and videos" if no display name set.
-     */
-    private function parseDisplayName(string $ogTitle, string $username): ?string
-    {
-        // Strip the trailing " • Instagram..." suffix.
-        $stripped = preg_replace('/\s+[•·]\s+Instagram.*$/u', '', $ogTitle) ?? $ogTitle;
-        // Pull out "Display Name" from "Display Name (@username)".
-        if (preg_match('/^(.+?)\s*\(@' . preg_quote($username, '/') . '\)\s*$/u', $stripped, $m)) {
-            $name = trim($m[1]);
-            return $name !== '' ? $name : null;
-        }
-        return null;
-    }
-
-    /**
-     * Description usually reads "5,432 Followers, 123 Following, 89 Posts — ..."
-     * Both en-US and id-ID locales use the same number-then-word pattern with
-     * comma/dot thousand separators.
-     */
-    private function parseFollowerCount(?string $description): ?int
-    {
-        if ($description === null) {
+        if ($value === null || $value === '') {
             return null;
         }
-        if (preg_match('/([\d,.]+)\s+Followers/i', $description, $m)) {
-            $digits = preg_replace('/[^\d]/', '', $m[1]);
-            return $digits === '' || $digits === null ? null : (int) $digits;
-        }
-        return null;
+        return is_string($value) ? $value : (string) $value;
     }
 
-    /**
-     * IG's bundled SSR JSON contains "is_business_account":true on creator/
-     * business accounts. Best-effort hint only; null when unknown.
-     */
-    private function detectBusinessHint(string $html): ?bool
+    private function intOrNull(mixed $value): ?int
     {
-        if (preg_match('/"is_business_account":\s*(true|false)/', $html, $m)) {
-            return $m[1] === 'true';
+        if ($value === null || $value === '') {
+            return null;
         }
-        return null;
+        return is_numeric($value) ? (int) $value : null;
     }
 }

@@ -88,8 +88,11 @@
         @endif
 
         @if ($igCheckStatus === 'not_found')
+            {{-- BB107 — `@{{ $var }}` is Blade's escape syntax (renders the
+                 curlies as literal text). Build the @-prefixed handle inside
+                 a single Blade expression so the literal "@" stays plain. --}}
             <p class="bb-error">
-                Akun @{{ $instagramUsername }} tidak ditemukan di Instagram. Periksa lagi atau kosongkan.
+                Akun {{ '@' . $instagramUsername }} tidak ditemukan di Instagram. Periksa lagi atau kosongkan.
             </p>
         @endif
         @if ($igCheckStatus === 'error')
@@ -151,7 +154,18 @@
 
     {{-- ============================================================
          TikTok — bonus signal, manual verification
+         BB107: gated behind the wizard_show_tiktok feature flag.
+                When the flag is off, $tiktokUsername stays null forever
+                and the Step 3 gate's TikTok branch becomes a no-op
+                (empty handle = no constraint). Server-side scoring +
+                /check-handle/tiktok route + TikTokHandleChecker service
+                stay live so re-enabling is a single env flip.
+                NOTE: TikTokHandleChecker has the same fixture-rot
+                problem as the pre-BB107 IG checker (anonymous TT HTML
+                scraping no longer reliably distinguishes real from fake
+                handles). Fix BB108 before flipping this flag back on.
          ============================================================ --}}
+    @if (config('features.wizard_show_tiktok', false))
     <div class="bb-field bb-field--optional">
         <label for="tiktok-username">
             <i class="ti ti-brand-tiktok"></i> TikTok
@@ -197,7 +211,7 @@
 
         @if ($ttCheckStatus === 'not_found')
             <p class="bb-error">
-                Akun @{{ $tiktokUsername }} tidak ditemukan di TikTok. Periksa lagi atau kosongkan.
+                Akun {{ '@' . $tiktokUsername }} tidak ditemukan di TikTok. Periksa lagi atau kosongkan.
             </p>
         @endif
         @if ($ttCheckStatus === 'error')
@@ -208,6 +222,7 @@
 
         @error('tiktokUsername')<p class="bb-error">{{ $message }}</p>@enderror
     </div>
+    @endif
 
     <p class="bb-hint">
         Boleh tempel link profil lengkap (misalnya <code>instagram.com/namaakun</code>) — saya akan ambil username-nya saja.

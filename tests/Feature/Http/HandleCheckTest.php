@@ -11,12 +11,24 @@ use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
 
 /**
- * BB100/BB101 — handle availability endpoint contract.
+ * BB100/BB101/BB107 — handle availability endpoint contract.
  *
- * Covers happy path (parses og:* meta tags), Instagram 404, TikTok
- * soft-404 sentinel ("Couldn't find this account"), transport error,
- * and the regex validator on the controller. Cache is flushed between
- * cases so each request actually hits the faked Http layer.
+ * BB107 SHIFT: Instagram tests now hit the `web_profile_info` JSON
+ * endpoint (the BB100 HTML-scrape path is dead — IG stopped serving
+ * og:title in the unauthenticated shell). Fixtures live in
+ * tests/fixtures/instagram/ and were captured from real live responses
+ * so the tests reflect actual contract, not synthetic HTML that papers
+ * over reality.
+ *
+ * Live-network smoke (skipped by default) lives in
+ * tests/Feature/Http/InstagramLiveSmokeTest.php — set
+ * RUN_LIVE_NETWORK_TESTS=true to run it pre-deploy.
+ *
+ * TikTok tests are unchanged (BB108 will rewrite TikTokHandleChecker
+ * the same way; until then TT UI is gated behind WIZARD_SHOW_TIKTOK).
+ *
+ * Cache is flushed between cases so each request actually hits the
+ * faked Http layer.
  */
 class HandleCheckTest extends TestCase
 {
@@ -28,38 +40,57 @@ class HandleCheckTest extends TestCase
         Cache::flush();
     }
 
+    // ─── Instagram (web_profile_info) ────────────────────────────────
+
     #[Test]
-    public function instagram_found_parses_meta_tags(): void
+    public function instagram_found_parses_web_profile_info_json(): void
     {
         Http::fake([
-            'instagram.com/lessworry.kemang/*' => Http::response($this->igProfileHtml(
-                title:     'Less Worry Kemang (@lessworry.kemang) • Instagram photos and videos',
-                desc:      '5,432 Followers, 123 Following, 89 Posts',
-                image:     'https://scontent.cdninstagram.com/v/lw.jpg',
-                business:  true,
-            ), 200),
+            'instagram.com/api/v1/users/web_profile_info*' => Http::response(
+                $this->igFoundFixture(),
+                200,
+                ['Content-Type' => 'application/json; charset=utf-8'],
+            ),
         ]);
 
         $response = $this->postJson('/check-handle/instagram', [
-            'username' => 'lessworry.kemang',
+            'username' => 'nasa',
         ]);
 
         $response->assertOk()
             ->assertJson([
                 'exists'         => true,
                 'status'         => 'found',
-                'display_name'   => 'Less Worry Kemang',
-                'profile_pic_url' => 'https://scontent.cdninstagram.com/v/lw.jpg',
-                'follower_count' => 5432,
+                'display_name'   => 'NASA',
+                'follower_count' => 104352365,
                 'is_business'    => true,
             ]);
     }
 
     #[Test]
-    public function instagram_404_returns_not_found(): void
+    public function instagram_not_found_html_page_returns_not_found(): void
     {
         Http::fake([
-            'instagram.com/nope_no_such_user/*' => Http::response('Page not found', 404),
+            'instagram.com/api/v1/users/web_profile_info*' => Http::response(
+                $this->igNotFoundFixture(),
+                200,
+                ['Content-Type' => 'text/html; charset=utf-8'],
+            ),
+        ]);
+
+        $response = $this->postJson('/check-handle/instagram', [
+            'username' => 'xkjasdkjhasdkj_nonexistent',
+        ]);
+
+        $response->assertOk()
+            ->assertJson(['exists' => false, 'status' => 'not_found']);
+    }
+
+    #[Test]
+    public function instagram_actual_404_status_returns_not_found(): void
+    {
+        Http::fake([
+            'instagram.com/api/v1/users/web_profile_info*' => Http::response('', 404),
         ]);
 
         $response = $this->postJson('/check-handle/instagram', [
@@ -71,20 +102,56 @@ class HandleCheckTest extends TestCase
     }
 
     #[Test]
-    public function instagram_soft_404_via_og_title_returns_not_found(): void
+    public function instagram_json_with_null_user_returns_not_found(): void
     {
         Http::fake([
-            'instagram.com/*' => Http::response(
-                '<html><head><meta property="og:title" content="Page Not Found • Instagram"></head></html>',
+            'instagram.com/api/v1/users/web_profile_info*' => Http::response(
+                json_encode(['data' => ['user' => null]]),
                 200,
+                ['Content-Type' => 'application/json'],
             ),
         ]);
 
         $response = $this->postJson('/check-handle/instagram', [
-            'username' => 'soft404user',
+            'username' => 'softnull',
         ]);
 
-        $response->assertOk()->assertJson(['exists' => false, 'status' => 'not_found']);
+        $response->assertOk()
+            ->assertJson(['exists' => false, 'status' => 'not_found']);
+    }
+
+    #[Test]
+    public function instagram_rate_limited_returns_error_not_false_negative(): void
+    {
+        Http::fake([
+            'instagram.com/api/v1/users/web_profile_info*' => Http::response('throttled', 429),
+        ]);
+
+        $response = $this->postJson('/check-handle/instagram', [
+            'username' => 'somehandle',
+        ]);
+
+        $response->assertOk()
+            ->assertJson(['exists' => false, 'status' => 'error']);
+    }
+
+    #[Test]
+    public function instagram_unparseable_2xx_returns_error_not_false_negative(): void
+    {
+        Http::fake([
+            'instagram.com/api/v1/users/web_profile_info*' => Http::response(
+                'definitely not JSON nor an IG 404 page',
+                200,
+                ['Content-Type' => 'text/plain'],
+            ),
+        ]);
+
+        $response = $this->postJson('/check-handle/instagram', [
+            'username' => 'somehandle',
+        ]);
+
+        $response->assertOk()
+            ->assertJson(['exists' => false, 'status' => 'error']);
     }
 
     #[Test]
@@ -101,18 +168,20 @@ class HandleCheckTest extends TestCase
     public function instagram_caches_per_username_for_one_hour(): void
     {
         Http::fake([
-            'instagram.com/*' => Http::response($this->igProfileHtml(
-                title: 'Cached User (@cacheduser) • Instagram photos and videos',
-                desc:  '100 Followers, 50 Following, 10 Posts',
-                image: 'https://example.com/img.jpg',
-            ), 200),
+            'instagram.com/api/v1/users/web_profile_info*' => Http::response(
+                $this->igFoundFixture(),
+                200,
+                ['Content-Type' => 'application/json'],
+            ),
         ]);
 
-        $this->postJson('/check-handle/instagram', ['username' => 'cacheduser'])->assertOk();
-        $this->postJson('/check-handle/instagram', ['username' => 'cacheduser'])->assertOk();
+        $this->postJson('/check-handle/instagram', ['username' => 'nasa'])->assertOk();
+        $this->postJson('/check-handle/instagram', ['username' => 'nasa'])->assertOk();
 
         Http::assertSentCount(1);
     }
+
+    // ─── TikTok (unchanged from BB101; BB108 will rewrite) ───────────
 
     #[Test]
     public function tiktok_found_parses_og_title(): void
@@ -158,26 +227,20 @@ class HandleCheckTest extends TestCase
         $response->assertStatus(422);
     }
 
-    private function igProfileHtml(
-        string $title,
-        string $desc,
-        string $image,
-        ?bool $business = null,
-    ): string {
-        $businessTag = $business === null
-            ? ''
-            : '<script>{"is_business_account":' . ($business ? 'true' : 'false') . '}</script>';
-        return <<<HTML
-<!DOCTYPE html>
-<html>
-<head>
-    <meta property="og:title" content="{$title}">
-    <meta property="og:description" content="{$desc}">
-    <meta property="og:image" content="{$image}">
-</head>
-<body>{$businessTag}</body>
-</html>
-HTML;
+    // ─── helpers ─────────────────────────────────────────────────────
+
+    private function igFoundFixture(): string
+    {
+        return file_get_contents(
+            base_path('tests/fixtures/instagram/web_profile_info-nasa.json'),
+        );
+    }
+
+    private function igNotFoundFixture(): string
+    {
+        return file_get_contents(
+            base_path('tests/fixtures/instagram/web_profile_info-not-found.html'),
+        );
     }
 
     private function ttProfileHtml(string $title, string $desc, string $image): string
