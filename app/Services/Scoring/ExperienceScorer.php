@@ -6,6 +6,7 @@ namespace App\Services\Scoring;
 
 use App\DTO\EvidenceItem;
 use App\DTO\PillarScore;
+use App\Models\BrandAudit;
 use App\Models\ScoringRubric;
 
 /**
@@ -87,6 +88,16 @@ class ExperienceScorer
         ?array $operatorDecls,
         array $context = [],
     ): PillarScore {
+        // BB117 — v3 audits route to a simpler bonus model that reads
+        // declarations from $audit->touchpoints.operational (BB112
+        // wizard step 3) and $audit->touchpoints.service_types.variety_count
+        // (BB111 wizard step 2) instead of the legacy
+        // operator_declarations column + ServiceSignalsExtractor pipeline.
+        $version = (string) ($context['_wizard_version'] ?? BrandAudit::WIZARD_V1);
+        if ($version === BrandAudit::WIZARD_V3) {
+            return $this->scoreV3($evidence, $operatorDecls, $context);
+        }
+
         $signals = (array) ($evidence['analysis']['service_signals'] ?? []);
 
         $subBucketScores    = ['base' => self::BASE_SCORE];
@@ -166,6 +177,162 @@ class ExperienceScorer
             subBucketScores: $subBucketScores,
             scoreBreakdown: $breakdown,
         );
+    }
+
+    /**
+     * BB117 v3 path — PPT-rubric Experience scoring with deterministic
+     * bonus assignment from wizard step inputs + price-list detection.
+     * Penalties remain handled post-persistence by ExperiencePenaltyDetector.
+     *
+     * Bonus model (additive, no tier classifier):
+     *   - Base 30
+     *   - Bonus ekspres   +10  if touchpoints.operational.express_service
+     *   - Bonus antar     +12  if touchpoints.operational.pickup_delivery
+     *   - Bonus variasi   +15  if touchpoints.service_types.variety_count ≥ 4
+     *   - Bonus SOP       +15 (declared AND owner_reply_rate ≥ 0.5)
+     *                     +8  (declared only)
+     *   - Bonus price     +10  if audit_evidence.price_list_detection.detected
+     *
+     * @param array<string,mixed>      $evidence
+     * @param array<string,mixed>|null $operatorDecls  legacy bag, kept for compat
+     * @param array<string,mixed>      $context        per-audit context
+     */
+    private function scoreV3(array $evidence, ?array $operatorDecls, array $context): PillarScore
+    {
+        $touchpointsOp = (array) ($context['touchpoints_operational'] ?? []);
+        $varietyCount  = (int)   ($context['variety_count'] ?? 1);
+        $replyRate     = (float) ($context['owner_reply_rate'] ?? 0.0);
+        $priceDetection= (array) ($evidence['price_list_detection'] ?? []);
+        $priceDetected = (bool)  ($priceDetection['detected'] ?? false);
+
+        $expressDeclared = (bool) ($touchpointsOp['express_service']  ?? false);
+        $pickupDeclared  = (bool) ($touchpointsOp['pickup_delivery']  ?? false);
+        $sopDeclared     = (bool) ($touchpointsOp['complaint_sop']    ?? false);
+
+        $base       = self::BASE_SCORE;
+        $express    = $expressDeclared ? 10 : 0;
+        $pickup     = $pickupDeclared  ? 12 : 0;
+        $variasi    = $varietyCount >= 4 ? 15 : 0;
+        // SOP rule: declared+verified (≥50% reply rate) = +15; declared
+        // alone = +8 (partial). Undeclared = 0.
+        $sop = match (true) {
+            $sopDeclared && $replyRate >= 0.50 => 15,
+            $sopDeclared                       => 8,
+            default                            => 0,
+        };
+        $price = $priceDetected ? 10 : 0;
+
+        $subBucketScores = [
+            'base'                  => $base,
+            'bonus_ekspres'         => $express,
+            'bonus_antar_jemput'    => $pickup,
+            'bonus_variasi_layanan' => $variasi,
+            'bonus_sop_keluhan'     => $sop,
+            'bonus_price_list'      => $price,
+            // penalties populated post-persistence by ExperiencePenaltyDetector
+            'penalty_keterlambatan'   => 0,
+            'penalty_pakaian_hilang'  => 0,
+            'penalty_no_response_wa'  => 0,
+        ];
+
+        $subBucketReasoning = [
+            'base'                  => 'Setiap brand mulai dari skor dasar 30 sebelum bonus dan penalti.',
+            'bonus_ekspres'         => $express > 0
+                ? 'Operator menyatakan layanan ekspres tersedia di wizard Step 3.'
+                : 'Operator tidak mengaktifkan layanan ekspres di wizard Step 3.',
+            'bonus_antar_jemput'    => $pickup > 0
+                ? 'Operator menyatakan antar jemput tersedia di wizard Step 3.'
+                : 'Operator tidak mengaktifkan antar jemput di wizard Step 3.',
+            'bonus_variasi_layanan' => $variasi > 0
+                ? "Operator menyatakan {$varietyCount} variasi layanan di wizard Step 2 (cukup ≥4 untuk bonus penuh)."
+                : "Operator menyatakan {$varietyCount} variasi layanan di wizard Step 2 — belum mencapai ambang ≥4 untuk bonus.",
+            'bonus_sop_keluhan'     => match ($sop) {
+                15      => 'SOP keluhan dideklarasikan dan terverifikasi oleh tingkat balasan pemilik ≥ 50%.',
+                8       => 'SOP keluhan dideklarasikan, tetapi tingkat balasan pemilik di Google Maps < 50% — bonus parsial.',
+                default => 'SOP keluhan tidak dideklarasikan operator.',
+            },
+            'bonus_price_list'      => $price > 0
+                ? 'Daftar harga terdeteksi via ' . (string) ($priceDetection['method'] ?? 'tidak diketahui') . '.'
+                : 'Tidak ada daftar harga publik terdeteksi.',
+            'penalty_keterlambatan'  => 'Penalti diaplikasikan setelah pillar score di-render (lihat ExperiencePenaltyDetector).',
+            'penalty_pakaian_hilang' => 'Penalti diaplikasikan setelah pillar score di-render (lihat ExperiencePenaltyDetector).',
+            'penalty_no_response_wa' => 'Penalti diaplikasikan setelah pillar score di-render (lihat ExperiencePenaltyDetector).',
+        ];
+
+        $total = max(0, min(100, $base + $express + $pickup + $variasi + $sop + $price));
+
+        $sourcesTable = [
+            'bonus_ekspres'         => $express > 0 ? [['source' => 'wizard_step_3.operational.express_service', 'snippet' => 'Operator menyatakan layanan ekspres tersedia.', 'verified' => true]] : [],
+            'bonus_antar_jemput'    => $pickup  > 0 ? [['source' => 'wizard_step_3.operational.pickup_delivery', 'snippet' => 'Operator menyatakan antar jemput tersedia.', 'verified' => true]] : [],
+            'bonus_variasi_layanan' => $variasi > 0 ? [['source' => 'wizard_step_2.service_types', 'snippet' => "Operator menyatakan {$varietyCount} variasi layanan.", 'verified' => true]] : [],
+            'bonus_sop_keluhan'     => $sop > 0
+                ? [
+                    ['source' => 'wizard_step_3.operational.complaint_sop', 'snippet' => 'Operator menyatakan SOP keluhan ada.', 'verified' => $sop === 15],
+                ]
+                : [],
+            'bonus_price_list'      => $price > 0
+                ? [['source' => 'audit_evidence.price_list_detection', 'snippet' => 'Daftar harga terdeteksi (' . (string) ($priceDetection['method'] ?? '') . ').', 'verified' => true]]
+                : [],
+        ];
+
+        $evidenceItems = $this->renderEvidenceItems($sourcesTable);
+
+        $breakdown = [
+            'data_source'            => $this->v3DataSources($expressDeclared, $pickupDeclared, $sopDeclared, $varietyCount, $priceDetected),
+            'analysis_path'          => 'v3_ppt_rubric',
+            'sub_bucket_scores'      => $subBucketScores,
+            'sub_bucket_reasoning'   => $subBucketReasoning,
+            'sub_bucket_caps'        => array_merge(
+                ['base' => self::BASE_SCORE],
+                self::BONUS_CAPS,
+                ['penalty_keterlambatan' => 8, 'penalty_pakaian_hilang' => 10, 'penalty_no_response_wa' => 8],
+            ),
+            'evidence_sources'       => $sourcesTable,
+            'evidence_consumed'      => [
+                'touchpoints.operational',
+                'touchpoints.service_types',
+                'audit_evidence.price_list_detection',
+                'owner_reply_rate (computed from gmaps_scrape)',
+            ],
+            'owner_reply_rate'       => $replyRate,
+            'sop_partial_bonus_applied' => $sop === 8,
+            'brand_name'             => (string) ($context['brand_name'] ?? ''),
+        ];
+
+        $reasoning = sprintf(
+            'Brand Experience skor %d/100 (sebelum penalti). Base 30, bonus ekspres %d, antar jemput %d, variasi %d, SOP %d, price list %d.',
+            $total,
+            $express,
+            $pickup,
+            $variasi,
+            $sop,
+            $price,
+        );
+
+        return new PillarScore(
+            pillarSlug:      ScoringRubric::PILLAR_EXPERIENCE,
+            score:           $total,
+            evidence:        $evidenceItems,
+            reasoning:       $reasoning,
+            subBucketScores: $subBucketScores,
+            scoreBreakdown:  $breakdown,
+        );
+    }
+
+    /** @return list<string> */
+    private function v3DataSources(bool $express, bool $pickup, bool $sop, int $variety, bool $price): array
+    {
+        $out = ['touchpoints'];
+        if ($express || $pickup || $sop) {
+            $out[] = 'touchpoints.operational';
+        }
+        if ($variety >= 2) {
+            $out[] = 'touchpoints.service_types';
+        }
+        if ($price) {
+            $out[] = 'audit_evidence.price_list_detection';
+        }
+        return array_values(array_unique($out));
     }
 
     private function declarationToBool(?array $decls, string $key): ?bool

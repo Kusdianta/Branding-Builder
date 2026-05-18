@@ -1320,20 +1320,47 @@ SYS;
     /** @param array<string,mixed> $inputs */
     private function scoreRecall(array $inputs): PillarScore
     {
-        // Review-based sub-buckets (caps 25 + 15 + 15 + 10 = 65)
         $base = (new RecallScorer())->score($inputs);
 
-        // Autocomplete-based search_recall sub-bucket (cap 35) layered on top.
-        $brandName    = (string) ($inputs['brand_name'] ?? '');
-        $searchResult = $this->searchRecallScorer->score($brandName);
+        // BB117 — v3 Recall sums to 100 internally from the four PPT
+        // sub-buckets (rating_tier + review_count_tier +
+        // kualitas_ulasan_positif + manajemen_ulasan). search_recall is
+        // retired from the numeric score; we still emit the autocomplete
+        // signal as an informational bonus inside score_breakdown so the
+        // dashboard can surface it as "tidak masuk skor utama" — operators
+        // can sanity-check brand visibility without it inflating Recall.
+        $isV3 = ($inputs['_wizard_version'] ?? null) === \App\Models\BrandAudit::WIZARD_V3;
 
-        $subBuckets                  = $base->subBucketScores;
-        $subBuckets['search_recall'] = $searchResult['score'];
+        $subBuckets = $base->subBucketScores;
+        $breakdown  = $base->scoreBreakdown;
 
-        $breakdown                  = $base->scoreBreakdown;
-        $breakdown['search_recall'] = $searchResult['breakdown'];
+        if ($isV3) {
+            try {
+                $brandName    = (string) ($inputs['brand_name'] ?? '');
+                $searchResult = $this->searchRecallScorer->score($brandName);
+                $breakdown['search_recall_informational'] = array_merge(
+                    (array) $searchResult['breakdown'],
+                    ['note' => 'sinyal bonus autocomplete — tidak masuk skor utama Recall di v3'],
+                );
+            } catch (\Throwable $e) {
+                // Bonus signal — never block the v3 pillar score on a
+                // SearchRecallScorer failure.
+                Log::info('ClaudeService: v3 search_recall informational fetch failed', [
+                    'error' => $e->getMessage(),
+                ]);
+            }
+            $totalScore = $base->score;
+        } else {
+            // Legacy v1/v2: layer search_recall (cap 35) on top so the
+            // pillar caps at 100 across the four legacy sub-buckets +
+            // search_recall.
+            $brandName    = (string) ($inputs['brand_name'] ?? '');
+            $searchResult = $this->searchRecallScorer->score($brandName);
 
-        $totalScore = max(0, min(100, array_sum($subBuckets)));
+            $subBuckets['search_recall'] = $searchResult['score'];
+            $breakdown['search_recall']  = $searchResult['breakdown'];
+            $totalScore = max(0, min(100, array_sum($subBuckets)));
+        }
 
         $narrative = $this->fetchNarrative(ScoringRubric::PILLAR_RECALL, $inputs, $subBuckets);
 

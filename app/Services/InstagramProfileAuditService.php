@@ -360,6 +360,10 @@ class InstagramProfileAuditService
                 'captured_at'  => $result->capturedAt->format(\DateTimeInterface::ATOM),
                 'is_private'   => $result->isPrivate,
                 'duration_ms'  => $result->durationMs,
+                // BB117 — story-ring presence. Carried at the raw_payload
+                // top level so InstagramActivityScorer (v3) can read it
+                // alongside recent_posts without re-walking the slice.
+                'has_active_story' => $result->hasActiveStory,
                 'profile'      => [
                     'name'          => $result->profile->name,
                     'bio'           => $result->profile->bio,

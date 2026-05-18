@@ -6,35 +6,31 @@ namespace App\Services\Scoring;
 
 use App\DTO\EvidenceItem;
 use App\DTO\PillarScore;
+use App\Models\BrandAudit;
 use App\Models\ScoringRubric;
 use App\Services\ClaudeService;
 
 /**
- * Phase 10 Konsistensi scorer (BB54 stub -> BB57 vision implementation).
+ * Phase 10 Konsistensi scorer (BB54 stub -> BB57 vision implementation
+ * -> BB117 v3 PPT-rubric rewrite).
  *
- * Decides between two analysis strategies based on which visual assets
- * the gather phase produced:
+ * Two scoring paths, selected by ``$context['_wizard_version']``:
  *
- *   VISION  (BB57)  — when at least one of {IG profile pic, IG grid
- *                     screenshot, GMaps page screenshot, Places API
- *                     photos} is present, call
- *                     ClaudeService::analyzeBrandConsistency for a
- *                     multimodal cross-touchpoint visual analysis.
- *                     Output drives sub-bucket scores for
- *                     color_consistency / typography_consistency /
- *                     logo_consistency / imagery_tone.
+ *   Legacy (v1/v2): visual-only 4-sub-bucket vision path (weighted color
+ *     35% + typo 15% + logo 25% + imagery 25%). Fallback (no visual
+ *     assets) caps at 60/100.
  *
- *   FALLBACK (BB58) — when no visual assets are present, delegate to
- *                     the legacy text-only ClaudeService::scorePillar
- *                     path and cap the score at 60/100 (top-tier
- *                     scoring requires visual analysis).
- *
- * scoreFromEvidence() routes; score() exposes the legacy path for
- * tests and callers that haven't migrated to the evidence layer.
+ *   V3 (BB117): PPT-rubric 4-sub-bucket structure —
+ *     kehadiran_digital (40, deterministic on touchpoint count) +
+ *     konsistensi_visual (35, vision overall rescaled from 0-100 or 0
+ *     in fallback) + kelengkapan_layanan (15, deterministic on
+ *     touchpoints.service_types.variety_count) + transparansi_harga
+ *     (10, deterministic on audit_evidence.price_list_detection).
+ *     Total caps at 100.
  */
 class KonsistensiScorer
 {
-    /** BB58: visual analysis required for a top-tier score. */
+    /** BB58: visual analysis required for a top-tier score (legacy path). */
     private const FALLBACK_SCORE_CAP = 60;
 
     public function __construct(
@@ -52,12 +48,28 @@ class KonsistensiScorer
     }
 
     /**
-     * Phase 10 entry: select VISION vs FALLBACK based on assets.
+     * Phase 10 entry: select V3 vs legacy, then VISION vs FALLBACK
+     * inside each.
      *
-     * @param array<string,mixed> $evidence  The audit's audit_evidence column.
-     * @param array<string,mixed> $context   Per-audit context.
+     * @param array<string,mixed> $evidence  audit_evidence column.
+     * @param array<string,mixed> $context   per-audit context.
      */
     public function scoreFromEvidence(array $evidence, array $context): PillarScore
+    {
+        $version = (string) ($context['_wizard_version'] ?? BrandAudit::WIZARD_V1);
+
+        return $version === BrandAudit::WIZARD_V3
+            ? $this->scoreV3($evidence, $context)
+            : $this->scoreLegacy($evidence, $context);
+    }
+
+    /**
+     * Legacy v1/v2 path — unchanged from pre-BB117 behaviour.
+     *
+     * @param array<string,mixed> $evidence
+     * @param array<string,mixed> $context
+     */
+    private function scoreLegacy(array $evidence, array $context): PillarScore
     {
         $assets = $this->collectVisualAssets($evidence, $context);
 
@@ -69,7 +81,77 @@ class KonsistensiScorer
     }
 
     /**
-     * BB57: multimodal vision path.
+     * V3 (BB117) path — PPT-rubric 4-sub-bucket scoring.
+     *
+     * @param array<string,mixed> $evidence
+     * @param array<string,mixed> $context
+     */
+    private function scoreV3(array $evidence, array $context): PillarScore
+    {
+        $brandName    = (string) ($context['brand_name'] ?? '');
+        $varietyCount = (int) ($context['variety_count'] ?? 1);
+        $priceList    = (array) ($evidence['price_list_detection'] ?? []);
+        $priceDetected= (bool) ($priceList['detected'] ?? false);
+
+        // Sub-bucket 1: kehadiran_digital (cap 40). Count of present
+        // touchpoints across IG, website, GMaps, WhatsApp, TikTok.
+        [$kehadiranScore, $kehadiranBreakdown] = $this->scoreKehadiranDigital($context);
+
+        // Sub-bucket 2: konsistensi_visual (cap 35). Vision overall
+        // 0-100 → rescale to 0-35. Fallback: 0 (honest unavailability).
+        [$visualScore, $visualBreakdown, $visualEvidence] = $this->scoreKonsistensiVisualV3(
+            $evidence,
+            $context,
+            $brandName,
+        );
+
+        // Sub-bucket 3: kelengkapan_layanan (cap 15). Variant count tier.
+        [$kelengkapanScore, $kelengkapanBreakdown] = $this->scoreKelengkapanLayanan($varietyCount);
+
+        // Sub-bucket 4: transparansi_harga (cap 10). PriceListDetector
+        // detected flag with source attribution by method.
+        [$transparansiScore, $transparansiBreakdown] = $this->scoreTransparansiHarga($priceList);
+
+        $subBuckets = [
+            'kehadiran_digital'   => $kehadiranScore,
+            'konsistensi_visual'  => $visualScore,
+            'kelengkapan_layanan' => $kelengkapanScore,
+            'transparansi_harga'  => $transparansiScore,
+        ];
+        $total = max(0, min(100, array_sum($subBuckets)));
+
+        $breakdown = [
+            'analysis_path'        => 'v3_ppt_rubric',
+            'data_source'          => $this->v3DataSources($evidence, $context, $priceDetected),
+            'sub_bucket_scores'    => $subBuckets,
+            'kehadiran_digital'    => $kehadiranBreakdown,
+            'konsistensi_visual'   => $visualBreakdown,
+            'kelengkapan_layanan'  => $kelengkapanBreakdown,
+            'transparansi_harga'   => $transparansiBreakdown,
+            'brand_name'           => $brandName,
+        ];
+
+        $reasoning = sprintf(
+            'Brand Konsistensi skor %d/100 — kehadiran digital %d/40, konsistensi visual %d/35, kelengkapan layanan %d/15, transparansi harga %d/10.',
+            $total,
+            $kehadiranScore,
+            $visualScore,
+            $kelengkapanScore,
+            $transparansiScore,
+        );
+
+        return new PillarScore(
+            pillarSlug:      ScoringRubric::PILLAR_KONSISTENSI,
+            score:           $total,
+            evidence:        $visualEvidence,
+            reasoning:       $reasoning,
+            subBucketScores: $subBuckets,
+            scoreBreakdown:  $breakdown,
+        );
+    }
+
+    /**
+     * BB57: multimodal vision path (legacy).
      *
      * @param array{paths: list<string>, data_source: list<string>, vision_payload: array<string,mixed>} $assets
      */
@@ -86,13 +168,7 @@ class KonsistensiScorer
     }
 
     /**
-     * BB58: fallback text-only path with score cap.
-     *
-     * BB104: only forward touchpoint signals that are actually present.
-     * Empty URLs and a false whatsapp_business_active flag are dropped
-     * so the LLM prompt builder (ClaudeService::renderInputsAsText)
-     * does not surface them as "(tidak tersedia)" lines that the model
-     * has historically converted into hallucinated absence commentary.
+     * BB58: fallback text-only path with score cap (legacy).
      *
      * @param list<string> $dataSource
      */
@@ -120,7 +196,6 @@ class KonsistensiScorer
 
         $score = $this->score($inputs);
 
-        // Cap at 60 — visual analysis unavailable, can't earn top-tier.
         $cappedScore = min(self::FALLBACK_SCORE_CAP, $score->score);
 
         $breakdown = $score->scoreBreakdown;
@@ -140,6 +215,237 @@ class KonsistensiScorer
             subBucketScores: $score->subBucketScores,
             scoreBreakdown: $breakdown,
         );
+    }
+
+    /**
+     * V3 sub-bucket — kehadiran_digital (cap 40).
+     *
+     * @param array<string,mixed> $context
+     * @return array{0:int,1:array<string,mixed>}
+     */
+    private function scoreKehadiranDigital(array $context): array
+    {
+        $present = [
+            'instagram' => is_string($context['instagram_url'] ?? null) && trim((string) $context['instagram_url']) !== '',
+            'website'   => is_string($context['website_url']   ?? null) && trim((string) $context['website_url'])   !== '',
+            'gmaps'     => is_string($context['gmaps_url']     ?? null) && trim((string) $context['gmaps_url'])     !== '',
+            'whatsapp'  => (bool) ($context['whatsapp_business_active'] ?? false),
+            'tiktok'    => is_string($context['tiktok_url']    ?? null) && trim((string) $context['tiktok_url'])    !== '',
+        ];
+        $count = count(array_filter($present));
+
+        $score = match ($count) {
+            5       => 40,
+            4       => 32,
+            3       => 24,
+            2       => 16,
+            1       => 8,
+            default => 0,
+        };
+
+        return [$score, [
+            'score'      => $score,
+            'cap'        => 40,
+            'tier'       => $count >= 4 ? 'sangat baik' : ($count >= 2 ? 'cukup' : 'kurang'),
+            'raw_inputs' => [
+                'touchpoints_present' => $present,
+                'count'               => $count,
+                'source'              => 'Sumber: kelengkapan touchpoint dari form audit',
+            ],
+            'formula'    => 'deterministic_threshold',
+            'tier_table' => [
+                ['range' => '5/5', 'points' => 40, 'matched' => $count === 5],
+                ['range' => '4/5', 'points' => 32, 'matched' => $count === 4],
+                ['range' => '3/5', 'points' => 24, 'matched' => $count === 3],
+                ['range' => '2/5', 'points' => 16, 'matched' => $count === 2],
+                ['range' => '1/5', 'points' => 8,  'matched' => $count === 1],
+                ['range' => '0/5', 'points' => 0,  'matched' => $count === 0],
+            ],
+            'explanation_id' => 'kehadiran_digital_v3',
+        ]];
+    }
+
+    /**
+     * V3 sub-bucket — konsistensi_visual (cap 35). Reuses the existing
+     * vision pipeline; rescales the 0-100 overall score down to 0-35.
+     * Fallback when no visual assets are available: score 0 (rather
+     * than the legacy 60-cap; v3 has 3 other deterministic sub-buckets
+     * that still contribute even without vision).
+     *
+     * @return array{0:int,1:array<string,mixed>,2:list<EvidenceItem>}
+     */
+    private function scoreKonsistensiVisualV3(array $evidence, array $context, string $brandName): array
+    {
+        $assets = $this->collectVisualAssets($evidence, $context);
+        if ($assets['paths'] === []) {
+            return [0, [
+                'score'      => 0,
+                'cap'        => 35,
+                'raw_inputs' => [
+                    'source' => 'Sumber: analisis AI atas screenshot Instagram + website + Google Maps',
+                ],
+                'formula'           => 'graded_vision',
+                'unavailable_reason'=> 'Tidak ada aset visual yang tersedia — Instagram screenshot, foto Google Maps, dan upload outlet semua kosong.',
+                'analysis_path'     => 'no_assets',
+                'explanation_id'    => 'konsistensi_visual_v3',
+            ], []];
+        }
+
+        $vision = $this->claude->analyzeBrandConsistency(array_merge(
+            $assets['vision_payload'],
+            ['brand_name' => $brandName],
+        ));
+
+        $color  = (int) ($vision['color_consistency']['score']       ?? 50);
+        $typo   = (int) ($vision['typography_consistency']['score']  ?? 50);
+        $logo   = (int) ($vision['logo_consistency']['score']        ?? 50);
+        $imager = (int) ($vision['imagery_tone']['score']            ?? 50);
+
+        $overall100 = (int) round(($color * 0.35) + ($typo * 0.15) + ($logo * 0.25) + ($imager * 0.25));
+        $score = (int) round($overall100 * 0.35);
+
+        $subBucketReasoning = [
+            'color_consistency'      => (string) ($vision['color_consistency']['observations']       ?? ''),
+            'typography_consistency' => (string) ($vision['typography_consistency']['observations']  ?? ''),
+            'logo_consistency'       => (string) ($vision['logo_consistency']['observations']        ?? ''),
+            'imagery_tone'           => (string) ($vision['imagery_tone']['observations']            ?? ''),
+        ];
+        $evidenceItems = [];
+        foreach ($subBucketReasoning as $bucket => $observation) {
+            if ($observation === '') {
+                continue;
+            }
+            $bucketScore = ['color_consistency' => $color, 'typography_consistency' => $typo, 'logo_consistency' => $logo, 'imagery_tone' => $imager][$bucket] ?? 50;
+            $impact = $bucketScore >= 70
+                ? EvidenceItem::IMPACT_POSITIVE
+                : ($bucketScore <= 40 ? EvidenceItem::IMPACT_NEGATIVE : EvidenceItem::IMPACT_NEUTRAL);
+            $evidenceItems[] = new EvidenceItem(
+                touchpoint:  $bucket,
+                observation: $observation,
+                impact:      $impact,
+            );
+        }
+
+        return [$score, [
+            'score'      => $score,
+            'cap'        => 35,
+            'raw_inputs' => [
+                'vision_overall_0_100' => $overall100,
+                'rescaled_to_0_35'     => $score,
+                'sub_signals'          => [
+                    'color_consistency'      => $color,
+                    'typography_consistency' => $typo,
+                    'logo_consistency'       => $logo,
+                    'imagery_tone'           => $imager,
+                ],
+                'source'        => 'Sumber: analisis AI atas screenshot Instagram + website + Google Maps',
+                'data_sources'  => $assets['data_source'],
+            ],
+            'formula'              => 'graded_vision',
+            'analysis_path'        => 'vision_multimodal',
+            'sub_bucket_reasoning' => $subBucketReasoning,
+            'touchpoints_analyzed' => (array) ($vision['touchpoints_analyzed'] ?? []),
+            'limitations'          => (array) ($vision['limitations'] ?? []),
+            'explanation_id'       => 'konsistensi_visual_v3',
+        ], $evidenceItems];
+    }
+
+    /**
+     * V3 sub-bucket — kelengkapan_layanan (cap 15). Deterministic on
+     * variety_count (count of distinct service_types declared by the
+     * operator in wizard Step 2).
+     *
+     * @return array{0:int,1:array<string,mixed>}
+     */
+    private function scoreKelengkapanLayanan(int $variety): array
+    {
+        $score = match (true) {
+            $variety >= 4 => 15,
+            $variety === 3 => 10,
+            $variety === 2 => 5,
+            default        => 0,
+        };
+
+        return [$score, [
+            'score'      => $score,
+            'cap'        => 15,
+            'tier'       => $variety >= 4 ? 'sangat baik' : ($variety >= 2 ? 'cukup' : 'kurang'),
+            'raw_inputs' => [
+                'variety_count' => $variety,
+                'source'        => 'Sumber: deklarasi operator (wizard Step 2 — variasi layanan)',
+            ],
+            'formula'    => 'deterministic_threshold',
+            'tier_table' => [
+                ['range' => '≥4 variasi', 'points' => 15, 'matched' => $variety >= 4],
+                ['range' => '3 variasi',  'points' => 10, 'matched' => $variety === 3],
+                ['range' => '2 variasi',  'points' => 5,  'matched' => $variety === 2],
+                ['range' => '≤1 variasi', 'points' => 0,  'matched' => $variety <= 1],
+            ],
+            'explanation_id' => 'kelengkapan_layanan_v3',
+        ]];
+    }
+
+    /**
+     * V3 sub-bucket — transparansi_harga (cap 10). Reads
+     * PriceListDetector evidence. Source attribution adapts by
+     * detection method (caption-only / vision / combined).
+     *
+     * @param array<string,mixed> $priceList
+     * @return array{0:int,1:array<string,mixed>}
+     */
+    private function scoreTransparansiHarga(array $priceList): array
+    {
+        $detected   = (bool) ($priceList['detected'] ?? false);
+        $method     = (string) ($priceList['method']     ?? 'fallback');
+        $confidence = (float)  ($priceList['confidence'] ?? 0.0);
+        $score      = $detected ? 10 : 0;
+
+        $source = match ($method) {
+            'caption_only'         => 'Sumber: scan keyword "harga / tarif / Rp" di caption Instagram',
+            'caption_only_partial' => 'Sumber: scan keyword caption Instagram (vision tidak dijalankan)',
+            'vision'               => 'Sumber: analisis AI Haiku 4.5 atas foto Google Places',
+            'caption+vision'       => 'Sumber: caption Instagram + analisis AI foto Google Places',
+            default                => 'Sumber: tidak tersedia (caption + vision keduanya gagal)',
+        };
+
+        return [$score, [
+            'score'      => $score,
+            'cap'        => 10,
+            'tier'       => $detected ? 'terdeteksi' : 'tidak terdeteksi',
+            'raw_inputs' => [
+                'detected'   => $detected,
+                'method'     => $method,
+                'confidence' => $confidence,
+                'source'     => $source,
+            ],
+            'formula'           => 'deterministic_threshold',
+            'unavailable_reason'=> isset($priceList['unavailable_reason']) ? (string) $priceList['unavailable_reason'] : null,
+            'evidence'          => (array) ($priceList['evidence'] ?? []),
+            'tier_table'        => [
+                ['range' => 'Terdeteksi',       'points' => 10, 'matched' => $detected],
+                ['range' => 'Tidak terdeteksi', 'points' => 0,  'matched' => ! $detected],
+            ],
+            'explanation_id' => 'transparansi_harga_v3',
+        ]];
+    }
+
+    /** @return list<string> */
+    private function v3DataSources(array $evidence, array $context, bool $priceDetected): array
+    {
+        $sources = ['touchpoint_urls'];
+        if (! empty($evidence['instagram_audit'])) {
+            $sources[] = 'instagram_audit';
+        }
+        if (! empty($evidence['gmaps_scrape'])) {
+            $sources[] = 'gmaps_scrape';
+        }
+        if (! empty($evidence['places_api']['photos'] ?? [])) {
+            $sources[] = 'places_api_photos';
+        }
+        if ($priceDetected) {
+            $sources[] = 'price_list_detection';
+        }
+        return array_values(array_unique($sources));
     }
 
     /**
@@ -200,11 +506,8 @@ class KonsistensiScorer
     }
 
     /**
-     * Convert the structured vision response into a PillarScore.
-     * Weights: color 35%, typography 15%, logo 25%, imagery 25%.
-     * (Typography weighted lowest since IG/GMaps screenshots rarely
-     * expose enough type to grade fairly; the LLM is told to score 50
-     * when it can't see typography clearly.)
+     * Convert the structured vision response into a PillarScore (legacy
+     * path). Weights: color 35%, typography 15%, logo 25%, imagery 25%.
      *
      * @param array<string,mixed> $vision
      * @param list<string>        $dataSource
@@ -219,9 +522,6 @@ class KonsistensiScorer
         $weighted = ($color * 0.35) + ($typo * 0.15) + ($logo * 0.25) + ($imager * 0.25);
         $overall  = (int) round($weighted);
 
-        // Konsistensi pillar is reported on a 0-100 scale; the four
-        // sub-buckets each get a portion of the total mapped to their
-        // weight so the score_breakdown numbers add up cleanly.
         $subBucketScores = [
             'color_consistency'      => $color,
             'typography_consistency' => $typo,

@@ -127,7 +127,45 @@ final class InstagramActivityScorer
         if (is_numeric($ts) && (int) $ts > 0) {
             return Carbon::createFromTimestamp((int) $ts);
         }
-        return null;
+
+        // BB117 fallback — worker's grid scrape only emits
+        // ``approximate_age`` text (e.g. "2 hari yang lalu", "1w",
+        // "3 mo") harvested from the cell aria-label / alt attributes.
+        // Parse the most common Indonesian + English variants into a
+        // relative Carbon. Coarse but adequate for the 14-day "recently
+        // active" threshold and 8-week cadence window — the alternative
+        // is no signal at all.
+        return $this->parseApproximateAge($post['approximate_age'] ?? null);
+    }
+
+    private function parseApproximateAge(mixed $raw): ?Carbon
+    {
+        if (! is_string($raw) || trim($raw) === '') {
+            return null;
+        }
+
+        $text = mb_strtolower(trim($raw));
+        if (! preg_match('/(\d+)\s*([a-z]+)/u', $text, $m)) {
+            return null;
+        }
+        $n    = (int) $m[1];
+        $unit = $m[2];
+        $now  = Carbon::now();
+
+        // Map both English short ("w", "mo", "y") and long forms +
+        // Indonesian ("hari", "minggu", "bulan", "tahun"). Falls back
+        // to null on truly unknown unit text so the post is skipped
+        // rather than placed at "now" (which would fabricate activity).
+        return match (true) {
+            str_starts_with($unit, 'sec') || str_starts_with($unit, 'detik')         => $now->subSeconds($n),
+            $unit === 'm' || str_starts_with($unit, 'min') || str_starts_with($unit, 'menit') => $now->subMinutes($n),
+            $unit === 'h' || str_starts_with($unit, 'hr')  || str_starts_with($unit, 'hour')  || str_starts_with($unit, 'jam') => $now->subHours($n),
+            $unit === 'd' || str_starts_with($unit, 'day') || str_starts_with($unit, 'hari')  => $now->subDays($n),
+            $unit === 'w' || str_starts_with($unit, 'week')|| str_starts_with($unit, 'minggu')=> $now->subWeeks($n),
+            $unit === 'mo'|| str_starts_with($unit, 'month')|| str_starts_with($unit, 'bulan')=> $now->subMonths($n),
+            $unit === 'y' || str_starts_with($unit, 'year')|| str_starts_with($unit, 'tahun') => $now->subYears($n),
+            default                                                                          => null,
+        };
     }
 
     /** @param Collection<int,int> $values */

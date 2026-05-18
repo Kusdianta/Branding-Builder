@@ -13,7 +13,11 @@ use App\Services\Fetchers\WebsiteFetcher;
 use App\Services\ClaudeService;
 use App\Services\Scoring\ExperiencePenaltyDetector;
 use App\Services\Scoring\ExperienceScorer;
+use App\Services\Scoring\InstagramActivityScorer;
 use App\Services\Scoring\KonsistensiScorer;
+use App\Services\Scoring\OwnerReplyRateScorer;
+use App\Services\Scoring\PriceListDetector;
+use App\Services\Scoring\WebsiteLivenessScorer;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -60,6 +64,10 @@ class ScorePillarsJob implements ShouldQueue
         ExperiencePenaltyDetector $penaltyDetector,
         KonsistensiScorer $konsistensiScorer,
         ExperienceScorer $experienceScorer,
+        InstagramActivityScorer $instagramActivityScorer,
+        WebsiteLivenessScorer $websiteLivenessScorer,
+        OwnerReplyRateScorer $ownerReplyRateScorer,
+        PriceListDetector $priceListDetector,
         ClaudeService $claude,
     ): void {
         if ($this->batch()?->cancelled()) {
@@ -139,6 +147,30 @@ class ScorePillarsJob implements ShouldQueue
 
         $operatorDecls = $audit->operator_declarations;
 
+        // BB117 — v3 audits get an enriched input bundle that pushes new
+        // signals (IG activity, website liveness, owner reply rate,
+        // price-list detection) into the per-pillar $inputs. Legacy
+        // v1/v2 audits keep their existing bundle shape; the scorers
+        // branch internally on _wizard_version to route to the right
+        // path.
+        if ($audit->wizard_version === BrandAudit::WIZARD_V3) {
+            $evidence = $this->ensurePriceListDetection($audit, $evidence, $priceListDetector);
+
+            [$pillarInputs, $v3Context] = $this->enrichInputsForV3(
+                $audit,
+                $pillarInputs,
+                $evidence,
+                $touchpoints,
+                $placesApi,
+                $fullReviews,
+                $instagramActivityScorer,
+                $websiteLivenessScorer,
+                $ownerReplyRateScorer,
+            );
+        } else {
+            $v3Context = [];
+        }
+
         foreach ($pillarInputs as $slug => $inputs) {
             $step = $this->step($pillarStepMap[$slug]);
             $step?->markRunning();
@@ -146,20 +178,21 @@ class ScorePillarsJob implements ShouldQueue
                 if ($slug === ScoringRubric::PILLAR_KONSISTENSI) {
                     // BB57+BB58: route Konsistensi through the dedicated
                     // scorer so the vision multimodal call (or BB58
-                    // fallback) takes effect. The scorer returns a
-                    // PillarScore we persist with the same shape
-                    // ScorePillarJob would have written.
-                    $score = $konsistensiScorer->scoreFromEvidence($evidence, $inputs);
+                    // fallback) takes effect. BB117: merge v3 context
+                    // so the scorer can route to scoreV3() and read
+                    // variety_count + touchpoints flags.
+                    $context = array_merge($inputs, $v3Context);
+                    $score = $konsistensiScorer->scoreFromEvidence($evidence, $context);
                     $this->persistPillarScore($score);
                 } elseif ($slug === ScoringRubric::PILLAR_EXPERIENCE) {
-                    // BB75: deterministic tier classifier consuming
-                    // BB74 service_signals + BB73 operator_declarations.
-                    // Penalties still apply after persistence via
-                    // applyExperiencePenalties() below.
+                    // BB75 + BB117: tier classifier (v1/v2) OR PPT-rubric
+                    // bonus model (v3). Penalties still apply after
+                    // persistence via applyExperiencePenalties() below.
+                    $context = array_merge($inputs, $v3Context);
                     $score = $experienceScorer->scoreFromEvidence(
                         $evidence,
                         is_array($operatorDecls) ? $operatorDecls : null,
-                        $inputs,
+                        $context,
                     );
                     $this->persistPillarScore($score);
                 } else {
@@ -289,6 +322,14 @@ class ScorePillarsJob implements ShouldQueue
      */
     private function stampDataSourceForPillar(string $slug, EvidenceMapper $mapper, BrandAudit $audit): void
     {
+        // BB117 — v3 scorers write their own per-pillar data_source into
+        // score_breakdown via their breakdown payloads. The legacy
+        // stamper below would clobber that with a coarser hardcoded
+        // list; skip it for v3 so the scorer's attribution wins.
+        if ($audit->wizard_version === BrandAudit::WIZARD_V3) {
+            return;
+        }
+
         $sources = match ($slug) {
             ScoringRubric::PILLAR_RECALL => array_filter([
                 'places_api',
@@ -329,6 +370,184 @@ class ScorePillarsJob implements ShouldQueue
      *
      * @param array<string,mixed> $payload  ExperiencePenaltyDetector::detect() output
      */
+    /**
+     * BB117 — enrich per-pillar input bundles for v3 audits. Adds
+     * _wizard_version to every bundle and pushes the new signals into
+     * the buckets that need them.
+     *
+     * Returns [$pillarInputs, $v3Context] where $v3Context carries
+     * cross-pillar context (variety_count, touchpoints_operational,
+     * owner_reply_rate) for KonsistensiScorer + ExperienceScorer.
+     *
+     * @param array<string,mixed> $pillarInputs
+     * @param array<string,mixed> $evidence
+     * @param array<string,mixed> $touchpoints
+     * @param array<string,mixed> $placesApi
+     * @param list<array<string,mixed>> $fullReviews
+     * @return array{0: array<string,array<string,mixed>>, 1: array<string,mixed>}
+     */
+    private function enrichInputsForV3(
+        BrandAudit $audit,
+        array $pillarInputs,
+        array $evidence,
+        array $touchpoints,
+        array $placesApi,
+        array $fullReviews,
+        InstagramActivityScorer $igScorer,
+        WebsiteLivenessScorer $webScorer,
+        OwnerReplyRateScorer $replyScorer,
+    ): array {
+        $touchpointsOp  = (array) ($touchpoints['operational']  ?? []);
+        $serviceTypes   = (array) ($touchpoints['service_types']?? []);
+        $varietyCount   = (int)   ($serviceTypes['variety_count'] ?? max(1, count((array) ($serviceTypes['secondary'] ?? [])) + 1));
+        $hasSopDeclared = (bool)  ($touchpointsOp['complaint_sop'] ?? false);
+
+        // IG activity — read from raw_payload persisted by
+        // InstagramProfileAuditService::buildScrapeSnapshot.
+        $igData = $this->resolveInstagramSnapshot($audit);
+        $igScore = $igScorer->score($igData);
+
+        // Website liveness — single 5s HEAD/GET against the wizard URL.
+        $webResult = $webScorer->check(is_string($touchpoints['website_url'] ?? null) ? $touchpoints['website_url'] : null);
+
+        // Owner reply rate — deterministic on already-scraped reviews.
+        $reviewArray = $this->reviewsForOwnerReply($fullReviews);
+        $ownerReply = $replyScorer->score($reviewArray, $hasSopDeclared);
+        $replyRate  = (float) (($ownerReply['evidence']['reply_rate_pct'] ?? 0.0) / 100.0);
+
+        // Recall bundle: add owner reply rate + SOP signal + tag version.
+        $pillarInputs[ScoringRubric::PILLAR_RECALL]['_wizard_version']            = BrandAudit::WIZARD_V3;
+        $pillarInputs[ScoringRubric::PILLAR_RECALL]['owner_reply_rate']           = $replyRate;
+        $pillarInputs[ScoringRubric::PILLAR_RECALL]['has_sop_declared']           = $hasSopDeclared;
+        $pillarInputs[ScoringRubric::PILLAR_RECALL]['manajemen_ulasan_evidence'] = (array) ($ownerReply['evidence'] ?? []);
+
+        // Digital bundle: add IG activity result + website liveness +
+        // tiktok status (already on $audit) + tag version.
+        $pillarInputs[ScoringRubric::PILLAR_DIGITAL]['_wizard_version']                       = BrandAudit::WIZARD_V3;
+        $pillarInputs[ScoringRubric::PILLAR_DIGITAL]['instagram_activity_score']              = $igScore['score'];
+        $pillarInputs[ScoringRubric::PILLAR_DIGITAL]['instagram_activity_evidence']           = (array) ($igScore['evidence'] ?? []);
+        $pillarInputs[ScoringRubric::PILLAR_DIGITAL]['instagram_activity_source']             = (string) ($igScore['source'] ?? '');
+        $pillarInputs[ScoringRubric::PILLAR_DIGITAL]['instagram_activity_unavailable_reason'] = $igScore['unavailable_reason'] ?? null;
+        $pillarInputs[ScoringRubric::PILLAR_DIGITAL]['website_is_live']                       = (bool) $webResult['is_live'];
+        $pillarInputs[ScoringRubric::PILLAR_DIGITAL]['website_evidence']                      = (array) ($webResult['evidence'] ?? []);
+        $pillarInputs[ScoringRubric::PILLAR_DIGITAL]['website_unavailable_reason']            = $webResult['unavailable_reason'] ?? null;
+        $pillarInputs[ScoringRubric::PILLAR_DIGITAL]['tiktok_check_status']                   = (string) ($audit->tiktok_check_status ?? 'not_checked');
+
+        // Konsistensi bundle: tag version. Variety + price_list flow via $v3Context.
+        $pillarInputs[ScoringRubric::PILLAR_KONSISTENSI]['_wizard_version'] = BrandAudit::WIZARD_V3;
+        $pillarInputs[ScoringRubric::PILLAR_KONSISTENSI]['variety_count']    = $varietyCount;
+
+        // Experience bundle: tag version. Operational flags + variety
+        // + reply rate flow via $v3Context.
+        $pillarInputs[ScoringRubric::PILLAR_EXPERIENCE]['_wizard_version']         = BrandAudit::WIZARD_V3;
+        $pillarInputs[ScoringRubric::PILLAR_EXPERIENCE]['touchpoints_operational'] = $touchpointsOp;
+        $pillarInputs[ScoringRubric::PILLAR_EXPERIENCE]['variety_count']           = $varietyCount;
+        $pillarInputs[ScoringRubric::PILLAR_EXPERIENCE]['owner_reply_rate']        = $replyRate;
+
+        $v3Context = [
+            '_wizard_version'         => BrandAudit::WIZARD_V3,
+            'variety_count'           => $varietyCount,
+            'touchpoints_operational' => $touchpointsOp,
+            'owner_reply_rate'        => $replyRate,
+        ];
+
+        return [$pillarInputs, $v3Context];
+    }
+
+    /**
+     * Resolve the Instagram audit snapshot for InstagramActivityScorer.
+     * Reads raw_payload from $audit->instagram_audit (set by
+     * InstagramProfileAuditService::buildScrapeSnapshot). Falls back to
+     * the legacy column shape when raw_payload is absent.
+     *
+     * @return array<string,mixed>
+     */
+    private function resolveInstagramSnapshot(BrandAudit $audit): array
+    {
+        $payload = $audit->instagram_audit;
+        if (! is_array($payload)) {
+            return [];
+        }
+        if (isset($payload['raw_payload']) && is_array($payload['raw_payload'])) {
+            // raw_payload carries recent_posts + has_active_story at top
+            // level — InstagramActivityScorer reads both keys.
+            $raw = $payload['raw_payload'];
+            $raw['_meta'] = $payload['_meta'] ?? [];
+            return $raw;
+        }
+        return $payload;
+    }
+
+    /**
+     * Reshape full review rows into the {owner_reply, author, rating_value,
+     * text} shape OwnerReplyRateScorer expects. EvidenceMapper passes the
+     * raw rows through; this just casts the fields.
+     *
+     * @param list<array<string,mixed>> $reviews
+     * @return list<array<string,mixed>>
+     */
+    private function reviewsForOwnerReply(array $reviews): array
+    {
+        $out = [];
+        foreach ($reviews as $r) {
+            $out[] = [
+                'author'       => (string) ($r['author'] ?? ''),
+                'rating_value' => (int) ($r['rating_value'] ?? 0),
+                'text'         => (string) ($r['text'] ?? ''),
+                'owner_reply'  => is_array($r['owner_reply'] ?? null) ? $r['owner_reply'] : null,
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Run PriceListDetector if audit_evidence.price_list_detection is
+     * missing/stale. Persists the result back to audit_evidence so
+     * subsequent re-runs (and the dashboard) read the same payload.
+     *
+     * Inputs: Places API photo URLs + Instagram captions (best-effort).
+     * Detector handles graceful failure internally — returns a
+     * detected=false + unavailable_reason payload on full failure.
+     *
+     * @param array<string,mixed> $evidence
+     * @return array<string,mixed>  updated evidence (always populated)
+     */
+    private function ensurePriceListDetection(BrandAudit $audit, array $evidence, PriceListDetector $detector): array
+    {
+        if (isset($evidence['price_list_detection']) && is_array($evidence['price_list_detection'])) {
+            return $evidence;
+        }
+
+        $photoUrls = [];
+        foreach ((array) ($evidence['places_api']['photos'] ?? []) as $p) {
+            $url = is_string($p) ? $p : (string) ($p['url'] ?? ($p['path'] ?? ''));
+            if ($url !== '' && str_starts_with($url, 'http')) {
+                $photoUrls[] = $url;
+            }
+        }
+
+        $captions = [];
+        $igPosts = (array) ($audit->instagram_audit['raw_payload']['recent_posts'] ?? []);
+        foreach ($igPosts as $p) {
+            $caption = $p['caption'] ?? null;
+            if (is_string($caption) && trim($caption) !== '') {
+                $captions[] = $caption;
+            }
+        }
+
+        $detection = $detector->detect($photoUrls, $captions);
+
+        $evidence['price_list_detection'] = $detection;
+        DB::transaction(function () use ($audit, $detection): void {
+            $fresh = BrandAudit::findOrFail($audit->id);
+            $current = (array) ($fresh->audit_evidence ?? []);
+            $current['price_list_detection'] = $detection;
+            $fresh->update(['audit_evidence' => $current]);
+        });
+
+        return $evidence;
+    }
+
     private function applyExperiencePenalties(array $payload): void
     {
         $totalPenalty = (int) ($payload['total_penalty'] ?? 0);

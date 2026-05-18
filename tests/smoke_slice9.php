@@ -44,6 +44,10 @@ echo "\n=== Smoke Test: Score Transparency Layer ===\n\n";
 echo "1. RecallScorer breakdown\n";
 
 $recallResult = (new RecallScorer())->score([
+    // BB117 — pin legacy path explicitly so this assertion block stays
+    // pinned to v1 caps (rating 25, review_count_tier 15, etc.) even
+    // after the v3 default flips at some future Phase 13 milestone.
+    '_wizard_version' => \App\Models\BrandAudit::WIZARD_V1,
     'rating'          => 4.9,
     'review_count'    => 150,
     'keyword_hits'    => [],
@@ -88,6 +92,11 @@ if (isset($bd['review_count_tier']['raw_inputs']['review_count']) && $bd['review
 echo "\n2. DigitalPresenceScorer breakdown\n";
 
 $digitalResult = (new DigitalPresenceScorer())->score([
+    // BB117 — pin legacy path explicitly. v3 caps the same booleans
+    // differently (has_instagram is graded 0-20 via
+    // InstagramActivityScorer in v3, TikTok jumps 3→10 in v3) so the
+    // assertions below would mis-fire without an explicit version tag.
+    '_wizard_version'  => \App\Models\BrandAudit::WIZARD_V1,
     'has_instagram'    => true,
     'has_website'      => true,
     'has_gmaps'        => true,
@@ -238,6 +247,65 @@ if ($audit->activation_kit_path) {
     }
 } else {
     $fail('PDF generation failed — activation_kit_path still null');
+}
+
+// ── 4. BB117 v3 scorer outputs ───────────────────────────────────────────────
+echo "\n4. BB117 v3 scorer outputs\n";
+
+$recallV3 = (new RecallScorer())->score([
+    '_wizard_version'  => \App\Models\BrandAudit::WIZARD_V3,
+    'brand_name'       => 'BB117 v3 Smoke',
+    'rating'           => 4.9,
+    'review_count'     => 600,
+    'keyword_hits'     => [],
+    'sampled_reviews'  => [],
+    'full_reviews'     => array_fill(0, 30, ['text' => 'sangat bersih harum wangi', 'rating' => 5.0]),
+    'owner_reply_rate' => 1.0,
+    'has_sop_declared' => true,
+]);
+$rv3 = $recallV3->subBucketScores;
+if (isset($rv3['rating_tier'], $rv3['review_count_tier'], $rv3['kualitas_ulasan_positif'], $rv3['manajemen_ulasan'])
+    && ! isset($rv3['sentiment_quality'])) {
+    $pass('v3 RecallScorer emits PPT 4-bucket shape (kualitas_ulasan_positif + manajemen_ulasan, no sentiment_quality)');
+} else {
+    $fail('v3 RecallScorer sub-bucket shape wrong: ' . implode(',', array_keys($rv3)));
+}
+if ($rv3['rating_tier'] === 35 && $rv3['review_count_tier'] === 25 && $rv3['manajemen_ulasan'] === 20) {
+    $pass('v3 RecallScorer top-tier caps match PPT (rating=35, count=25, manajemen=20)');
+} else {
+    $fail('v3 RecallScorer caps off: ' . json_encode($rv3));
+}
+if ($recallV3->score <= 100) {
+    $pass("v3 RecallScorer total {$recallV3->score} ≤ 100");
+} else {
+    $fail("v3 RecallScorer total exceeds 100: {$recallV3->score}");
+}
+
+$digitalV3 = (new DigitalPresenceScorer())->score([
+    '_wizard_version'           => \App\Models\BrandAudit::WIZARD_V3,
+    'has_gmaps'                 => true,
+    'has_wa_business'           => true,
+    'review_count'              => 600,
+    'instagram_activity_score'  => 18,
+    'website_is_live'           => true,
+    'tiktok_check_status'       => 'found',
+]);
+$dv3 = $digitalV3->subBucketScores;
+if (isset($dv3['review_count_5plus'], $dv3['review_count_50plus']) && ! isset($dv3['review_bonus'])) {
+    $pass('v3 DigitalPresenceScorer splits review_bonus into 5plus + 50plus');
+} else {
+    $fail('v3 DigitalPresenceScorer review split shape wrong: ' . implode(',', array_keys($dv3)));
+}
+if ($dv3['has_tiktok'] === 10) {
+    $pass('v3 DigitalPresenceScorer TikTok promoted to 10 pts');
+} else {
+    $fail("v3 DigitalPresenceScorer TikTok wrong: {$dv3['has_tiktok']}");
+}
+if ($digitalV3->score === 98) {
+    // 25 + 18 + 20 + 15 + 10 + 5 + 5 = 98
+    $pass("v3 DigitalPresenceScorer total = 98 (25+18+20+15+10+5+5)");
+} else {
+    $fail("v3 DigitalPresenceScorer total off: {$digitalV3->score}");
 }
 
 // ── Summary ───────────────────────────────────────────────────────────────────

@@ -20,20 +20,24 @@ final class AuditLabels
 {
     public const SUB_BUCKET = [
         // brand-recall
-        'rating_tier'             => 'Rating',
-        'review_count_tier'       => 'Jumlah Review',
-        'keyword_saturation'      => 'Kata Kunci Positif di Ulasan',
-        'review_keyword_quality'  => 'Kata Kunci Positif di Ulasan',
-        'sentiment_quality'       => 'Sentimen Ulasan',
-        'search_recall'           => 'Search Recall',
+        'rating_tier'              => 'Rating',
+        'review_count_tier'        => 'Jumlah Review',
+        'keyword_saturation'       => 'Kata Kunci Positif di Ulasan',
+        'review_keyword_quality'   => 'Kata Kunci Positif di Ulasan',
+        'kualitas_ulasan_positif'  => 'Kualitas Ulasan Positif',
+        'sentiment_quality'        => 'Sentimen Ulasan',
+        'manajemen_ulasan'         => 'Manajemen Ulasan',
+        'search_recall'            => 'Search Recall',
 
         // digital-presence
-        'has_gmaps'               => 'Google Maps',
-        'has_instagram'           => 'Instagram',
-        'has_website'             => 'Website',
-        'has_wa'                  => 'WhatsApp Business',
-        'has_tiktok'              => 'TikTok',
-        'review_bonus'            => 'Bonus Review',
+        'has_gmaps'                => 'Google Maps',
+        'has_instagram'            => 'Instagram',
+        'has_website'              => 'Website',
+        'has_wa'                   => 'WhatsApp Business',
+        'has_tiktok'               => 'TikTok',
+        'review_bonus'             => 'Bonus Review',
+        'review_count_5plus'       => 'Ulasan ≥ 10',
+        'review_count_50plus'      => 'Ulasan ≥ 50',
 
         // brand-konsistensi
         'kehadiran_digital'       => 'Kehadiran Digital',
@@ -78,20 +82,24 @@ final class AuditLabels
      */
     public const SUB_BUCKET_SOURCE = [
         // brand-recall
-        'rating_tier'             => 'Sumber: rating bintang dari Google Maps',
-        'review_count_tier'       => 'Sumber: jumlah total ulasan dari Google Maps',
-        'review_keyword_quality'  => 'Sumber: ulasan Google Maps yang di-scrape',
-        'keyword_saturation'      => 'Sumber: ulasan Google Maps yang di-scrape',
-        'sentiment_quality'       => 'Sumber: analisis sentimen ulasan Google Maps',
-        'search_recall'           => 'Sumber: Google Search autocomplete (4 query)',
+        'rating_tier'              => 'Sumber: rating bintang dari Google Maps',
+        'review_count_tier'        => 'Sumber: jumlah total ulasan dari Google Maps',
+        'review_keyword_quality'   => 'Sumber: ulasan Google Maps yang di-scrape',
+        'kualitas_ulasan_positif'  => 'Sumber: kata kunci positif + sentimen pada ulasan Google Maps',
+        'keyword_saturation'       => 'Sumber: ulasan Google Maps yang di-scrape',
+        'sentiment_quality'        => 'Sumber: analisis sentimen ulasan Google Maps',
+        'manajemen_ulasan'         => 'Sumber: scrape balasan pemilik di Google Maps reviews',
+        'search_recall'            => 'Sumber: Google Search autocomplete (4 query)',
 
         // digital-presence
-        'has_gmaps'               => 'Sumber: URL Google Maps dari form audit',
-        'has_instagram'           => 'Sumber: URL / username Instagram dari form audit',
-        'has_website'             => 'Sumber: URL website dari form audit',
-        'has_wa'                  => 'Sumber: nomor WhatsApp dari form audit',
-        'has_tiktok'              => 'Sumber: URL / username TikTok dari form audit',
-        'review_bonus'            => 'Sumber: total ulasan Google Maps',
+        'has_gmaps'                => 'Sumber: URL Google Maps dari form audit',
+        'has_instagram'            => 'Sumber: aktivitas feed + story Instagram',
+        'has_website'              => 'Sumber: cek HTTP langsung ke website',
+        'has_wa'                   => 'Sumber: nomor WhatsApp dari form audit',
+        'has_tiktok'               => 'Sumber: cek ketersediaan handle TikTok',
+        'review_bonus'             => 'Sumber: total ulasan Google Maps',
+        'review_count_5plus'       => 'Sumber: total ulasan Google Maps ≥ 10',
+        'review_count_50plus'      => 'Sumber: total ulasan Google Maps ≥ 50',
 
         // brand-konsistensi
         'kehadiran_digital'       => 'Sumber: kelengkapan touchpoint dari form audit (Instagram, Website, Google Maps, WhatsApp)',
