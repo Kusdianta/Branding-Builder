@@ -7,7 +7,9 @@ use App\Models\AuditStep;
 use App\Models\BrandAudit;
 use App\Services\CreditLedger;
 use App\Services\PlacesApiService;
+use App\Services\PlatformHealthChecker;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Livewire\Volt\Component;
@@ -100,6 +102,15 @@ new class extends Component {
     // zero credits. The wizard renders an "Sisa kredit habis" modal that
     // explains the manual top-up path until Phase 12b ships Xendit.
     public bool    $showInsufficientCreditsModal = false;
+
+    // BB105 Part 3 — platform health probe populated by mount() + refreshed
+    // by submit(). Shape mirrors PlatformHealthChecker::check() return type:
+    //   ['healthy' => bool, 'services' => array<string,array{ok:bool,message:string,...}>, 'checked_at' => string]
+    // Default healthy=true is intentional: prevents the soft banner from
+    // flashing before mount() runs. The submit() gate force-refreshes the
+    // cache so the gate is never decided from a stale value.
+    /** @var array<string,mixed> */
+    public array   $platformHealth = ['healthy' => true, 'services' => [], 'checked_at' => null];
 
     // ─────────────────────────────────────────────────────────────────
     // Phase 12c BB91 — v2 wizard state (4-step Pomelli-style flow).
@@ -223,6 +234,12 @@ new class extends Component {
 
     public function mount(string $token = ''): void
     {
+        // BB105 Part 3 — probe platform health on every wizard mount.
+        // Cached for 60 s so back/forward navigation doesn't hammer the
+        // worker, but submit() force-refreshes so the gate never fires
+        // off a stale value.
+        $this->checkPlatformHealth();
+
         if (! $token) {
             return;
         }
@@ -233,6 +250,22 @@ new class extends Component {
         }
 
         $this->loadAudit($audit);
+    }
+
+    /**
+     * BB105 Part 3 — populate $platformHealth from PlatformHealthChecker.
+     *
+     * Shared cache key across users (the result is platform-wide, not
+     * user-specific) so a single check per minute covers everyone. The
+     * key is invalidated by submit() before the hard gate decision.
+     */
+    public function checkPlatformHealth(): void
+    {
+        $this->platformHealth = Cache::remember(
+            'platform-health',
+            60,
+            fn () => app(PlatformHealthChecker::class)->check(),
+        );
     }
 
     private function loadAudit(BrandAudit $audit): void
@@ -610,6 +643,19 @@ new class extends Component {
     {
         if (! Auth::check()) {
             $this->redirect(route('auth.google.redirect'));
+            return;
+        }
+
+        // BB105 Part 3 — hard health gate. Force a fresh probe (never
+        // accept a cached value for the submit decision) so we don't
+        // dispatch an AnalyzeBrand job into a dead worker / queue.
+        Cache::forget('platform-health');
+        $this->checkPlatformHealth();
+        if (! ($this->platformHealth['healthy'] ?? false)) {
+            $this->dispatch(
+                'show-platform-unhealthy-modal',
+                services: $this->platformHealth['services'] ?? [],
+            );
             return;
         }
 
@@ -1065,6 +1111,19 @@ new class extends Component {
                         </a>
                     </div>
                 @else
+                    {{-- BB105 Part 3 — soft warning banner. Non-blocking;
+                         user can keep filling the wizard. submit() will
+                         hard-gate via the modal below if still unhealthy. --}}
+                    @if (! ($platformHealth['healthy'] ?? true))
+                        <div class="bb-warning-banner" style="margin-bottom: 16px; padding: 12px 16px; background: #FFF7ED; border: 1px solid #FED7AA; border-left: 4px solid var(--color-warning); border-radius: var(--radius-md); color: var(--text-primary); font-size: 13px; line-height: 1.5;">
+                            <strong>⚠ Beberapa worker sedang tidak aktif.</strong>
+                            Audit mungkin gagal kalau dimulai sekarang.
+                            <button type="button" wire:click="checkPlatformHealth" style="margin-left: 8px; background: none; border: none; color: var(--text-link); text-decoration: underline; cursor: pointer; padding: 0; font-size: 13px;">
+                                Cek lagi
+                            </button>
+                        </div>
+                    @endif
+
                     @if ($wizardStep === 1)
                         @include('livewire.audit-wizard.step-1-find-business')
                     @elseif ($wizardStep === 2)
@@ -1101,6 +1160,63 @@ new class extends Component {
                 </div>
             </div>
         @endif
+
+        {{-- BB105 Part 3 — platform-unhealthy modal. Alpine-driven, listens
+             for the Livewire `show-platform-unhealthy-modal` event dispatched
+             by submit() when the hard gate fails. Renders the per-service
+             rows from $event.detail.services. "Coba Lagi" closes the modal
+             and re-runs checkPlatformHealth(); user can then retry submit. --}}
+        <div
+            x-data="{ show: false, services: {} }"
+            x-on:show-platform-unhealthy-modal.window="show = true; services = $event.detail.services || {}"
+            x-show="show"
+            x-cloak
+            class="fixed inset-0 z-40 flex items-center justify-center p-6"
+            style="background: rgba(15,20,17,0.55);"
+            @click.self="show = false"
+        >
+            <div class="nui-card max-w-md w-full p-8" style="position: relative;">
+                <button type="button" @click="show = false" style="position: absolute; top: 12px; right: 14px; background: none; border: none; color: var(--text-tertiary); font-size: 22px; cursor: pointer; line-height: 1;" aria-label="Tutup">
+                    <i class="ti ti-x"></i>
+                </button>
+
+                <div style="width: 56px; height: 56px; margin: 0 auto 16px; border-radius: 50%; background: var(--surface-muted); display: flex; align-items: center; justify-content: center;">
+                    <i class="ti ti-server-off" style="font-size: 28px; color: var(--color-danger);"></i>
+                </div>
+
+                <h2 style="font-size: 20px; font-weight: 600; color: var(--text-primary); text-align: center;">Audit tidak bisa dimulai sekarang</h2>
+                <p style="font-size: 14px; color: var(--text-secondary); margin-top: 8px; line-height: 1.6; text-align: center;">
+                    Ada layanan platform yang sedang tidak aktif. Cek di bawah:
+                </p>
+
+                <div style="margin-top: 20px; display: flex; flex-direction: column; gap: 8px;">
+                    <template x-for="(svc, name) in services" :key="name">
+                        <div style="display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; background: var(--surface-muted); border-radius: var(--radius-sm);"
+                             :style="svc.ok ? 'border-left: 3px solid var(--color-success)' : 'border-left: 3px solid var(--color-danger)'">
+                            <span x-text="svc.ok ? '✓' : '✗'"
+                                  :style="svc.ok ? 'color: var(--color-success); font-weight: 600;' : 'color: var(--color-danger); font-weight: 600;'"></span>
+                            <div style="flex: 1; font-size: 13px;">
+                                <strong x-text="name" style="text-transform: capitalize; color: var(--text-primary); display: block;"></strong>
+                                <span x-text="svc.message" style="color: var(--text-secondary);"></span>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+
+                <p style="font-size: 12px; color: var(--text-tertiary); margin-top: 16px; line-height: 1.55;">
+                    Jalankan <code style="background: var(--surface-muted); padding: 2px 6px; border-radius: 4px; font-family: var(--font-mono);">composer dev</code> di folder <code style="background: var(--surface-muted); padding: 2px 6px; border-radius: 4px; font-family: var(--font-mono);">branding-builder</code> untuk start semua worker. Setelah itu klik Coba Lagi.
+                </p>
+
+                <button
+                    type="button"
+                    @click="show = false; $wire.checkPlatformHealth()"
+                    class="nui-btn-primary rounded-pill"
+                    style="margin-top: 20px; font-size: 14px; padding: 10px 20px; width: 100%;"
+                >
+                    Coba Lagi
+                </button>
+            </div>
+        </div>
     @endif
 
     {{-- ═══════════════════════════════════════════════════════════════

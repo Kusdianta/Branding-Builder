@@ -4,6 +4,32 @@
 
 ---
 
+## Daily dev
+
+```powershell
+cd branding-builder
+composer dev
+```
+
+Starts three processes in one terminal under [`concurrently`](https://www.npmjs.com/package/concurrently):
+
+- **queue** — `php artisan queue:work --tries=1 --timeout=300`
+- **vite** — `npm run dev`
+- **worker** — `uv --project ../workers/nema-worker run uvicorn app.main:app --reload --port 9878`
+
+Herd serves `branding-builder.test` automatically, so `php artisan serve` is not run.
+Press `Ctrl+C` and all three die together (no orphan PIDs on port 9878).
+
+If you only need the PHP side (no Instagram/GMaps scraping):
+
+```powershell
+composer dev:no-worker
+```
+
+The wizard probes platform health on mount and refuses to start an audit if anything is down — running `composer dev` is the one-command way to make sure everything's green.
+
+---
+
 ## Table of Contents
 
 - [Overview](#overview)

@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Http\Controllers\Api\HealthController;
 use App\Http\Controllers\AuditController;
 use App\Http\Controllers\Auth\GoogleAuthController;
 use App\Http\Controllers\HandleCheckController;
@@ -9,6 +10,12 @@ use Illuminate\Support\Facades\Route;
 use Livewire\Volt\Volt;
 
 Route::get('/health', fn () => response('ok', 200))->name('health');
+
+// BB105 Part 3 — platform-wide health probe (worker + queue + db + Places key).
+// Auth-only so service status isn't exposed publicly.
+Route::middleware('auth')
+    ->get('/api/health/platform', [HealthController::class, 'platform'])
+    ->name('api.health.platform');
 
 Volt::route('/', 'brand-audit-wizard')->name('home');
 
