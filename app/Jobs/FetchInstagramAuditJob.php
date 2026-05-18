@@ -75,10 +75,17 @@ class FetchInstagramAuditJob implements ShouldQueue
             } elseif ($status === 'no_instagram_url_provided') {
                 $step?->markDone(['skipped' => true, 'reason' => $status]);
             } else {
-                // Terminal failure modes (credentials_stale, rate_limited,
-                // profile_not_found, audit_failed, no_credentials_available).
-                // Record but don't fail the step — pipeline continues with
-                // missing IG slice and downstream scorers degrade gracefully.
+                // BB109 — surface the actual error from
+                // BrandAudit.instagram_audit into audit_steps.detail
+                // so the operator sees `{"status":"audit_failed",
+                // "error":"internal_error: NotImplementedError: ..."}`
+                // instead of the pre-BB109 useless
+                // `{"status":"audit_failed"}`. Same root cause is now
+                // visible without grep-ing logs.
+                $instagramPayload = (array) ($audit->instagram_audit ?? []);
+                if (isset($instagramPayload['error']) && is_string($instagramPayload['error'])) {
+                    $detail['error'] = $instagramPayload['error'];
+                }
                 $step?->markDone($detail);
             }
         } catch (Throwable $e) {

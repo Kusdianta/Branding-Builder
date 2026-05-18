@@ -169,8 +169,27 @@ class InstagramProfileAuditService
                 ]);
                 $this->persistFailure($audit, 'worker_unavailable: ' . $e->getMessage());
                 return;
+            } catch (\Nema\WorkerClient\Exceptions\WorkerException $e) {
+                // BB109 — WorkerException now carries httpStatus + rawBody
+                // + parsedBody. The diagnostic() summary lands in the
+                // log AND the audit_steps detail so the operator can
+                // tell the difference between a Playwright crash
+                // (error_code=internal_error, exception_type=
+                // NotImplementedError → restart worker), a stale-cookie
+                // failure (error_code=login_wall_hit), and a worker
+                // bug (any other internal_error). Pre-BB109 they all
+                // logged as "unexpected" with no useful diagnostic.
+                $diag = $e->diagnostic();
+                Log::error('InstagramProfileAuditService: worker error', [
+                    'audit_id' => $audit->id,
+                ] + $diag);
+                $code = $diag['error_code']
+                    ?? $diag['exception_type']
+                    ?? 'worker_error';
+                $this->persistFailure($audit, $code . ': ' . $e->getMessage());
+                return;
             } catch (Throwable $e) {
-                Log::warning('InstagramProfileAuditService: unexpected worker error', [
+                Log::warning('InstagramProfileAuditService: unexpected error', [
                     'audit_id' => $audit->id,
                     'class'    => $e::class,
                     'error'    => $e->getMessage(),

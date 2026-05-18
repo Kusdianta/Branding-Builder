@@ -71,9 +71,17 @@ class FetchGMapsReviewsJob implements ShouldQueue
             } elseif ($status === 'no_gmaps_url_provided') {
                 $step?->markDone(['skipped' => true, 'reason' => $status]);
             } else {
-                // Non-fatal terminal status — partial evidence path. Don't
-                // fail the step (the batch must still complete); record the
-                // status so the operator can diagnose + retry via BB59.
+                // BB109 — non-fatal terminal status. Pull the error
+                // payload from BrandAudit.gmaps_reviews into the
+                // audit_steps.detail so the operator can see WHY the
+                // scrape failed (worker 500, captcha, stale cookies,
+                // etc) without grep-ing logs.
+                if (is_array($payload) && isset($payload['error']) && is_string($payload['error'])) {
+                    $detail['error'] = $payload['error'];
+                }
+                if (is_array($payload) && isset($payload['error_code'])) {
+                    $detail['error_code'] = $payload['error_code'];
+                }
                 $step?->markDone($detail);
             }
         } catch (Throwable $e) {

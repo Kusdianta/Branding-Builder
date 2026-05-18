@@ -67,7 +67,7 @@
         ],
         "dev": [
             "Composer\\Config::disableProcessTimeout",
-            "npx concurrently -c \"#c4b5fd,#fb7185,#fdba74\" \"php artisan queue:work --tries=1 --timeout=300\" \"npm run dev\" \"uv --project ../workers/nema-worker run uvicorn app.main:app --reload --port 9878\" --names=queue,vite,worker --kill-others-on-fail"
+            "npx concurrently -c \"#c4b5fd,#fb7185,#fdba74\" \"php artisan queue:work --tries=1 --timeout=300\" \"npm run dev\" \"uv --project ../workers/nema-worker run python ../workers/nema-worker/run_dev.py\" --names=queue,vite,worker --kill-others-on-fail"
         ],
         "dev:no-worker": [
             "Composer\\Config::disableProcessTimeout",
