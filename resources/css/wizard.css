@@ -597,3 +597,35 @@
     gap: 4px;
 }
 .bb-link-inline:hover { color: var(--chimera-700); }
+
+/* Phase 12c.2 BB111 — Brand-health pillar breakdown table.
+   Collapses to stacked cards on narrow viewports so the
+   weight + progress columns stay readable on mobile. */
+@media (max-width: 640px) {
+    .brand-health-table .pillar-table { display: none; }
+    .brand-health-table .pillar-table-mobile { display: flex !important; }
+}
+
+/* Phase 12c.2 BB116 — AI suggestion disclaimer banner shown at
+   the top of the Instagram audit section. */
+.bb-ai-disclaimer {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 14px 16px;
+    margin-bottom: 20px;
+    background: #FEF3DC;
+    border: 1px solid rgba(201, 122, 27, 0.25);
+    border-radius: var(--radius-md);
+}
+.bb-ai-disclaimer .bb-ai-disclaimer__icon {
+    font-size: 18px;
+    line-height: 1.2;
+    flex-shrink: 0;
+}
+.bb-ai-disclaimer p {
+    font-size: 13px;
+    color: var(--text-primary);
+    margin: 0;
+    line-height: 1.6;
+}

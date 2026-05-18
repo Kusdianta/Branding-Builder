@@ -10,6 +10,7 @@ use App\Services\HandleCheckers\InstagramHandleChecker;
 use App\Services\HandleCheckers\TikTokHandleChecker;
 use App\Services\PlacesApiService;
 use App\Services\PlatformHealthChecker;
+use App\Support\AuditLabels;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -1134,37 +1135,10 @@ new class extends Component {
             'digital-presence'  => ['label' => 'Digital Presence',  'icon' => 'ti-world'],
         ];
 
-        $subBucketLabels = [
-            // brand-recall
-            'rating_tier'         => 'Rating',
-            'review_count_tier'   => 'Jumlah Review',
-            'keyword_saturation'  => 'Kata Kunci Positif di Ulasan', // BB18 alias for old rows
-            'review_keyword_quality' => 'Kata Kunci Positif di Ulasan',
-            'sentiment_quality'   => 'Sentimen',
-            'search_recall'       => 'Search Recall',
-            // digital-presence
-            'has_gmaps'           => 'Google Maps',
-            'has_instagram'       => 'Instagram',
-            'has_website'         => 'Website',
-            'has_wa'              => 'WhatsApp Business',
-            'has_tiktok'          => 'TikTok',
-            'review_bonus'        => 'Bonus Review',
-            // brand-konsistensi
-            'kehadiran_digital'   => 'Kehadiran Digital',
-            'konsistensi_visual'  => 'Konsistensi Visual',
-            'kelengkapan_layanan' => 'Kelengkapan Layanan',
-            'transparansi_harga'  => 'Transparansi Harga',
-            // brand-experience
-            'base'                  => 'Dasar',
-            'bonus_ekspres'         => 'Layanan Ekspres',
-            'bonus_antar_jemput'    => 'Antar Jemput',
-            'bonus_variasi_layanan' => 'Variasi Layanan',
-            'bonus_sop_keluhan'     => 'SOP Keluhan',
-            'bonus_price_list'      => 'Daftar Harga',
-            'penalty_keterlambatan' => 'Penalti Keterlambatan',
-            'penalty_pakaian_hilang' => 'Penalti Pakaian Hilang',
-            'penalty_no_response_wa' => 'Penalti No-Response WA',
-        ];
+        // Phase 12c.2 BB113/BB114: single source-of-truth for sub-bucket
+        // labels lives in App\Support\AuditLabels. The Blade still references
+        // $subBucketLabels for backwards-compat with existing partials.
+        $subBucketLabels = AuditLabels::SUB_BUCKET;
 
         // Normalize pillar scores: {pillar => {score, evidence, ...}} → {pillar => int}
         $pillarScoreInts = [];
@@ -2220,6 +2194,71 @@ new class extends Component {
                     @endif
                 </div>
 
+                {{-- ===== Phase 12c.2 BB111: Pillar breakdown table =====
+                     4-row compact table under the overall score circle so
+                     the pillar distribution is visible at-a-glance before
+                     the user scrolls into the per-pillar sub-bucket detail
+                     cards. Mobile (< 640px) collapses into stacked cards. --}}
+                @if (count($pillarScoreInts) > 0)
+                    <div class="brand-health-table max-w-3xl mx-auto mb-12">
+                        <p style="font-size: 11px; font-weight: 600; color: var(--text-tertiary); letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 12px;">Rincian Skor</p>
+
+                        {{-- Desktop / tablet: table layout --}}
+                        <table class="pillar-table" style="width: 100%; border-collapse: collapse; background: var(--surface-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); overflow: hidden;">
+                            <thead>
+                                <tr style="background: var(--surface-muted);">
+                                    <th style="text-align: left; font-size: 11px; font-weight: 600; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.4px; padding: 10px 14px;">Pilar</th>
+                                    <th style="text-align: right; font-size: 11px; font-weight: 600; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.4px; padding: 10px 14px;">Bobot</th>
+                                    <th style="text-align: right; font-size: 11px; font-weight: 600; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.4px; padding: 10px 14px;">Skor</th>
+                                    <th style="font-size: 11px; font-weight: 600; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.4px; padding: 10px 14px; width: 38%;">Progress</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach ($pillarMeta as $pillarSlug => $pillarMetaRow)
+                                    @php
+                                        $rowScore  = (int) ($pillarScoreInts[$pillarSlug] ?? 0);
+                                        $rowWeight = AuditLabels::pillarWeight($pillarSlug);
+                                        $rowColor  = AuditLabels::pillarColor($pillarSlug);
+                                    @endphp
+                                    <tr style="border-top: 1px solid var(--border-default);">
+                                        <td style="padding: 12px 14px; font-size: 13px; font-weight: 500; color: var(--text-primary);">{{ $pillarMetaRow['label'] }}</td>
+                                        <td style="padding: 12px 14px; text-align: right; font-size: 12px; color: var(--text-secondary);">{{ $rowWeight }}%</td>
+                                        <td style="padding: 12px 14px; text-align: right; font-size: 14px; font-weight: 700; color: var(--text-primary);">{{ $rowScore }}</td>
+                                        <td style="padding: 12px 14px;">
+                                            <div style="height: 8px; background: var(--surface-muted); border-radius: var(--radius-pill); overflow: hidden;">
+                                                <div style="height: 100%; width: {{ max(0, min(100, $rowScore)) }}%; background: {{ $rowColor }}; border-radius: var(--radius-pill); transition: width .4s ease;"></div>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                @endforeach
+                            </tbody>
+                        </table>
+
+                        {{-- Mobile (< 640px): stacked card grid --}}
+                        <div class="pillar-table-mobile" style="display: none; flex-direction: column; gap: 10px;">
+                            @foreach ($pillarMeta as $pillarSlug => $pillarMetaRow)
+                                @php
+                                    $rowScore  = (int) ($pillarScoreInts[$pillarSlug] ?? 0);
+                                    $rowWeight = AuditLabels::pillarWeight($pillarSlug);
+                                    $rowColor  = AuditLabels::pillarColor($pillarSlug);
+                                @endphp
+                                <div style="background: var(--surface-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: 12px 14px;">
+                                    <div class="flex items-baseline justify-between" style="margin-bottom: 6px;">
+                                        <span style="font-size: 13px; font-weight: 600; color: var(--text-primary);">{{ $pillarMetaRow['label'] }}</span>
+                                        <span style="font-size: 11px; color: var(--text-tertiary);">Bobot {{ $rowWeight }}%</span>
+                                    </div>
+                                    <div class="flex items-center gap-3">
+                                        <div style="flex: 1; height: 8px; background: var(--surface-muted); border-radius: var(--radius-pill); overflow: hidden;">
+                                            <div style="height: 100%; width: {{ max(0, min(100, $rowScore)) }}%; background: {{ $rowColor }}; border-radius: var(--radius-pill);"></div>
+                                        </div>
+                                        <span style="font-size: 14px; font-weight: 700; color: var(--text-primary);">{{ $rowScore }}</span>
+                                    </div>
+                                </div>
+                            @endforeach
+                        </div>
+                    </div>
+                @endif
+
                 {{-- ===== Pillar grid (single column) ===== --}}
                 @php
                     // BB32: methodology copy explaining WHY each pillar gets its
@@ -2297,18 +2336,60 @@ new class extends Component {
                             @if (count($sbs) > 0)
                                 <div class="flex flex-col mb-4" style="border-top: 1px solid var(--border-default);">
                                     @foreach ($sbs as $k => $v)
-                                        @php $bd = is_array($scoreBreakdown[$slug][$k] ?? null) ? $scoreBreakdown[$slug][$k] : null; @endphp
+                                        @php
+                                            $bd = is_array($scoreBreakdown[$slug][$k] ?? null) ? $scoreBreakdown[$slug][$k] : null;
+                                            $isDigitalPresence = $slug === 'digital-presence';
+                                            $cap = (int) (config('branding.pillar_sub_buckets.' . $slug . '.' . $k . '.cap', 0));
+                                            $hasPresence = ((int) $v) > 0;
+                                            $touchpointOptional = $k === 'has_tiktok' || $k === 'review_bonus';
+                                        @endphp
                                         <div style="border-bottom: 1px solid var(--border-default);">
-                                            <div class="flex justify-between items-center py-2">
-                                                <span style="font-size: 12px; color: var(--text-secondary);">{{ $subBucketLabels[$k] ?? $k }}</span>
-                                                <span style="font-size: 13px; font-weight: 500; color: var(--text-primary);">{{ $v }}</span>
-                                            </div>
-                                            @if ($bd !== null)
-                                                {{-- BB32: BB17/BB23 dropdown reverted — sub-bucket breakdown
-                                                     renders inline so users see how the score is computed
-                                                     without needing to click. Per-pillar methodology lives
-                                                     in the "About this score" block above the sub-bucket
-                                                     list, demystifying weights without repeating data. --}}
+                                            @if ($isDigitalPresence)
+                                                {{-- BB116: Digital Presence rows render as ✓/✗ icon, name,
+                                                     plain-Indonesian description, and points. Replaces the
+                                                     generic two-column sub-bucket row for this pillar. --}}
+                                                <div class="flex items-start gap-3 py-3 {{ $touchpointOptional && ! $hasPresence ? 'opacity-70' : '' }}">
+                                                    <span style="font-size: 18px; line-height: 1.2; color: {{ $hasPresence ? 'var(--color-success)' : ($touchpointOptional ? 'var(--text-tertiary)' : 'var(--color-danger)') }}; width: 22px; text-align: center; flex-shrink: 0;">
+                                                        {{ $hasPresence ? '✓' : '✗' }}
+                                                    </span>
+                                                    <div style="flex: 1; min-width: 0;">
+                                                        <p style="font-size: 13px; font-weight: 600; color: var(--text-primary); margin: 0;">
+                                                            {{ AuditLabels::subBucket($k) }}
+                                                            @if ($touchpointOptional && ! $hasPresence)
+                                                                <span style="font-size: 11px; color: var(--text-tertiary); font-weight: 400;">(opsional, tidak mengurangi skor)</span>
+                                                            @endif
+                                                        </p>
+                                                        <p style="font-size: 12px; color: var(--text-secondary); margin: 2px 0 0; line-height: 1.5;">
+                                                            {{ AuditLabels::touchpointDescription($k) }}
+                                                        </p>
+                                                    </div>
+                                                    <span style="font-size: 13px; font-weight: 600; color: var(--text-primary); white-space: nowrap; flex-shrink: 0;">
+                                                        {{ $v }}{{ $cap > 0 ? ' / ' . $cap : '' }} pt
+                                                    </span>
+                                                </div>
+                                            @else
+                                                <div class="flex justify-between items-center py-2">
+                                                    <span style="font-size: 12px; color: var(--text-secondary);">{{ AuditLabels::subBucket($k) }}</span>
+                                                    <span style="font-size: 13px; font-weight: 500; color: var(--text-primary);">{{ $v }}</span>
+                                                </div>
+                                                @if ($bd === null && $slug === 'brand-konsistensi')
+                                                    {{-- BB112: Konsistensi sub-buckets should always show
+                                                         their source attribution. When the breakdown is
+                                                         missing (e.g. visual analysis failed), surface
+                                                         honestly instead of silently dropping the line. --}}
+                                                    <p style="font-size: 11px; color: var(--text-tertiary); margin: 0 0 8px; line-height: 1.5;">
+                                                        {{ AuditLabels::subBucketSource($k) ?? 'Sumber: tidak tersedia' }}
+                                                    </p>
+                                                @endif
+                                            @endif
+                                            @if ($bd !== null && ! $isDigitalPresence)
+                                                {{-- Phase 12c.2 (BB113/BB114): sub-bucket detail block —
+                                                     formula labels, sources, signals, and raw_inputs all
+                                                     route through App\Support\AuditLabels so no English
+                                                     strings, em-dash-noise labels, or raw_input keys leak
+                                                     into the user-facing surface. BB112: each sub-bucket
+                                                     gets its own plain-Indonesian source attribution
+                                                     (e.g. Konsistensi Visual → "analisis AI atas screenshot"). --}}
                                                 <div style="padding: 8px 12px 12px; background: var(--surface-muted); border-top: 1px solid var(--border-default); font-size: 11px; color: var(--text-secondary);">
                                                     @php
                                                         $formula      = $bd['formula'] ?? 'unknown';
@@ -2318,55 +2399,67 @@ new class extends Component {
                                                         $suggestions  = (array) ($rawInputs['suggestions'] ?? []);
                                                         $llmReasoning = (string) ($bd['llm_reasoning'] ?? '');
                                                         $limitations  = (array) ($bd['limitations'] ?? []);
-                                                        $signalLabels = [
-                                                            'brand_recognition' => 'Pengenalan Brand',
-                                                            'geographic_spread' => 'Sebaran Lokasi',
-                                                            'variant_coverage'  => 'Variasi Pencarian',
-                                                        ];
+                                                        $sourceLine   = AuditLabels::subBucketSource($k);
+                                                        $formulaLine  = AuditLabels::formula($formula);
 
+                                                        // BB114: translate raw_inputs keys through AuditLabels::RAW_INPUT
+                                                        // and surface sample_source enum values via SAMPLE_SOURCE.
+                                                        // Internal/debug keys are filtered out so users never see them.
+                                                        $hiddenInputKeys = [
+                                                            'source', 'suggestions', 'suggestion_count', 'brand_name',
+                                                            'brand_stem', 'fetched_at', 'context_provided',
+                                                        ];
                                                         if ($formula === 'llm_judgment') {
                                                             $inputLine = implode(', ', (array) ($rawInputs['context_provided'] ?? []));
                                                         } elseif ($formula === 'deterministic_signals') {
-                                                            $inputLine = sprintf(
-                                                                'brand_stem: %s · sumber: %s',
-                                                                (string) ($rawInputs['brand_stem'] ?? '—'),
-                                                                (string) ($rawInputs['source'] ?? 'Google Autocomplete'),
-                                                            );
+                                                            // Signals render in their own table below — skip the noisy
+                                                            // "brand_stem: X · sumber: Y" debug line.
+                                                            $inputLine = '';
                                                         } else {
                                                             $parts = [];
                                                             foreach ($rawInputs as $rk => $rv) {
-                                                                if (in_array($rk, ['source', 'suggestions', 'suggestion_count', 'brand_name', 'brand_stem', 'fetched_at'], true)) continue;
-                                                                $parts[] = $rk . ': ' . (is_bool($rv) ? ($rv ? 'Ya' : 'Tidak') : $rv);
+                                                                if (in_array($rk, $hiddenInputKeys, true)) {
+                                                                    continue;
+                                                                }
+                                                                $label = AuditLabels::rawInput((string) $rk);
+                                                                if ($label === null) {
+                                                                    continue; // unknown key → keep out of user view
+                                                                }
+                                                                $value = $rv;
+                                                                if ($rk === 'sample_source') {
+                                                                    $value = AuditLabels::sampleSource((string) $rv);
+                                                                } elseif (is_bool($rv)) {
+                                                                    $value = $rv ? 'Ya' : 'Tidak';
+                                                                } elseif ($rk === 'hit_rate_pct' && is_numeric($rv)) {
+                                                                    $value = number_format((float) $rv, 1, ',', '.') . '%';
+                                                                }
+                                                                $parts[] = $label . ': ' . $value;
                                                             }
-                                                            $inputLine = implode(' · ', $parts);
+                                                            $inputLine = implode(', ', $parts);
                                                         }
                                                     @endphp
 
-                                                    {{-- BB23: header moved out to the toggle button above. --}}
-                                                    @php
-                                                        $formulaLabel = match ($formula) {
-                                                            'deterministic_threshold' => 'Threshold tier-based (deterministik)',
-                                                            'deterministic_signals'   => 'Signal-based weighted (deterministik)',
-                                                            'llm_judgment'            => 'Penilaian LLM (Claude)',
-                                                            default                   => 'Lainnya',
-                                                        };
-                                                        $sourceLabel = match ($k) {
-                                                            'rating_tier', 'review_count_tier', 'keyword_saturation', 'review_keyword_quality', 'sentiment_quality' => 'Google Maps reviews',
-                                                            'search_recall' => 'Google Autocomplete',
-                                                            'has_gmaps', 'has_instagram', 'has_website', 'has_wa', 'has_tiktok' => 'Touchpoint input form',
-                                                            'review_bonus' => 'Google Maps review count threshold',
-                                                            'kehadiran_digital', 'konsistensi_visual', 'kelengkapan_layanan', 'transparansi_harga' => 'Penilaian visual + URL touchpoint',
-                                                            'base', 'bonus_ekspres', 'bonus_antar_jemput', 'bonus_variasi_layanan', 'bonus_sop_keluhan', 'bonus_price_list', 'penalty_keterlambatan', 'penalty_pakaian_hilang', 'penalty_no_response_wa' => 'Penilaian LLM dari konteks brand',
-                                                            default => 'Konteks brand',
-                                                        };
-                                                    @endphp
-                                                    <p style="margin: 0 0 6px;"><strong>Sumber:</strong> {{ $sourceLabel }} · <strong>Formula:</strong> {{ $formulaLabel }}</p>
-
-                                                    @if ($k === 'search_recall')
-                                                        <p style="margin: 0 0 6px; line-height: 1.55;">Frekuensi dan variasi brand muncul di hasil autocomplete pencarian.</p>
+                                                    @if ($sourceLine !== null)
+                                                        <p style="margin: 0 0 4px;">{{ $sourceLine }}</p>
+                                                    @endif
+                                                    @if ($formulaLine !== null)
+                                                        <p style="margin: 0 0 6px; color: var(--text-tertiary);">{{ $formulaLine }}</p>
                                                     @endif
 
-                                                    <p style="margin: 0 0 6px;"><strong>Berdasarkan:</strong> {{ $inputLine }}</p>
+                                                    @if ($k === 'search_recall')
+                                                        {{-- BB115: Search Recall explainer in the same TENTANG
+                                                             SKOR INI style as the per-pillar methodology block. --}}
+                                                        <div style="margin: 8px 0 10px; padding: 10px 12px; background: var(--surface-card); border-left: 3px solid var(--chimera-200); border-radius: var(--radius-sm);">
+                                                            <p style="font-size: 10px; font-weight: 600; color: var(--chimera-700); letter-spacing: 0.4px; text-transform: uppercase; margin: 0 0 6px;">Tentang Search Recall</p>
+                                                            <p style="font-size: 12px; color: var(--text-secondary); line-height: 1.65; margin: 0;">
+                                                                Search Recall mengukur seberapa mudah brand kita ditemukan lewat Google autocomplete. Skor ini melihat tiga hal: apakah nama brand muncul di hasil pencarian, apakah Google mengaitkan brand dengan lokasi outlet, dan apakah ada variasi pencarian non-brand yang menunjukkan pengenalan organik. Ideal: brand muncul di top-3 saran untuk pencarian nama, plus 2–3 variasi lokasi. Skor 0 berarti brand belum cukup dikenal Google untuk muncul sebagai saran.
+                                                            </p>
+                                                        </div>
+                                                    @endif
+
+                                                    @if ($inputLine !== '')
+                                                        <p style="margin: 0 0 6px;"><strong>Berdasarkan:</strong> {{ $inputLine }}</p>
+                                                    @endif
 
                                                     @if ($formula === 'deterministic_threshold' && count($tierTable) > 0)
                                                         <table style="width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 6px;">
@@ -2390,7 +2483,7 @@ new class extends Component {
                                                                     $isFull    = $sigCap > 0 && $sigScore >= $sigCap;
                                                                 @endphp
                                                                 <tr style="background: {{ $isFull ? 'var(--chimera-500)' : 'transparent' }}; color: {{ $isFull ? '#FFFFFF' : 'inherit' }};">
-                                                                    <td style="padding: 3px 8px; vertical-align: top;">{{ $signalLabels[$sigKey] ?? $sigKey }}</td>
+                                                                    <td style="padding: 3px 8px; vertical-align: top;">{{ AuditLabels::signal((string) $sigKey) }}</td>
                                                                     <td style="padding: 3px 8px; text-align: right; font-weight: {{ $isFull ? '600' : 'normal' }}; white-space: nowrap;">{{ $sigScore }} / {{ $sigCap }} pt</td>
                                                                 </tr>
                                                                 @if ($sigDetail !== '')

@@ -24,7 +24,7 @@
         'place_not_found'          => ['severity' => 'warning', 'title' => 'Listing tempat tidak ditemukan', 'body' => 'URL Google Maps tidak menampilkan listing tempat.'],
         'captcha_blocked'          => ['severity' => 'warning', 'title' => 'Google mendeteksi aktivitas tidak biasa', 'body' => 'Worker mendapat CAPTCHA / consent interstitial. Operator perlu rotate kredensial atau ganti IP.'],
         'scrape_failed'            => ['severity' => 'failure', 'title' => 'Scrape ulasan gagal', 'body' => 'Terjadi error tidak terduga di pipeline scrape.'],
-        'legacy_places_api_only'   => ['severity' => 'info',    'title' => 'Audit lawas — sample 5 ulasan', 'body' => 'Audit ini menggunakan sample 5 ulasan dari Places API. Audit baru akan menggunakan scraping ulasan lengkap.'],
+        'legacy_places_api_only'   => ['severity' => 'info',    'title' => 'Audit lawas, sampel 5 ulasan', 'body' => 'Audit ini menggunakan sampel 5 ulasan dari Google Places. Audit baru akan menggunakan scraping ulasan lengkap.'],
     ];
 
     $banner = null;
@@ -51,7 +51,7 @@
     <div class="flex items-end justify-between mb-6 flex-wrap gap-3">
         <div>
             <p style="font-size: 11px; color: var(--text-tertiary); letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 4px;">
-                Ulasan Pelanggan — Google Maps
+                Ulasan Pelanggan dari Google Maps
             </p>
             <h3 style="font-size: 22px; font-weight: 600; color: var(--text-primary); margin: 0;">
                 {{ $businessName !== '' ? $businessName : 'Google Maps' }}
@@ -80,9 +80,13 @@
 
     @if ($status === 'done' && ! empty($reviews))
         <p style="font-size: 12px; color: var(--text-tertiary); margin-bottom: 14px;">
-            Sample {{ count($reviews) }} ulasan dari corpus Phase 8 W8 (full-scrape).
+            {{ count($reviews) }} ulasan diambil dari Google Maps.
             @if ($scrapedAt !== '')
-                Scrape pada {{ \Illuminate\Support\Carbon::parse($scrapedAt)->setTimezone('Asia/Jakarta')->format('d M Y, H:i') }} WIB.
+                @php
+                    $scrapedAtCarbon = \Illuminate\Support\Carbon::parse($scrapedAt)->setTimezone('Asia/Jakarta');
+                    $scrapedAtLabel  = $scrapedAtCarbon->locale('id')->translatedFormat('d F Y, H:i');
+                @endphp
+                Diambil pada {{ $scrapedAtLabel }} WIB.
             @endif
         </p>
 
@@ -140,11 +144,11 @@
                         @php $evidence = (array) ($penalties['evidence'][$key] ?? []); @endphp
                         <div class="mt-3">
                             <p style="font-size: 12px; font-weight: 600; color: var(--text-primary); margin: 0;">
-                                {{ $key }} <span style="color: var(--color-danger);">({{ (int) $delta }} poin, {{ count($evidence) }} match)</span>
+                                {{ \App\Support\AuditLabels::subBucket((string) $key) }} <span style="color: var(--color-danger);">({{ (int) $delta }} poin, {{ count($evidence) }} kecocokan)</span>
                             </p>
                             @foreach ($evidence as $ev)
                                 <p style="font-size: 11px; color: var(--text-secondary); margin: 4px 0 0 12px; font-style: italic;">
-                                    <strong>{{ $ev['author'] ?? '—' }}</strong> · ★{{ $ev['rating_value'] ?? '?' }} · "{{ $ev['matched_phrase'] ?? '' }}" — {{ \Illuminate\Support\Str::limit($ev['text_snippet'] ?? '', 180) }}
+                                    <strong>{{ $ev['author'] ?? 'Anonim' }}</strong> · ★{{ $ev['rating_value'] ?? '?' }} · "{{ $ev['matched_phrase'] ?? '' }}", {{ \Illuminate\Support\Str::limit($ev['text_snippet'] ?? '', 180) }}
                                 </p>
                             @endforeach
                         </div>

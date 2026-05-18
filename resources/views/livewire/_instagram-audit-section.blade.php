@@ -24,7 +24,7 @@
         'pending'                   => ['severity' => 'info',    'title' => 'Audit Instagram masih dalam proses', 'body' => 'Halaman akan diperbarui otomatis setelah audit selesai.'],
         'no_instagram_url_provided' => ['severity' => 'info',    'title' => 'Audit Instagram dilewati', 'body' => 'URL Instagram tidak diisi di form audit. Untuk mendapatkan analisis Instagram, ulangi audit dengan mengisi field Instagram.'],
         'no_credentials_available'  => ['severity' => 'warning', 'title' => 'Audit Instagram tidak dapat dijalankan', 'body' => 'Tidak ada kredensial worker Instagram yang aktif di sistem. Operator perlu menambahkan kredensial via /admin/worker-credentials di Hub.'],
-        'credentials_stale'         => ['severity' => 'warning', 'title' => 'Audit Instagram gagal — sesi operator kedaluwarsa', 'body' => 'Kredensial Instagram operator sudah kedaluwarsa dan tidak diterima oleh Instagram. Operator perlu memperbarui session via Cookie-Editor lalu jalankan audit ulang.'],
+        'credentials_stale'         => ['severity' => 'warning', 'title' => 'Audit Instagram gagal, sesi operator kedaluwarsa', 'body' => 'Kredensial Instagram operator sudah kedaluwarsa dan tidak diterima oleh Instagram. Operator perlu memperbarui session via Cookie-Editor lalu jalankan audit ulang.'],
         'rate_limited'              => ['severity' => 'warning', 'title' => 'Audit Instagram di-rate-limit', 'body' => 'Worker membatasi audit 1× per username per 5 menit. Coba jalankan audit ulang dalam beberapa menit.'],
         'profile_not_found'         => ['severity' => 'warning', 'title' => 'Username Instagram tidak ditemukan', 'body' => 'Profile Instagram dengan handle yang dimasukkan tidak ditemukan. Periksa kembali ejaan username dan URL.'],
         'audit_failed'              => ['severity' => 'failure', 'title' => 'Audit Instagram gagal karena error teknis', 'body' => 'Terjadi error tidak terduga di pipeline audit. Periksa logs untuk detail dan jalankan audit ulang.'],
@@ -251,6 +251,16 @@
         </div>
     </x-nui-card>
 
+    {{-- Phase 12c.2 BB116 part 2: AI suggestion disclaimer rendered
+         once at the top of the Instagram audit body so users know
+         the analysis and recommendations below are LLM-generated. --}}
+    <div class="bb-ai-disclaimer">
+        <span class="bb-ai-disclaimer__icon" aria-hidden="true">💡</span>
+        <p>
+            <strong>Catatan:</strong> Analisis dan rekomendasi di bawah dibuat oleh AI yang sudah dilatih dengan data audit brand laundry. Hasilnya bisa membantu sebagai bahan pertimbangan, keputusan akhir tetap di tangan kita.
+        </p>
+    </div>
+
     {{-- ===== Executive summary (always expanded) ===== --}}
     @if ($execSummary !== '')
         <x-nui-card style="margin-bottom: 16px;">
@@ -295,7 +305,7 @@
             </div>
             {{-- BB17: scorecard transparency. --}}
             <p style="font-size: 11px; color: var(--text-tertiary); margin-top: 12px; line-height: 1.55; font-style: italic;">
-                ▸ <strong style="font-weight: 600;">Cara Perhitungan:</strong> Sumber — hasil scrape worker (profile + 12 post + 6 caption + 6 highlight) + analisis Claude Sonnet 4.6. Formula — penilaian LLM 0–10 berdasarkan rubrik kalibrasi pasar laundry Indonesia (9–10 best-in-class, 7–8 solid, 5–6 baseline, 3–4 gap signifikan, 0–2 absen). Overall dihitung server-side sebagai rata-rata sederhana dari 7 sub-skor.
+                ▸ <strong style="font-weight: 600;">Cara Perhitungan:</strong> Sumber: hasil scrape worker (profile + 12 post + 6 caption + 6 highlight) plus analisis AI Claude. Rumus: penilaian AI dengan skala 0&ndash;10 berdasarkan rubrik kalibrasi pasar laundry Indonesia (9&ndash;10 terbaik di kelasnya, 7&ndash;8 kuat, 5&ndash;6 standar, 3&ndash;4 ada celah penting, 0&ndash;2 belum ada). Skor keseluruhan dihitung otomatis sebagai rata-rata sederhana dari 7 sub-skor.
             </p>
         </x-nui-card>
     @endif
