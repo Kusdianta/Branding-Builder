@@ -36,9 +36,18 @@ class BrandAudit extends Model
      *      touchpoint URLs + photo uploads.
      * V2 = Phase-12c 4-step wizard: anchored by Google place_id, all
      *      other fields hydrated from Places Details + Step 3 inputs.
+     * V3 = Phase 12c.2-rubric-alignment: V2 wizard + multi-select
+     *      service types (primary + secondary), three operational
+     *      declarations (express/pickup/SOP) surfaced in Step 3,
+     *      and TikTok back as availability-check-only via the BB113
+     *      JSON endpoint. New audits stamp V3 so the dashboard knows
+     *      to render with full per-row source attribution; legacy
+     *      V1/V2 audits keep their old render path for backwards
+     *      compat (BB118 honest-degradation rule).
      */
     public const WIZARD_V1 = 'v1';
     public const WIZARD_V2 = 'v2';
+    public const WIZARD_V3 = 'v3';
 
     protected $fillable = [
         'session_token',

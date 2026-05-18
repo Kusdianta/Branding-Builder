@@ -606,6 +606,67 @@
     .brand-health-table .pillar-table-mobile { display: flex !important; }
 }
 
+/* Phase 12c.2-rubric-alignment BB119 — tier badge next to each
+   sub-bucket score. Variants map PPT-rubric tier labels onto three
+   semantic colors so the operator can read good/warning/bad at a
+   glance without translating jargon. */
+.bb-tier-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: var(--radius-pill);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    line-height: 1.4;
+    white-space: nowrap;
+}
+.bb-tier-badge--good {
+    background: rgba(61, 137, 72, 0.10);
+    color: var(--chimera-700);
+}
+.bb-tier-badge--warning {
+    background: rgba(201, 122, 27, 0.12);
+    color: var(--color-warning);
+}
+.bb-tier-badge--bad {
+    background: rgba(194, 78, 58, 0.12);
+    color: var(--color-danger);
+}
+
+/* Phase 12c.2-rubric-alignment BB120 — embedded review quote block.
+   Used under Kualitas Ulasan Positif + complaint detection rows so
+   the operator can verify the matched evidence inline. */
+.bb-review-quotes {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--border-default);
+}
+.bb-review-quotes summary {
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+}
+.bb-review-quote {
+    margin: 8px 0 0;
+    padding: 8px 12px;
+    background: var(--surface-card);
+    border-left: 3px solid var(--chimera-200);
+    border-radius: var(--radius-sm);
+    font-style: italic;
+    font-size: 12px;
+    color: var(--text-primary);
+    line-height: 1.55;
+}
+.bb-review-quote cite {
+    display: block;
+    margin-top: 6px;
+    font-size: 11px;
+    font-style: normal;
+    color: var(--text-tertiary);
+}
+
 /* Phase 12c.2 BB116 — AI suggestion disclaimer banner shown at
    the top of the Instagram audit section. */
 .bb-ai-disclaimer {
@@ -623,6 +684,106 @@
     line-height: 1.2;
     flex-shrink: 0;
 }
+/* Phase 12c.2-rubric-alignment BB111 — Step 2 primary + secondary
+   service-type selectors. The secondary grid uses a denser layout
+   to visually demote it relative to the primary radio cards. */
+.bb-substep-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    margin: 16px 0 8px;
+}
+.bb-substep-label--secondary {
+    margin-top: 24px;
+    color: var(--text-tertiary);
+}
+.bb-substep-hint {
+    font-weight: 400;
+    text-transform: none;
+    color: var(--text-tertiary);
+    letter-spacing: 0;
+    margin-left: 4px;
+}
+.bb-svc-secondary-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    margin-bottom: 8px;
+}
+@media (min-width: 640px) {
+    .bb-svc-secondary-grid { grid-template-columns: repeat(3, 1fr); }
+}
+.bb-svc-checkbox-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    background: var(--surface-card);
+    font-size: 13px;
+    transition: background .15s ease, border-color .15s ease;
+}
+.bb-svc-checkbox-card:hover { background: var(--surface-muted); }
+.bb-svc-checkbox-card input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--chimera-500);
+    flex-shrink: 0;
+}
+.bb-svc-checkbox-card .icon { font-size: 16px; }
+.bb-svc-checkbox-card .label { font-weight: 500; color: var(--text-primary); }
+.bb-svc-checkbox-card:has(input:checked) {
+    background: var(--chimera-50);
+    border-color: var(--chimera-500);
+}
+
+/* Phase 12c.2-rubric-alignment BB112 — Step 3 operational checkboxes.
+   Visually grouped above the social inputs so the user reads the
+   declarations first. */
+.bb-operational-fields {
+    background: var(--surface-muted);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: 14px 16px;
+    margin-bottom: 20px;
+}
+.bb-operational-fields .bb-substep-label { margin-top: 0; }
+.bb-op-checkbox {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 0;
+    cursor: pointer;
+    border-top: 1px dashed var(--border-default);
+}
+.bb-op-checkbox:first-of-type { border-top: 0; }
+.bb-op-checkbox input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    margin-top: 3px;
+    accent-color: var(--chimera-500);
+    flex-shrink: 0;
+}
+.bb-op-checkbox__body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.bb-op-checkbox__body strong {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.bb-op-checkbox__hint {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    line-height: 1.5;
+}
+
 .bb-ai-disclaimer p {
     font-size: 13px;
     color: var(--text-primary);

@@ -41,6 +41,20 @@ final readonly class TikTokHandleResult
         ];
     }
 
+    /** @param array<string,mixed> $data */
+    public static function fromArray(array $data): self
+    {
+        return new self(
+            username:      (string) ($data['username'] ?? ''),
+            status:        (string) ($data['status'] ?? 'error'),
+            exists:        (bool)   ($data['exists'] ?? false),
+            displayName:   isset($data['display_name'])    ? (string) $data['display_name']    : null,
+            profilePicUrl: isset($data['profile_pic_url']) ? (string) $data['profile_pic_url'] : null,
+            followerCount: isset($data['follower_count'])  ? (int)    $data['follower_count']  : null,
+            checkedAt:     isset($data['checked_at'])      ? (string) $data['checked_at']      : null,
+        );
+    }
+
     public static function notFound(string $username): self
     {
         return new self(

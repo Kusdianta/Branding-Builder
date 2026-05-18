@@ -43,6 +43,41 @@
     <p class="bb-step-sub">Semuanya opsional. Saya cek dulu sebelum lanjut biar audit tidak salah sasaran.</p>
 
     {{-- ============================================================
+         BB112 — Operasional outletmu (3 checkboxes).
+         User-declared signals. Verified later against scraped review
+         keywords + price-list detection. Source on the dashboard reads
+         "Sumber: deklarasi operator (form audit) + verifikasi otomatis".
+         ============================================================ --}}
+    <div class="bb-operational-fields">
+        <h3 class="bb-substep-label">Operasional outletmu</h3>
+        <p class="bb-substep-hint" style="display:block;margin-bottom:8px;">Centang yang berlaku. Akan diverifikasi dengan data Google Maps & Instagram.</p>
+
+        <label class="bb-op-checkbox">
+            <input type="checkbox" wire:model.live="declEkspres" />
+            <span class="bb-op-checkbox__body">
+                <strong>Layanan Ekspres / Same-day</strong>
+                <span class="bb-op-checkbox__hint">Selesai dalam 24 jam atau kurang.</span>
+            </span>
+        </label>
+
+        <label class="bb-op-checkbox">
+            <input type="checkbox" wire:model.live="declAntarJemput" />
+            <span class="bb-op-checkbox__body">
+                <strong>Antar-Jemput</strong>
+                <span class="bb-op-checkbox__hint">Kurir mengambil & mengantar pakaian.</span>
+            </span>
+        </label>
+
+        <label class="bb-op-checkbox">
+            <input type="checkbox" wire:model.live="declSopKeluhan" />
+            <span class="bb-op-checkbox__body">
+                <strong>SOP Keluhan + Kompensasi</strong>
+                <span class="bb-op-checkbox__hint">Ada prosedur tertulis jika pakaian hilang atau rusak.</span>
+            </span>
+        </label>
+    </div>
+
+    {{-- ============================================================
          Instagram — primary signal, manual verification
          ============================================================ --}}
     <div class="bb-field">

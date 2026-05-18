@@ -211,43 +211,64 @@ class HandleCheckTest extends TestCase
         $this->assertIsArray(\Illuminate\Support\Facades\Cache::get('ig-handle:nasa'));
     }
 
-    // ─── TikTok (unchanged from BB101; BB108 will rewrite) ───────────
+    // ─── TikTok (BB113 — JSON user/detail endpoint, mirrors BB107 IG fix) ───
 
     #[Test]
-    public function tiktok_found_parses_og_title(): void
+    public function tiktok_found_parses_user_detail_json(): void
     {
         Http::fake([
-            'tiktok.com/@lessworry*' => Http::response($this->ttProfileHtml(
-                title: 'Less Worry Laundry (@lessworry) | TikTok',
-                desc:  '1.2K Followers, 50 Following, 320 Likes',
-                image: 'https://p16.tiktokcdn.com/lw.jpg',
-            ), 200),
+            'tiktok.com/api/user/detail*' => Http::response(
+                $this->ttFoundFixture(
+                    nickname:      'Less Worry Laundry',
+                    avatar:        'https://p16.tiktokcdn.com/lw.jpg',
+                    followerCount: 1200,
+                ),
+                200,
+                ['Content-Type' => 'application/json'],
+            ),
         ]);
 
         $response = $this->postJson('/check-handle/tiktok', ['username' => 'lessworry']);
 
         $response->assertOk()
             ->assertJson([
-                'exists'        => true,
-                'status'        => 'found',
-                'display_name'  => 'Less Worry Laundry',
+                'exists'         => true,
+                'status'         => 'found',
+                'display_name'   => 'Less Worry Laundry',
                 'follower_count' => 1200,
             ]);
     }
 
     #[Test]
-    public function tiktok_soft_404_sentinel_returns_not_found(): void
+    public function tiktok_status_code_10221_returns_not_found(): void
     {
         Http::fake([
-            'tiktok.com/@*' => Http::response(
-                "<html><body>Couldn't find this account</body></html>",
+            'tiktok.com/api/user/detail*' => Http::response(
+                json_encode(['statusCode' => 10221, 'statusMsg' => 'user_not_exist']),
                 200,
+                ['Content-Type' => 'application/json'],
             ),
         ]);
 
         $response = $this->postJson('/check-handle/tiktok', ['username' => 'ghost']);
 
         $response->assertOk()->assertJson(['exists' => false, 'status' => 'not_found']);
+    }
+
+    #[Test]
+    public function tiktok_captcha_html_returns_error_not_not_found(): void
+    {
+        Http::fake([
+            'tiktok.com/api/user/detail*' => Http::response(
+                '<!DOCTYPE html><html><body>Captcha</body></html>',
+                200,
+                ['Content-Type' => 'text/html'],
+            ),
+        ]);
+
+        $response = $this->postJson('/check-handle/tiktok', ['username' => 'lessworry']);
+
+        $response->assertOk()->assertJson(['exists' => false, 'status' => 'error']);
     }
 
     #[Test]
@@ -273,17 +294,30 @@ class HandleCheckTest extends TestCase
         );
     }
 
-    private function ttProfileHtml(string $title, string $desc, string $image): string
+    /**
+     * BB113: synthetic user/detail JSON shape matching the TikTok web
+     * endpoint contract. statusCode = 0 means "found".
+     */
+    private function ttFoundFixture(string $nickname, string $avatar, int $followerCount): string
     {
-        return <<<HTML
-<!DOCTYPE html>
-<html>
-<head>
-    <meta property="og:title" content="{$title}">
-    <meta property="og:description" content="{$desc}">
-    <meta property="og:image" content="{$image}">
-</head>
-</html>
-HTML;
+        return (string) json_encode([
+            'statusCode' => 0,
+            'userInfo'   => [
+                'user' => [
+                    'id'           => '6900000000000000000',
+                    'uniqueId'     => 'lessworry',
+                    'nickname'     => $nickname,
+                    'avatarLarger' => $avatar,
+                    'avatarMedium' => $avatar,
+                    'avatarThumb'  => $avatar,
+                ],
+                'stats' => [
+                    'followerCount'  => $followerCount,
+                    'followingCount' => 50,
+                    'heartCount'     => 320,
+                    'videoCount'     => 24,
+                ],
+            ],
+        ]);
     }
 }

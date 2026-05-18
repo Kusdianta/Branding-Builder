@@ -1,14 +1,20 @@
 {{--
-    BB99 — Step 2: Service type selection.
+    BB99 → BB111 — Step 2: primary service type + secondary multi-select.
 
-    Card grid; 2 cols mobile, 3 cols >=640px. Default 'kiloan' selection
-    means Lanjutkan is enabled from entry — laundries pick it 90% of
-    the time, so pre-selection is a UX win.
+    Primary = "yang paling dominan" (radio). Secondary = "yang juga
+    tersedia" (multi-checkbox). Combined variety_count feeds the
+    BB117 Kelengkapan Layanan sub-bucket in Brand Konsistensi.
+
+    Default 'kiloan' primary keeps Lanjutkan enabled from entry — the
+    secondary checkboxes are optional. Secondary cards for the slug
+    that's currently primary are filtered out so the operator can't
+    double-count one layanan as both primary and secondary.
 --}}
 <div class="bb-step bb-step-2">
-    <h2 class="bb-step-title">Jenis layanan utama?</h2>
-    <p class="bb-step-sub">Pilih satu yang paling dominan di outletmu.</p>
+    <h2 class="bb-step-title">Jenis layanan utama & tambahan</h2>
+    <p class="bb-step-sub">Pilih satu yang paling dominan. Layanan tambahan bisa lebih dari satu.</p>
 
+    <h3 class="bb-substep-label">Layanan utama (paling dominan)</h3>
     <div class="bb-svc-grid">
         @foreach ($availableServiceTypes as $type)
             @php($isSelected = $serviceType === $type['slug'])
@@ -25,7 +31,27 @@
         @endforeach
     </div>
 
+    <h3 class="bb-substep-label bb-substep-label--secondary">Layanan tambahan yang juga tersedia <span class="bb-substep-hint">(opsional)</span></h3>
+    <div class="bb-svc-secondary-grid">
+        @foreach ($availableServiceTypes as $type)
+            @if ($type['slug'] !== $serviceType)
+                <label class="bb-svc-checkbox-card">
+                    <input
+                        type="checkbox"
+                        wire:model.live="secondaryServiceTypes"
+                        value="{{ $type['slug'] }}"
+                    />
+                    <span class="icon">{{ $type['icon'] }}</span>
+                    <span class="label">{{ $type['label'] }}</span>
+                </label>
+            @endif
+        @endforeach
+    </div>
+
     @error('serviceType')
+        <p class="bb-error">{{ $message }}</p>
+    @enderror
+    @error('secondaryServiceTypes')
         <p class="bb-error">{{ $message }}</p>
     @enderror
 

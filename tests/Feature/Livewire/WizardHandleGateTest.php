@@ -200,8 +200,14 @@ class WizardHandleGateTest extends TestCase
     #[Test]
     public function check_tiktok_flips_status_correctly(): void
     {
+        // BB113: TikTokHandleChecker now hits the user/detail JSON
+        // endpoint, not the public profile HTML.
         Http::fake([
-            'tiktok.com/@nasa*' => Http::response($this->ttProfileHtml('nasa', 'NASA'), 200),
+            'tiktok.com/api/user/detail*' => Http::response(
+                $this->ttProfileJson('nasa', 'NASA'),
+                200,
+                ['Content-Type' => 'application/json'],
+            ),
         ]);
 
         $this->authedComponent()
@@ -336,9 +342,36 @@ class WizardHandleGateTest extends TestCase
 
     private function ttProfileHtml(string $username, string $displayName): string
     {
+        // BB113: kept for any legacy test that still uses HTML scraping.
+        // New tests should call ttProfileJson() and stub the JSON endpoint.
         return '<html><head>'
             . '<meta property="og:title" content="' . $displayName . ' (@' . $username . ') | TikTok">'
             . '<meta property="og:image" content="https://example.test/' . $username . '.jpg">'
             . '</head></html>';
+    }
+
+    /**
+     * BB113: synthetic user/detail JSON shape matching the TikTok web
+     * endpoint contract. statusCode = 0 means "found".
+     */
+    private function ttProfileJson(string $username, string $displayName): string
+    {
+        return (string) json_encode([
+            'statusCode' => 0,
+            'userInfo'   => [
+                'user' => [
+                    'id'           => '6900000000000000000',
+                    'uniqueId'     => $username,
+                    'nickname'     => $displayName,
+                    'avatarLarger' => 'https://example.test/' . $username . '.jpg',
+                ],
+                'stats' => [
+                    'followerCount'  => 1200,
+                    'followingCount' => 50,
+                    'heartCount'     => 320,
+                    'videoCount'     => 24,
+                ],
+            ],
+        ]);
     }
 }

@@ -13,17 +13,14 @@ declare(strict_types=1);
 
 return [
     /*
-    | BB107 — Step 3 TikTok input visibility.
+    | BB107 → BB113 — Step 3 TikTok input visibility.
     |
-    | When false (default), the wizard hides the TikTok handle field
-    | entirely. The /check-handle/tiktok route, TikTokHandleChecker
-    | service, and downstream scoring services (DigitalPresenceScorer,
-    | KonsistensiScorer) all stay live — only the wizard's INPUT
-    | disappears. Flip via WIZARD_SHOW_TIKTOK=true in .env.
-    |
-    | Blocked on: BB108 — TikTokHandleChecker rewrite. Same fixture-rot
-    | problem as the pre-BB107 IG checker (anonymous TT HTML scraping
-    | no longer reliably distinguishes real vs fake handles).
+    | BB113 unblocks BB108: TikTokHandleChecker now uses the JSON
+    | user/detail endpoint and reliably distinguishes real vs fake
+    | handles. Default flipped to true so TikTok rejoins the audit
+    | data flow as an availability-check-only signal worth +10 in
+    | the Digital Presence pillar (no scrape, no penalty for absence).
+    | Set WIZARD_SHOW_TIKTOK=false in .env to hide the input again.
     */
-    'wizard_show_tiktok' => (bool) env('WIZARD_SHOW_TIKTOK', false),
+    'wizard_show_tiktok' => (bool) env('WIZARD_SHOW_TIKTOK', true),
 ];

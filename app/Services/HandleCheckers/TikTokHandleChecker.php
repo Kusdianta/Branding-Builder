@@ -11,23 +11,39 @@ use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
- * BB101 — TikTok username availability check via direct HTTP.
+ * BB113 — TikTok username availability check via JSON endpoint.
  *
- * Hits https://www.tiktok.com/@{username} with a realistic UA, then
- * parses og:title / og:image / SIGI_STATE JSON. TikTok's 404 page
- * returns a 200 with "Couldn't find this account" sentinel in the
- * HTML body — explicit substring detection covers it.
+ * BB101 → BB113 ROOT CAUSE FIX:
+ * The BB101 implementation parsed `og:title` from the public profile
+ * HTML. TikTok rotated their unauthenticated profile shell during
+ * Phase 12c.1 and the `og:title` meta tag now resolves identically
+ * for real and fake handles (mirrors the BB100 → BB107 Instagram
+ * regression). Effect: every TikTok check returned 'error' or
+ * 'not_found' regardless of whether the handle existed.
  *
- * Caching: 1 hour per username. Same rationale as InstagramHandleChecker.
+ * BB113 fix: switch to TikTok's `user/detail` JSON endpoint, which
+ * is what the desktop web app calls after the SPA shell loads:
  *
- * Per the Phase 12c.1 spec, TikTok is treated as a bonus signal, so
- * an "error" verdict here never blocks audit submission.
+ *   GET https://www.tiktok.com/api/user/detail/?uniqueId={username}
+ *
+ * Behaviour:
+ *   - real handle  → 200 OK + JSON `{ userInfo: { user: {...}, stats: {...} } }`
+ *   - fake handle  → 200 OK + JSON `{ statusCode: 10221 }` (no user payload)
+ *   - rate-limited → 429 / 5xx / CAPTCHA HTML / login wall → 'error'
+ *                    (NOT 'not_found' — avoids false negatives. Per
+ *                    BB113 spec, TikTok is bonus-only so 'error' never
+ *                    blocks audit submission).
+ *
+ * Endpoint is undocumented; RUN_LIVE_NETWORK_TESTS=true smoke surfaces
+ * any TikTok-side regression early. Caching: 1 hour per username,
+ * stored as toArray() shape to avoid the __PHP_Incomplete_Class
+ * regression that BB107.1 fixed for Instagram.
  */
 final class TikTokHandleChecker
 {
     private const CACHE_TTL_SECONDS = 3600;
     private const REQUEST_TIMEOUT_SECONDS = 8;
-    private const PROFILE_URL = 'https://www.tiktok.com/@%s';
+    private const USER_DETAIL_URL = 'https://www.tiktok.com/api/user/detail/?uniqueId=%s';
     private const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36';
 
     public function check(string $username): TikTokHandleResult
@@ -37,17 +53,24 @@ final class TikTokHandleChecker
             return TikTokHandleResult::error($username);
         }
 
-        return Cache::remember(
+        $payload = Cache::remember(
             "tt-handle:{$normalized}",
             self::CACHE_TTL_SECONDS,
-            fn () => $this->fetchAndParse($normalized),
+            fn () => $this->fetchAndParse($normalized)->toArray(),
         );
+
+        if (! is_array($payload)) {
+            Cache::forget("tt-handle:{$normalized}");
+            $payload = $this->fetchAndParse($normalized)->toArray();
+            Cache::put("tt-handle:{$normalized}", $payload, self::CACHE_TTL_SECONDS);
+        }
+
+        return TikTokHandleResult::fromArray($payload);
     }
 
     private function normalize(string $raw): ?string
     {
         $clean = ltrim(trim($raw), '@');
-        // TikTok allows 2–24 chars: letters, digits, underscore, period.
         if ($clean === '' || ! preg_match('/^[A-Za-z0-9._]{2,24}$/', $clean)) {
             return null;
         }
@@ -59,11 +82,12 @@ final class TikTokHandleChecker
         try {
             $response = Http::withUserAgent(self::USER_AGENT)
                 ->withHeaders([
-                    'Accept'          => 'text/html,application/xhtml+xml',
+                    'Accept'          => 'application/json, text/plain, */*',
                     'Accept-Language' => 'en-US,en;q=0.9',
+                    'Referer'         => 'https://www.tiktok.com/',
                 ])
                 ->timeout(self::REQUEST_TIMEOUT_SECONDS)
-                ->get(sprintf(self::PROFILE_URL, $username));
+                ->get(sprintf(self::USER_DETAIL_URL, $username));
         } catch (RequestException|Throwable $e) {
             Log::warning('TikTokHandleChecker transport error', [
                 'username' => $username,
@@ -77,90 +101,74 @@ final class TikTokHandleChecker
         }
 
         if (! $response->successful()) {
+            Log::info('TikTokHandleChecker non-2xx', [
+                'username' => $username,
+                'status'   => $response->status(),
+            ]);
             return TikTokHandleResult::error($username);
         }
 
-        $html = $response->body();
+        $contentType = strtolower($response->header('Content-Type') ?? '');
+        $body        = $response->body();
 
-        // TikTok's soft-404 sentinel.
-        if (
-            str_contains($html, "Couldn't find this account")
-            || str_contains($html, 'Page not available')
-        ) {
+        if (str_contains($contentType, 'text/html')) {
+            Log::info('TikTokHandleChecker HTML response (captcha/login wall)', [
+                'username' => $username,
+            ]);
+            return TikTokHandleResult::error($username);
+        }
+
+        $json = $response->json();
+        if (! is_array($json)) {
+            Log::info('TikTokHandleChecker unparseable body', [
+                'username' => $username,
+                'len'      => strlen($body),
+            ]);
+            return TikTokHandleResult::error($username);
+        }
+
+        // TikTok's not-found sentinel: statusCode 10221 (user_not_exist).
+        // Any non-zero statusCode means "no profile" or "blocked".
+        $statusCode = $json['statusCode'] ?? null;
+        if ($statusCode !== null && (int) $statusCode !== 0) {
             return TikTokHandleResult::notFound($username);
         }
 
-        $ogTitle = $this->extractMeta($html, 'og:title');
-        if ($ogTitle === null) {
-            // No og:title and no sentinel — probably a captcha wall or
-            // login redirect. Treat as transient error.
-            return TikTokHandleResult::error($username);
-        }
+        $user  = $json['userInfo']['user']  ?? null;
+        $stats = $json['userInfo']['stats'] ?? null;
 
-        $description = $this->extractMeta($html, 'og:description');
+        if (! is_array($user)) {
+            return TikTokHandleResult::notFound($username);
+        }
 
         return new TikTokHandleResult(
             username:      $username,
             status:        'found',
             exists:        true,
-            displayName:   $this->parseDisplayName($ogTitle, $username),
-            profilePicUrl: $this->extractMeta($html, 'og:image'),
-            followerCount: $this->parseFollowerCount($description),
+            displayName:   $this->stringOrNull($user['nickname'] ?? null),
+            profilePicUrl: $this->stringOrNull(
+                $user['avatarLarger'] ?? $user['avatarMedium'] ?? $user['avatarThumb'] ?? null,
+            ),
+            followerCount: $this->intOrNull(
+                is_array($stats) ? ($stats['followerCount'] ?? null) : null,
+            ),
             checkedAt:     now()->toIso8601String(),
         );
     }
 
-    private function extractMeta(string $html, string $property): ?string
+    private function stringOrNull(mixed $value): ?string
     {
-        $quoted = preg_quote($property, '/');
-        if (preg_match(
-            '/<meta\s+property=["\']' . $quoted . '["\']\s+content=["\']([^"\']+)["\']/i',
-            $html,
-            $m,
-        )) {
-            return html_entity_decode($m[1], ENT_QUOTES | ENT_HTML5);
-        }
-        if (preg_match(
-            '/<meta\s+content=["\']([^"\']+)["\']\s+property=["\']' . $quoted . '["\']/i',
-            $html,
-            $m,
-        )) {
-            return html_entity_decode($m[1], ENT_QUOTES | ENT_HTML5);
-        }
-        return null;
-    }
-
-    /** og:title is "Display Name (@username) | TikTok" or just "@username | TikTok". */
-    private function parseDisplayName(string $ogTitle, string $username): ?string
-    {
-        $stripped = preg_replace('/\s*\|\s*TikTok.*$/u', '', $ogTitle) ?? $ogTitle;
-        if (preg_match('/^(.+?)\s*\(@' . preg_quote($username, '/') . '\)\s*$/u', $stripped, $m)) {
-            $name = trim($m[1]);
-            return $name !== '' ? $name : null;
-        }
-        return null;
-    }
-
-    /**
-     * TikTok's og:description embeds counts at the start:
-     *   "5.4K Followers, 123 Following, 89 Likes. Watch the latest video..."
-     * Handle k/m/b suffixes since TikTok rounds large numbers.
-     */
-    private function parseFollowerCount(?string $description): ?int
-    {
-        if ($description === null) {
+        if ($value === null || $value === '') {
             return null;
         }
-        if (preg_match('/([\d.,]+)\s*([KMBkmb]?)\s+Followers/i', $description, $m)) {
-            $raw = (float) str_replace(',', '', $m[1]);
-            $multiplier = match (strtoupper($m[2] ?? '')) {
-                'K'     => 1_000,
-                'M'     => 1_000_000,
-                'B'     => 1_000_000_000,
-                default => 1,
-            };
-            return (int) round($raw * $multiplier);
+        return is_string($value) ? $value : (string) $value;
+    }
+
+    private function intOrNull(mixed $value): ?int
+    {
+        if ($value === null || $value === '') {
+            return null;
         }
-        return null;
+        return is_numeric($value) ? (int) $value : null;
     }
 }

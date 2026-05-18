@@ -36,6 +36,11 @@ new class extends Component {
     public string $brandName        = '';
     public string $city             = '';
     public string $serviceType      = 'kiloan';
+    // BB111 — secondary layanan multi-select. Variety count
+    // (primary + secondaries deduped) feeds the Kelengkapan Layanan
+    // sub-bucket in Brand Konsistensi.
+    /** @var list<string> */
+    public array $secondaryServiceTypes = [];
     public string $instagramUrl     = '';
     public string $websiteUrl       = '';
     public string $tiktokUrl        = '';
@@ -81,6 +86,12 @@ new class extends Component {
     // Phase 7-C BB15: Instagram audit data for dashboard rendering.
     public array   $instagramAudit       = [];
     public ?string $instagramAuditStatus = null;
+
+    // Phase 12c.2-rubric-alignment BB118 — surface wizard_version
+    // on the dashboard so per-row source attribution can degrade
+    // honestly for v1/v2 audits ("Sumber: tidak tersedia, audit
+    // pra-rubrik") vs v3 audits ("Sumber: ...real attribution").
+    public ?string $auditWizardVersion   = null;
 
     // Phase 8 BB29: GMaps reviews data for dashboard rendering.
     public array   $gmapsReviews         = [];
@@ -212,6 +223,11 @@ new class extends Component {
         // (where serviceType defaulted to a 'mixed' string) still
         // passes. New v2 audits use 'campuran' as the canonical slug.
         'serviceType'            => 'required|string|in:kiloan,self_service,satuan,express,premium,campuran,mixed',
+        // BB111 — secondary layanan multi-select. Each entry must be a
+        // valid service slug; deduplication against the primary slug
+        // happens at persistence time.
+        'secondaryServiceTypes'   => 'nullable|array',
+        'secondaryServiceTypes.*' => 'string|in:kiloan,self_service,satuan,express,premium,campuran',
         'instagramUrl'           => 'nullable|url|max:500',
         'websiteUrl'             => 'nullable|url|max:500',
         'tiktokUrl'              => 'nullable|url|max:500',
@@ -309,6 +325,7 @@ new class extends Component {
 
         $this->instagramAudit       = (array) ($audit->instagram_audit ?? []);
         $this->instagramAuditStatus = $audit->instagram_audit_status;
+        $this->auditWizardVersion   = $audit->wizard_version;
 
         // Phase 8 BB29: GMaps reviews data for the new "Ulasan
         // Pelanggan" dashboard section.
@@ -869,7 +886,11 @@ new class extends Component {
                 'place_raw'         => $this->placeRaw,
 
                 'notes'           => $this->notes !== null && trim($this->notes) !== '' ? trim($this->notes) : null,
-                'wizard_version'  => BrandAudit::WIZARD_V2,
+                // BB111/BB112 — stamp v3 so the dashboard knows the
+                // touchpoints JSON carries service_types + operational
+                // blocks and renders per-row source attribution per
+                // the BB118 rubric-alignment contract.
+                'wizard_version'  => BrandAudit::WIZARD_V3,
 
                 'status'          => BrandAudit::STATUS_PENDING,
                 'expires_at'      => now()->addDays(30),
@@ -921,6 +942,14 @@ new class extends Component {
         $whatsappE164 = $this->whatsappNumber ? '62' . $this->whatsappNumber : null;
         $whatsappUrl  = $whatsappE164 ? 'https://wa.me/' . $whatsappE164 : null;
 
+        // BB111 — derive service_types block. Secondaries are deduped
+        // against the primary so variety_count never double-counts.
+        $secondaries  = array_values(array_unique(array_filter(
+            $this->secondaryServiceTypes,
+            fn ($slug) => is_string($slug) && $slug !== '' && $slug !== $this->serviceType,
+        )));
+        $varietyCount = count(array_unique([$this->serviceType, ...$secondaries]));
+
         return [
             'gmaps_url'                => $gmapsUrl,
             'instagram_url'            => $instagramUrl,
@@ -932,6 +961,26 @@ new class extends Component {
             'outlet_photo_paths'       => [],
             'outlet_photo_outer_paths' => [],
             'outlet_photo_inner_paths' => [],
+
+            // BB111 — service-type variety. Consumed by Kelengkapan
+            // Layanan (Brand Konsistensi) and the +15 variety bonus in
+            // Brand Experience.
+            'service_types' => [
+                'primary'       => $this->serviceType,
+                'secondary'     => $secondaries,
+                'variety_count' => $varietyCount,
+            ],
+
+            // BB112 — operator-declared operational signals. Verified
+            // downstream against scraped review keywords + price-list
+            // detection. Each is a user-declared bool only; scoring
+            // attribution clearly tags Sumber as "deklarasi operator".
+            'operational' => [
+                'express_service' => (bool) $this->declEkspres,
+                'pickup_delivery' => (bool) $this->declAntarJemput,
+                'complaint_sop'   => (bool) $this->declSopKeluhan,
+                'price_list'      => (bool) $this->declPriceList,
+            ],
         ];
     }
 
@@ -2368,17 +2417,42 @@ new class extends Component {
                                                     </span>
                                                 </div>
                                             @else
-                                                <div class="flex justify-between items-center py-2">
+                                                @php
+                                                    // Phase 12c.2-rubric-alignment BB119 — X/Y format + tier badge.
+                                                    $scoreInt  = (int) $v;
+                                                    $tierLabel = is_array($bd['tier'] ?? null) ? null : ($bd['tier'] ?? null);
+                                                    if ($tierLabel === null && $cap > 0) {
+                                                        $tierLabel = AuditLabels::tierForRatio($scoreInt / max(1, $cap));
+                                                    }
+                                                    $tierVariant = AuditLabels::tierVariant($tierLabel);
+                                                @endphp
+                                                <div class="flex justify-between items-center py-2 gap-3">
                                                     <span style="font-size: 12px; color: var(--text-secondary);">{{ AuditLabels::subBucket($k) }}</span>
-                                                    <span style="font-size: 13px; font-weight: 500; color: var(--text-primary);">{{ $v }}</span>
+                                                    <span class="flex items-center gap-2" style="flex-shrink: 0;">
+                                                        <span style="font-size: 13px; font-weight: 600; color: var(--text-primary); white-space: nowrap;">
+                                                            {{ $scoreInt }}{{ $cap > 0 ? ' / ' . $cap : '' }} pt
+                                                        </span>
+                                                        @if ($tierLabel !== null && $tierLabel !== '')
+                                                            <span class="bb-tier-badge bb-tier-badge--{{ $tierVariant }}">{{ $tierLabel }}</span>
+                                                        @endif
+                                                    </span>
                                                 </div>
-                                                @if ($bd === null && $slug === 'brand-konsistensi')
-                                                    {{-- BB112: Konsistensi sub-buckets should always show
-                                                         their source attribution. When the breakdown is
-                                                         missing (e.g. visual analysis failed), surface
-                                                         honestly instead of silently dropping the line. --}}
+                                                @php
+                                                    // BB118 — every row gets a source line. When the
+                                                    // breakdown is absent we still surface the canonical
+                                                    // source from AuditLabels::subBucketSource (BB112).
+                                                    // For v1/v2 audits the canonical source is replaced
+                                                    // with the honest pre-rubric label.
+                                                    $rowSource = AuditLabels::subBucketSource($k);
+                                                    if ($rowSource === null) {
+                                                        $rowSource = isset($auditWizardVersion) && $auditWizardVersion !== BrandAudit::WIZARD_V3
+                                                            ? AuditLabels::preRubricSource($auditWizardVersion ?? null)
+                                                            : 'Sumber: tidak tersedia';
+                                                    }
+                                                @endphp
+                                                @if ($bd === null)
                                                     <p style="font-size: 11px; color: var(--text-tertiary); margin: 0 0 8px; line-height: 1.5;">
-                                                        {{ AuditLabels::subBucketSource($k) ?? 'Sumber: tidak tersedia' }}
+                                                        {{ $rowSource }}
                                                     </p>
                                                 @endif
                                             @endif
@@ -2510,6 +2584,41 @@ new class extends Component {
 
                                                     @if (count($limitations) > 0)
                                                         <p style="margin: 0; font-style: italic; color: var(--text-tertiary); font-size: 10px;">Keterbatasan: {{ implode('; ', $limitations) }}</p>
+                                                    @endif
+
+                                                    @php
+                                                        // Phase 12c.2-rubric-alignment BB120 — embed up to 3
+                                                        // matched review quotes inline so the operator can
+                                                        // verify the source. Looks for both the canonical
+                                                        // 'matched_reviews' (BB115 OwnerReplyRateScorer) and
+                                                        // legacy review-keyword evidence shapes from
+                                                        // RecallScorer / ExperiencePenaltyDetector.
+                                                        $matchedReviews = [];
+                                                        $evidenceBlock  = (array) ($bd['evidence'] ?? []);
+                                                        if (isset($evidenceBlock['matched_reviews']) && is_array($evidenceBlock['matched_reviews'])) {
+                                                            $matchedReviews = $evidenceBlock['matched_reviews'];
+                                                        } elseif (isset($evidenceBlock['sample_quotes']) && is_array($evidenceBlock['sample_quotes'])) {
+                                                            $matchedReviews = $evidenceBlock['sample_quotes'];
+                                                        }
+                                                        $matchedReviews = array_slice($matchedReviews, 0, 3);
+                                                    @endphp
+                                                    @if ($matchedReviews !== [])
+                                                        <details class="bb-review-quotes">
+                                                            <summary>{{ count($matchedReviews) }} ulasan jadi bukti, klik untuk lihat</summary>
+                                                            @foreach ($matchedReviews as $review)
+                                                                @php
+                                                                    $reviewText   = (string) ($review['text'] ?? $review['reply_text'] ?? $review['snippet'] ?? '');
+                                                                    $reviewerName = (string) ($review['reviewer_name'] ?? $review['author'] ?? 'Anonim');
+                                                                    $reviewRating = (int)    ($review['rating'] ?? $review['rating_value'] ?? 0);
+                                                                @endphp
+                                                                @if ($reviewText !== '')
+                                                                    <blockquote class="bb-review-quote">
+                                                                        "{{ \Illuminate\Support\Str::limit($reviewText, 220) }}"
+                                                                        <cite>— {{ $reviewerName }}@if ($reviewRating > 0), ★{{ $reviewRating }}/5 @endif</cite>
+                                                                    </blockquote>
+                                                                @endif
+                                                            @endforeach
+                                                        </details>
                                                     @endif
                                                 </div>
                                             @endif

@@ -222,4 +222,70 @@ final class AuditLabels
     {
         return self::PILLAR_COLOR[$slug] ?? '#888888';
     }
+
+    /**
+     * Phase 12c.2-rubric-alignment BB119 — tier label from
+     * score / cap ratio. Used when a scorer doesn't provide an
+     * explicit tier (legacy v2 sub-bucket entries).
+     */
+    public static function tierForRatio(float $ratio): string
+    {
+        return match (true) {
+            $ratio >= 0.95 => 'sempurna',
+            $ratio >= 0.80 => 'sangat baik',
+            $ratio >= 0.60 => 'baik',
+            $ratio >= 0.40 => 'cukup',
+            $ratio >= 0.01 => 'kurang',
+            default        => 'tidak ada data',
+        };
+    }
+
+    /**
+     * BB119 — tier label → CSS variant. Maps every PPT-rubric tier
+     * label (and the inferred tierForRatio labels) onto one of three
+     * color variants: good / warning / bad.
+     */
+    public const TIER_VARIANT = [
+        'sempurna'           => 'good',
+        'sangat baik'        => 'good',
+        'sangat aktif'       => 'good',
+        'sangat konsisten'   => 'good',
+        'tinggi'             => 'good',
+        'baik'               => 'good',
+        'aktif'              => 'good',
+        'cukup'              => 'warning',
+        'cukup konsisten'    => 'warning',
+        'sedang'             => 'warning',
+        'jarang'             => 'warning',
+        'kurang'             => 'bad',
+        'kurang konsisten'   => 'bad',
+        'rendah'             => 'bad',
+        'sangat kurang'      => 'bad',
+        'di bawah rata-rata' => 'bad',
+        'tidak aktif'        => 'bad',
+        'tidak ada data'     => 'bad',
+    ];
+
+    public static function tierVariant(?string $tier): string
+    {
+        if ($tier === null || $tier === '') {
+            return 'bad';
+        }
+        return self::TIER_VARIANT[mb_strtolower(trim($tier))] ?? 'warning';
+    }
+
+    /**
+     * BB118 — honest unavailability messages for the per-row
+     * "Sumber: tidak tersedia" replacement. Keyed by audit
+     * wizard_version so v1/v2 audits surface a clear "pre-rubric"
+     * label and v3 audits get a scope-specific failure reason.
+     */
+    public static function preRubricSource(?string $wizardVersion): string
+    {
+        return match ($wizardVersion) {
+            'v1'    => 'Sumber: tidak tersedia (audit v1, jalankan ulang untuk rubrik baru)',
+            'v2'    => 'Sumber: tidak tersedia (audit v2 pra-rubrik, jalankan ulang untuk skor lengkap)',
+            default => 'Sumber: tidak tersedia',
+        };
+    }
 }
