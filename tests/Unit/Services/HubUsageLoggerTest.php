@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Services;
 
+use App\Models\BrandAudit;
+use App\Models\User;
 use App\Services\HubUsageLogger;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ConnectException;
@@ -12,6 +14,7 @@ use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
 
@@ -20,8 +23,16 @@ use Tests\TestCase;
  */
 class HubUsageLoggerTest extends TestCase
 {
+    use RefreshDatabase;
+
     /** @var list<array{request: \Psr\Http\Message\RequestInterface, options: array<string,mixed>}> */
     private array $history = [];
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        HubUsageLogger::resetUserIdCache();
+    }
 
     /** @param list<Response|\Throwable> $responses */
     private function makeLogger(array $responses = [new Response(201, [], '{"id":"01x"}')]): HubUsageLogger
@@ -128,5 +139,113 @@ class HubUsageLoggerTest extends TestCase
         $logger = new HubUsageLogger(baseUrl: 'http://hub.test', apiKey: '');
         $logger->logClaude('claude-haiku-4-5', 'op', 1, 1);
         $this->assertTrue(true); // no exception
+    }
+
+    #[Test]
+    public function bb126_resolves_and_sends_user_id_from_audit_id(): void
+    {
+        // Build a real user + audit so the lookup hits the same SQLite
+        // schema spokes use in production. RefreshDatabase makes this
+        // cheap.
+        $user = User::factory()->create();
+        $audit = BrandAudit::create([
+            'session_token'   => bin2hex(random_bytes(16)),
+            'ip_address'      => '127.0.0.1',
+            'user_id'         => $user->id,
+            'credits_charged' => 1,
+            'status'          => BrandAudit::STATUS_PENDING,
+            'city'             => 'Jakarta',
+            'service_type'     => 'kiloan',
+            'touchpoints'      => [],
+            'expires_at'       => now()->addDays(30),
+            'brand_name'      => 'Test Laundry',
+            'wizard_version'  => BrandAudit::WIZARD_V3,
+        ]);
+
+        $logger = $this->makeLogger();
+        $logger->logClaude(
+            model: 'claude-sonnet-4-6',
+            operation: 'score_pillar_1',
+            inputTokens: 100,
+            outputTokens: 50,
+            auditId: $audit->id,
+        );
+
+        $body = json_decode((string) $this->history[0]['request']->getBody(), true);
+        $this->assertSame($user->id, $body['user_id']);
+        $this->assertSame($audit->id, $body['audit_id']);
+    }
+
+    #[Test]
+    public function bb126_sends_null_user_id_when_audit_missing(): void
+    {
+        $logger = $this->makeLogger();
+        $logger->logGoogle(
+            sku: 'place-details-essentials',
+            operation: 'place_details_fetch',
+            requestCount: 1,
+            auditId: '01nonexistent',
+        );
+
+        $body = json_decode((string) $this->history[0]['request']->getBody(), true);
+        $this->assertNull($body['user_id']);
+    }
+
+    #[Test]
+    public function bb126_omits_user_id_lookup_when_no_audit_id(): void
+    {
+        // Background sweep with no audit context should send null
+        // user_id without touching the DB.
+        $logger = $this->makeLogger();
+        $logger->logClaude(
+            model: 'claude-haiku-4-5',
+            operation: 'system_health_check',
+            inputTokens: 10,
+            outputTokens: 5,
+        );
+
+        $body = json_decode((string) $this->history[0]['request']->getBody(), true);
+        $this->assertNull($body['user_id']);
+        $this->assertNull($body['audit_id']);
+    }
+
+    #[Test]
+    public function bb126_caches_user_id_lookup_per_audit(): void
+    {
+        // Two calls for the same audit should result in one BrandAudit
+        // query, not two. We verify by hitting both endpoints and
+        // confirming the second call still has the right user_id even
+        // after the audit row is deleted between calls.
+        $user = User::factory()->create();
+        $audit = BrandAudit::create([
+            'session_token'   => bin2hex(random_bytes(16)),
+            'ip_address'      => '127.0.0.1',
+            'user_id'         => $user->id,
+            'credits_charged' => 1,
+            'status'          => BrandAudit::STATUS_PENDING,
+            'city'             => 'Jakarta',
+            'service_type'     => 'kiloan',
+            'touchpoints'      => [],
+            'expires_at'       => now()->addDays(30),
+            'brand_name'      => 'Cache Test',
+            'wizard_version'  => BrandAudit::WIZARD_V3,
+        ]);
+
+        $logger = $this->makeLogger([
+            new Response(201, [], '{"id":"01a"}'),
+            new Response(201, [], '{"id":"01b"}'),
+        ]);
+
+        $logger->logClaude('claude-sonnet-4-6', 'op1', 1, 1, auditId: $audit->id);
+
+        // Delete the audit — second call must still resolve from cache.
+        $audit->delete();
+
+        $logger->logClaude('claude-sonnet-4-6', 'op2', 1, 1, auditId: $audit->id);
+
+        $body1 = json_decode((string) $this->history[0]['request']->getBody(), true);
+        $body2 = json_decode((string) $this->history[1]['request']->getBody(), true);
+        $this->assertSame($user->id, $body1['user_id']);
+        $this->assertSame($user->id, $body2['user_id']);
     }
 }

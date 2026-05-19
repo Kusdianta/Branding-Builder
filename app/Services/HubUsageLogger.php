@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Models\BrandAudit;
 use GuzzleHttp\Client;
 use GuzzleHttp\ClientInterface;
 use Illuminate\Support\Facades\Log;
@@ -23,6 +24,12 @@ use Throwable;
  *   logGoogle()  — captures Places API request count + SKU
  *
  * Both take an optional $auditId so per-audit cost rollups are possible.
+ *
+ * BB126 — when $auditId is supplied, resolves the audit's owner to
+ * user_id and includes it in the POST body so the Hub can build the
+ * per-user spend rollup without ever querying the spoke DB. The lookup
+ * is request-scoped cached so a multi-call job (e.g. Score → Validate
+ * → GenerateInsights all sharing one audit) only hits BrandAudit once.
  */
 class HubUsageLogger
 {
@@ -31,6 +38,18 @@ class HubUsageLogger
 
     /** Identifies this spoke in the Hub's spoke column. */
     private const SPOKE = 'branding-builder';
+
+    /**
+     * BB126 — request-scoped audit_id → user_id cache. Same job hits the
+     * same audit dozens of times; a single BrandAudit lookup amortises.
+     *
+     * Static lifetime is fine because Laravel job workers boot a fresh
+     * process per job batch and the cache is cleared between requests
+     * in tests via {@see resetUserIdCache()}.
+     *
+     * @var array<string,?string>
+     */
+    private static array $userIdCache = [];
 
     private ClientInterface $http;
 
@@ -111,6 +130,16 @@ class HubUsageLogger
             return;
         }
 
+        // BB126 — backfill user_id from audit_id so the Hub doesn't have
+        // to query branding-builder DB. Only kicks in when caller didn't
+        // already supply user_id explicitly.
+        if (! array_key_exists('user_id', $body) || $body['user_id'] === null) {
+            $auditId = $body['audit_id'] ?? null;
+            $body['user_id'] = is_string($auditId) && $auditId !== ''
+                ? $this->resolveUserId($auditId)
+                : null;
+        }
+
         try {
             $this->http->request('POST', 'api/internal/usage-logs', [
                 'headers' => [
@@ -128,5 +157,35 @@ class HubUsageLogger
                 'error'     => $e->getMessage(),
             ]);
         }
+    }
+
+    /**
+     * BB126 — resolve audit owner. Cached for the request lifetime so a
+     * many-call job amortises to one BrandAudit SELECT. DB failures
+     * (e.g. SQLite locked) fall through as null — usage logging must
+     * never break the audit pipeline.
+     */
+    private function resolveUserId(string $auditId): ?string
+    {
+        if (array_key_exists($auditId, self::$userIdCache)) {
+            return self::$userIdCache[$auditId];
+        }
+
+        try {
+            /** @var ?string $userId */
+            $userId = BrandAudit::query()->whereKey($auditId)->value('user_id');
+        } catch (Throwable $e) {
+            $userId = null;
+        }
+
+        return self::$userIdCache[$auditId] = $userId;
+    }
+
+    /**
+     * Test seam: reset the request-scoped audit→user cache.
+     */
+    public static function resetUserIdCache(): void
+    {
+        self::$userIdCache = [];
     }
 }

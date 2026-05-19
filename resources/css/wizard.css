@@ -507,7 +507,10 @@
 #places-autocomplete-container .pac-target-input,
 #places-autocomplete-container [role="combobox"] {
     width: 100% !important;
-    padding: 13px 16px !important;
+    /* BB127 — vendor injects an absolutely-positioned magnifying-glass
+       SVG at left:14px (~16px wide). 44px left padding clears the icon
+       + 12px gap before the caret. Right side keeps the original 16px. */
+    padding: 13px 16px 13px 44px !important;
     font-size: 15px !important;
     border: 1px solid var(--border-default) !important;
     border-radius: var(--radius-md) !important;
@@ -522,6 +525,35 @@
     outline: none !important;
     border-color: var(--chimera-500) !important;
     box-shadow: 0 0 0 3px rgba(61, 137, 72, 0.15) !important;
+}
+
+/* BB125 — dropdown suggestion list must read against the surface
+   token set so dark-preferred users don't get a solid white block. The
+   library renders its list inside #places-autocomplete-container; its
+   default styles use solid white which clashes with --surface-card on
+   light theme too once the canvas tone shifts. */
+#places-autocomplete-container ul,
+#places-autocomplete-container [role="listbox"],
+#places-autocomplete-container .pac-container {
+    background: var(--surface-card) !important;
+    border: 1px solid var(--border-default) !important;
+    border-radius: var(--radius-md) !important;
+    box-shadow: var(--shadow-popover) !important;
+    color: var(--text-primary) !important;
+}
+#places-autocomplete-container li,
+#places-autocomplete-container [role="option"],
+#places-autocomplete-container .pac-item {
+    color: var(--text-primary) !important;
+    background: transparent !important;
+}
+#places-autocomplete-container li:hover,
+#places-autocomplete-container [role="option"]:hover,
+#places-autocomplete-container [role="option"][aria-selected="true"],
+#places-autocomplete-container .pac-item:hover,
+#places-autocomplete-container .pac-item-selected {
+    background: var(--surface-muted) !important;
+    color: var(--text-primary) !important;
 }
 
 /* ─── BB106 — Step 3 manual verification (Cek dulu) ─────────────── */
