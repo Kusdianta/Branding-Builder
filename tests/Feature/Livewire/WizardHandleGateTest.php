@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace Tests\Feature\Livewire;
 
 use App\Models\User;
+use App\Services\HubCredentialsClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Livewire\Livewire;
+use Mockery;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
 
@@ -43,6 +45,13 @@ class WizardHandleGateTest extends TestCase
             'services'   => [],
             'checked_at' => now()->toIso8601String(),
         ]);
+
+        // BB131 — the IG checker is now worker-first. Default the Hub to
+        // "no healthy credential" so checkInstagram() falls back to the
+        // anonymous web_profile_info probe these tests fake.
+        $hub = Mockery::mock(HubCredentialsClient::class);
+        $hub->shouldReceive('getNextCredential')->andReturn(null);
+        $this->app->instance(HubCredentialsClient::class, $hub);
     }
 
     private function authedComponent()
@@ -303,10 +312,14 @@ class WizardHandleGateTest extends TestCase
     #[Test]
     public function block_reason_surfaces_worker_error_copy(): void
     {
+        // BB135 — copy updated: the IG checker calls instagram.com directly,
+        // not the worker, so the prior "Worker tidak bisa cek" copy was
+        // misleading. Reworded to describe the actual rate-limit behaviour
+        // and to suggest the operator can clear the field to proceed.
         $this->authedComponent()
             ->set('instagramUsername', 'nasa')
             ->set('igCheckStatus', 'error')
-            ->assertSet('step3BlockReason', 'Worker tidak bisa cek sekarang. Pastikan worker aktif lalu coba lagi.');
+            ->assertSet('step3BlockReason', 'Cek Instagram sedang dibatasi. Coba lagi sebentar — kalau masih gagal, kosongkan field-nya untuk lanjut.');
     }
 
     #[Test]

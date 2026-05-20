@@ -4,9 +4,14 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Http;
 
+use App\Services\HubCredentialsClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Mockery;
+use Nema\WorkerClient\DTO\InstagramHandleCheckResult;
+use Nema\WorkerClient\Exceptions\ProfileAuditException;
+use Nema\WorkerClient\NemaWorkerClient;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
 
@@ -38,9 +43,116 @@ class HandleCheckTest extends TestCase
     {
         parent::setUp();
         Cache::flush();
+
+        // BB131 — the IG checker is now worker-first. Default the Hub to
+        // "no healthy credential" so the existing web_profile_info cases
+        // below exercise the anonymous FALLBACK path their Http::fake
+        // mocks target. The worker-path cases re-bind the Hub + worker.
+        $this->bindHub(null);
     }
 
-    // ─── Instagram (web_profile_info) ────────────────────────────────
+    /** Bind a HubCredentialsClient whose getNextCredential returns $credential. */
+    private function bindHub(?array $credential): void
+    {
+        $hub = Mockery::mock(HubCredentialsClient::class);
+        $hub->shouldReceive('getNextCredential')->andReturn($credential);
+        $this->app->instance(HubCredentialsClient::class, $hub);
+    }
+
+    /** @return array{id:string,session_cookies:list<array<string,string>>} */
+    private function fakeCredential(): array
+    {
+        return [
+            'id'              => '01krcredentialulid000000000',
+            'platform'        => 'instagram',
+            'username'        => 'nairs.vfx',
+            'session_cookies' => [['name' => 'sessionid', 'value' => 'x']],
+        ];
+    }
+
+    // ─── Instagram via worker (BB131 — primary path) ─────────────────
+
+    #[Test]
+    public function instagram_found_via_worker(): void
+    {
+        Http::fake(); // anonymous path must NOT be touched
+        $this->bindHub($this->fakeCredential());
+
+        $worker = Mockery::mock(NemaWorkerClient::class);
+        $worker->shouldReceive('checkInstagramHandle')
+            ->once()
+            ->andReturn(InstagramHandleCheckResult::fromArray([
+                'status'         => 'found',
+                'username'       => 'ionlaundry',
+                'full_name'      => 'ION LAUNDRY',
+                'follower_count' => 4135,
+                'is_business'    => true,
+                'is_private'     => false,
+            ]));
+        $this->app->instance(NemaWorkerClient::class, $worker);
+
+        $response = $this->postJson('/check-handle/instagram', ['username' => 'ionlaundry']);
+
+        $response->assertOk()->assertJson([
+            'exists'         => true,
+            'status'         => 'found',
+            'display_name'   => 'ION LAUNDRY',
+            'follower_count' => 4135,
+            'is_business'    => true,
+        ]);
+        Http::assertNothingSent();
+    }
+
+    #[Test]
+    public function instagram_not_found_via_worker(): void
+    {
+        Http::fake();
+        $this->bindHub($this->fakeCredential());
+
+        $worker = Mockery::mock(NemaWorkerClient::class);
+        $worker->shouldReceive('checkInstagramHandle')
+            ->once()
+            ->andReturn(InstagramHandleCheckResult::fromArray([
+                'status'   => 'not_found',
+                'username' => 'zzz_not_a_real_handle',
+            ]));
+        $this->app->instance(NemaWorkerClient::class, $worker);
+
+        $response = $this->postJson('/check-handle/instagram', ['username' => 'zzz_not_a_real_handle']);
+
+        $response->assertOk()->assertJson(['exists' => false, 'status' => 'not_found']);
+        Http::assertNothingSent();
+    }
+
+    #[Test]
+    public function instagram_worker_error_falls_back_to_anonymous_probe(): void
+    {
+        // Worker raises (e.g. stale cookies) → checker falls back to the
+        // anonymous probe, which here is rate-limited (429) → 'error'.
+        $this->bindHub($this->fakeCredential());
+
+        $worker = Mockery::mock(NemaWorkerClient::class);
+        $worker->shouldReceive('checkInstagramHandle')
+            ->once()
+            ->andThrow(new ProfileAuditException(
+                errorCode: 'login_wall_hit',
+                httpStatus: 400,
+                detail: 'stale cookies',
+                retryAfterSeconds: null,
+            ));
+        $this->app->instance(NemaWorkerClient::class, $worker);
+
+        Http::fake([
+            'instagram.com/api/v1/users/web_profile_info*' => Http::response('throttled', 429),
+        ]);
+
+        $response = $this->postJson('/check-handle/instagram', ['username' => 'somehandle']);
+
+        $response->assertOk()->assertJson(['exists' => false, 'status' => 'error']);
+        Http::assertSentCount(1); // fallback probe was attempted
+    }
+
+    // ─── Instagram anonymous fallback (web_profile_info) ─────────────
 
     #[Test]
     public function instagram_found_parses_web_profile_info_json(): void
