@@ -17,6 +17,13 @@ Route::middleware('auth')
     ->get('/api/health/platform', [HealthController::class, 'platform'])
     ->name('api.health.platform');
 
+// Same payload, guarded by the shared worker key instead of a web session,
+// so the Hub "Cek Sistem" can probe this spoke's queue health
+// server-to-server (the Hub never queries spoke DBs directly).
+Route::middleware(\App\Http\Middleware\VerifySharedHealthToken::class)
+    ->get('/api/internal/health/platform', [HealthController::class, 'platform'])
+    ->name('api.internal.health.platform');
+
 Volt::route('/', 'brand-audit-wizard')->name('home');
 
 // Phase 12c.1 BB100/BB101 — wizard Step 3 handle availability checks.
