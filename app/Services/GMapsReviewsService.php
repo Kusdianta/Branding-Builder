@@ -111,6 +111,10 @@ class GMapsReviewsService
                     $gmapsUrl,
                     $sessionCookies,
                     'audit-' . $audit->id,
+                    // BB130 — scrape the full review corpus (hard-capped
+                    // at 500 in the worker) so owner-reply rate reflects
+                    // all reviews, not a 30-review sample.
+                    scrapeCap: 500,
                 );
             } catch (GMapsReviewsException $e) {
                 $resolution = $this->handleScrapeException(

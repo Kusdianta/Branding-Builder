@@ -92,7 +92,13 @@ class ScorePillarsJob implements ShouldQueue
 
         // ── Inputs from gather phase (no inline fetches) ─────────────
         $placesApi  = $evidenceMapper->placesApi($audit);
-        $fullReviews = $this->normalizeReviewsForScoring($evidenceMapper->fullReviews($audit));
+        // BB130 — keep the RAW GMaps rows (owner_reply + author +
+        // rating_value intact) for owner-reply scoring. normalizeReviewsForScoring
+        // reshapes to {text, rating} for the keyword/sentiment corpus and
+        // would otherwise strip owner_reply before manajemen_ulasan runs,
+        // forcing reply rate to 0% even when the scrape captured replies.
+        $rawReviews  = $evidenceMapper->fullReviews($audit);
+        $fullReviews = $this->normalizeReviewsForScoring($rawReviews);
         $websiteData = $this->fetchWebsite($websiteUrl); // not yet in evidence layer
         $presence = (new TouchpointPresenceDetector())->detect([
             'instagram_url'            => $instagramUrl,
@@ -163,6 +169,7 @@ class ScorePillarsJob implements ShouldQueue
                 $touchpoints,
                 $placesApi,
                 $fullReviews,
+                $rawReviews,
                 $instagramActivityScorer,
                 $websiteLivenessScorer,
                 $ownerReplyRateScorer,
@@ -383,7 +390,8 @@ class ScorePillarsJob implements ShouldQueue
      * @param array<string,mixed> $evidence
      * @param array<string,mixed> $touchpoints
      * @param array<string,mixed> $placesApi
-     * @param list<array<string,mixed>> $fullReviews
+     * @param list<array{text: string, rating: float}> $fullReviews  normalized corpus (keyword/sentiment)
+     * @param list<array<string,mixed>> $rawReviews  raw rows with owner_reply (owner-reply scoring)
      * @return array{0: array<string,array<string,mixed>>, 1: array<string,mixed>}
      */
     private function enrichInputsForV3(
@@ -393,6 +401,7 @@ class ScorePillarsJob implements ShouldQueue
         array $touchpoints,
         array $placesApi,
         array $fullReviews,
+        array $rawReviews,
         InstagramActivityScorer $igScorer,
         WebsiteLivenessScorer $webScorer,
         OwnerReplyRateScorer $replyScorer,
@@ -411,7 +420,9 @@ class ScorePillarsJob implements ShouldQueue
         $webResult = $webScorer->check(is_string($touchpoints['website_url'] ?? null) ? $touchpoints['website_url'] : null);
 
         // Owner reply rate — deterministic on already-scraped reviews.
-        $reviewArray = $this->reviewsForOwnerReply($fullReviews);
+        // BB130 — read from the RAW rows (owner_reply intact), NOT the
+        // {text, rating}-normalized $fullReviews which drops owner_reply.
+        $reviewArray = $this->reviewsForOwnerReply($rawReviews);
         $ownerReply = $replyScorer->score($reviewArray, $hasSopDeclared);
         $replyRate  = (float) (($ownerReply['evidence']['reply_rate_pct'] ?? 0.0) / 100.0);
 

@@ -37,8 +37,13 @@ class FetchGMapsReviewsJob implements ShouldQueue
 {
     use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    /** GMaps scrape can take 30-90s. Mirrors ScorePillarsJob's old budget. */
-    public int $timeout = 180;
+    /**
+     * BB130 — full-corpus scrape (up to 500 reviews) can take 3-5 min.
+     * Raised from 180s so the queue worker doesn't kill the job before
+     * the worker returns. Pairs with the 600s client HTTP timeout in
+     * NemaWorkerClient::scrapeGMapsReviews.
+     */
+    public int $timeout = 600;
 
     public function __construct(public readonly string $auditId) {}
 
