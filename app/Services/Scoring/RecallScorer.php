@@ -140,11 +140,55 @@ final class RecallScorer
         // V3 caps at 100 internally — PPT rubric is exact.
         $total = max(0, min(100, array_sum($subBuckets)));
 
+        // Phase 12c.4 FIX F — per-sub-bucket "why not full" reasoning.
+        $replyPct = (int) round($replyRate * 100);
+        $kualitasInputs = $kualitasBreakdown['raw_inputs'] ?? [];
+        $hitRate = (float) ($kualitasInputs['hit_rate_pct'] ?? 0);
+        $avgRating = $kualitasInputs['avg_rating'] ?? null;
+        $subBucketReasoning = [
+            'rating_tier'             => $ratingScore >= 35
+                ? ''
+                : sprintf(
+                    'Rating Google Maps %s. Skor penuh (35 pt) aktif di rating ≥ 4,8; tier saat ini menambah %d pt.',
+                    $rating > 0 ? number_format($rating, 1, ',', '.') : 'belum tersedia',
+                    $ratingScore,
+                ),
+            'review_count_tier'       => $countScore >= 25
+                ? ''
+                : sprintf(
+                    'Jumlah ulasan: %d. Tier berikutnya aktif di ≥ %d ulasan.',
+                    $count,
+                    match (true) {
+                        $count < 11   => 11,
+                        $count < 50   => 50,
+                        $count < 100  => 100,
+                        $count < 200  => 200,
+                        default       => 500,
+                    },
+                ),
+            'kualitas_ulasan_positif' => $kualitasScore >= 20
+                ? ''
+                : sprintf(
+                    'Kata kunci positif terdeteksi di %s%% ulasan%s. Skor naik saat ulasan mengandung kata "harum", "bersih", "tepat waktu", atau "ramah" lebih sering.',
+                    number_format($hitRate, 1, ',', '.'),
+                    $avgRating !== null ? sprintf(', rata-rata rating %s', number_format((float) $avgRating, 2, ',', '.')) : '',
+                ),
+            'manajemen_ulasan'        => $manajemenScore >= 20
+                ? ''
+                : ($manajemenBreakdown['unavailable_reason']
+                    ?? sprintf(
+                        'Tingkat balas ulasan saat ini %d%%%s. Skor penuh (20 pt) aktif saat ≥ 95%% ulasan dibalas pemilik.',
+                        $replyPct,
+                        $hasSopDeclared ? ' (SOP keluhan sudah dideklarasikan — +5 bonus akan masuk saat reply rate ≥ 10%)' : '',
+                    )),
+        ];
+
         $breakdown = [
             'rating_tier'             => $this->ratingBreakdown($rating, $ratingScore, /*v3*/ true),
             'review_count_tier'       => $this->countBreakdown($count, $countScore, /*v3*/ true),
             'kualitas_ulasan_positif' => $kualitasBreakdown,
             'manajemen_ulasan'        => $manajemenBreakdown,
+            'sub_bucket_reasoning'    => $subBucketReasoning,
         ];
 
         return new PillarScore(
@@ -383,36 +427,86 @@ final class RecallScorer
     }
 
     /**
-     * V3 manajemen_ulasan. Cap 20. Reads OwnerReplyRateScorer evidence
-     * already attached to inputs by ScorePillarsJob; falls back to the
-     * raw reply_rate + sop_declared bools when evidence is absent.
+     * V3 manajemen_ulasan. Cap 20.
+     *
+     * Phase 12c.4 FIX B (round 3) — PPT-spec qualitative tiers replace
+     * the 3-band percentage table. Three rows only:
+     *
+     *   Balas semua ulasan    → 20 pt  (reply rate ≥ 95%)
+     *   Kadang membalas       → 10 pt  (reply rate ≥ 10%)
+     *   Tidak pernah membalas → 0 pt   (reply rate <  10%)
+     *
+     *   + 5 bonus jika SOP keluhan ada AND tier != "tidak"
+     *
+     * The earlier "50% threshold" tier disagreed with the operator-
+     * facing copy ("kadang membalas") because 50% is closer to "half"
+     * than "occasional" — operators interpreted the band as "you only
+     * reply to fancy reviews," not "you reply sometimes." The 10%
+     * threshold matches the PPT spec verbatim.
+     *
+     * Empty corpus (no scraped reviews yet): returns score=null with
+     * unavailable_reason so the view can render "Data belum tersedia"
+     * instead of defaulting to 0. ScorePillarsJob converts null → 0
+     * for the persisted sub-bucket while preserving the breakdown
+     * note.
      *
      * @param array<string,mixed> $evidence
      * @return array{0:int,1:array<string,mixed>}
      */
     private function manajemenUlasan(float $replyRate, bool $hasSopDeclared, array $evidence): array
     {
-        $base = match (true) {
-            $replyRate >= 0.95 => 20,
-            $replyRate >= 0.50 => 10,
-            default            => 0,
-        };
-        $bonus = ($hasSopDeclared && $replyRate >= 0.50) ? 5 : 0;
-        $score = (int) min(20, $base + $bonus);
-
-        $tier = match (true) {
-            $score >= 20 => 'sempurna',
-            $score >= 10 => 'cukup',
-            default      => 'kurang',
-        };
-
         $total = isset($evidence['total_reviews']) ? (int) $evidence['total_reviews'] : null;
         $replied = isset($evidence['replied_reviews']) ? (int) $evidence['replied_reviews'] : null;
+
+        // Empty-corpus path — surface "data not yet available" instead
+        // of awarding a misleading 0 from a zero-divisor reply_rate.
+        if ($total === 0) {
+            return [0, [
+                'score'      => 0,
+                'cap'        => 20,
+                'tier'       => 'data belum tersedia',
+                'raw_inputs' => [
+                    'reply_rate_pct'    => null,
+                    'total_reviews'     => 0,
+                    'replied_reviews'   => 0,
+                    'sop_declared_bonus'=> false,
+                    'sample_source'     => 'gmaps_owner_reply_scrape',
+                ],
+                'formula'            => 'qualitative_tier',
+                'unavailable_reason' => 'Data belum tersedia — akan diperbarui setelah scraping selesai.',
+                'tier_table'         => [
+                    ['label' => 'Balas semua ulasan',    'points' => 20, 'matched' => false],
+                    ['label' => 'Kadang membalas',       'points' => 10, 'matched' => false],
+                    ['label' => 'Tidak pernah membalas', 'points' => 0,  'matched' => false],
+                ],
+                'explanation_id' => 'manajemen_ulasan_v3',
+            ]];
+        }
+
+        $tierKey = match (true) {
+            $replyRate >= 0.95 => 'semua',
+            $replyRate >= 0.10 => 'kadang',
+            default            => 'tidak',
+        };
+        $base = match ($tierKey) {
+            'semua'  => 20,
+            'kadang' => 10,
+            default  => 0,
+        };
+        $bonus = ($hasSopDeclared && $tierKey !== 'tidak') ? 5 : 0;
+        $score = (int) min(20, $base + $bonus);
+
+        $tierLabel = match ($tierKey) {
+            'semua'  => 'Balas semua ulasan',
+            'kadang' => 'Kadang membalas',
+            default  => 'Tidak pernah membalas',
+        };
 
         return [$score, [
             'score'      => $score,
             'cap'        => 20,
-            'tier'       => $tier,
+            'tier'       => $tierLabel,
+            'tier_key'   => $tierKey,
             'raw_inputs' => [
                 'reply_rate_pct'    => round($replyRate * 100, 1),
                 'total_reviews'     => $total,
@@ -420,13 +514,17 @@ final class RecallScorer
                 'sop_declared_bonus'=> $bonus > 0,
                 'sample_source'     => 'gmaps_owner_reply_scrape',
             ],
-            'formula'           => 'deterministic_threshold',
-            'matched_replies'   => $evidence['matched_replies'] ?? [],
-            'tier_table' => [
-                ['range' => '≥95% balas',          'points' => 20, 'matched' => $replyRate >= 0.95],
-                ['range' => '50-94% balas',        'points' => 10, 'matched' => $replyRate >= 0.50 && $replyRate < 0.95],
-                ['range' => '<50% balas',          'points' => 0,  'matched' => $replyRate < 0.50],
-                ['range' => '+5 bonus SOP+balas',  'points' => 5,  'matched' => $bonus > 0],
+            'formula'         => 'qualitative_tier',
+            'matched_replies' => $evidence['matched_replies'] ?? [],
+            'tier_table'      => [
+                ['label' => 'Balas semua ulasan',    'points' => 20, 'matched' => $tierKey === 'semua'],
+                ['label' => 'Kadang membalas',       'points' => 10, 'matched' => $tierKey === 'kadang'],
+                ['label' => 'Tidak pernah membalas', 'points' => 0,  'matched' => $tierKey === 'tidak'],
+            ],
+            'sop_bonus' => [
+                'awarded'  => $bonus > 0,
+                'points'   => 5,
+                'condition'=> 'SOP keluhan dideklarasikan DAN ada balasan ke ulasan',
             ],
             'explanation_id' => 'manajemen_ulasan_v3',
         ]];

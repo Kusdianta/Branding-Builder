@@ -208,6 +208,15 @@ class ExperienceScorer
         $expressDeclared = (bool) ($touchpointsOp['express_service']  ?? false);
         $pickupDeclared  = (bool) ($touchpointsOp['pickup_delivery']  ?? false);
         $sopDeclared     = (bool) ($touchpointsOp['complaint_sop']    ?? false);
+        // BB139 → Phase 12c.4 FIX 2 — operator-declared price-list
+        // signal (BB137 wizard checkbox). Treated as Tier 1 evidence:
+        // a confirmed operator declaration unlocks the full +10
+        // regardless of whether the AI auto-detector also fired. The
+        // earlier "partial +6 for declaration alone" path was demoted
+        // in Phase 12c.4 because the operator checkbox is now the
+        // canonical source for price transparency — the AI detector
+        // remains a verification path, not the primary signal.
+        $priceDeclared = (bool) ($touchpointsOp['price_list']         ?? false);
 
         $base       = self::BASE_SCORE;
         $express    = $expressDeclared ? 10 : 0;
@@ -220,7 +229,10 @@ class ExperienceScorer
             $sopDeclared                       => 8,
             default                            => 0,
         };
-        $price = $priceDetected ? 10 : 0;
+        $price = match (true) {
+            $priceDetected || $priceDeclared => 10,  // Tier 1 (declared) or Tier 2 (detected): full bonus
+            default                          => 0,
+        };
 
         $subBucketScores = [
             'base'                  => $base,
@@ -251,9 +263,11 @@ class ExperienceScorer
                 8       => 'SOP keluhan dideklarasikan, tetapi tingkat balasan pemilik di Google Maps < 50% — bonus parsial.',
                 default => 'SOP keluhan tidak dideklarasikan operator.',
             },
-            'bonus_price_list'      => $price > 0
-                ? 'Daftar harga terdeteksi via ' . (string) ($priceDetection['method'] ?? 'tidak diketahui') . '.'
-                : 'Tidak ada daftar harga publik terdeteksi.',
+            'bonus_price_list'      => match (true) {
+                $priceDetected => 'Daftar harga terdeteksi via ' . (string) ($priceDetection['method'] ?? 'tidak diketahui') . '.',
+                $priceDeclared => 'Operator menyatakan daftar harga dipublikasikan (Tier 1 evidence) — bonus penuh.',
+                default        => 'Tidak ada daftar harga publik terdeteksi maupun dideklarasikan.',
+            },
             'penalty_keterlambatan'  => 'Penalti diaplikasikan setelah pillar score di-render (lihat ExperiencePenaltyDetector).',
             'penalty_pakaian_hilang' => 'Penalti diaplikasikan setelah pillar score di-render (lihat ExperiencePenaltyDetector).',
             'penalty_no_response_wa' => 'Penalti diaplikasikan setelah pillar score di-render (lihat ExperiencePenaltyDetector).',
@@ -270,9 +284,11 @@ class ExperienceScorer
                     ['source' => 'wizard_step_3.operational.complaint_sop', 'snippet' => 'Operator menyatakan SOP keluhan ada.', 'verified' => $sop === 15],
                 ]
                 : [],
-            'bonus_price_list'      => $price > 0
-                ? [['source' => 'audit_evidence.price_list_detection', 'snippet' => 'Daftar harga terdeteksi (' . (string) ($priceDetection['method'] ?? '') . ').', 'verified' => true]]
-                : [],
+            'bonus_price_list'      => match (true) {
+                $priceDetected => [['source' => 'audit_evidence.price_list_detection', 'snippet' => 'Daftar harga terdeteksi (' . (string) ($priceDetection['method'] ?? '') . ').', 'verified' => true]],
+                $priceDeclared => [['source' => 'wizard_step_3.operational.price_list', 'snippet' => 'Operator menyatakan daftar harga dipublikasikan (Tier 1 evidence).', 'verified' => true]],
+                default        => [],
+            },
         ];
 
         $evidenceItems = $this->renderEvidenceItems($sourcesTable);

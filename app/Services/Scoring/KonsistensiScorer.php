@@ -92,6 +92,13 @@ class KonsistensiScorer
         $varietyCount = (int) ($context['variety_count'] ?? 1);
         $priceList    = (array) ($evidence['price_list_detection'] ?? []);
         $priceDetected= (bool) ($priceList['detected'] ?? false);
+        // Phase 12c.4 FIX 2 — Tier 1 user-declared signal from the
+        // BB137 wizard checkbox. When the operator confirms a public
+        // price list, that is treated as full evidence (10/10) — the
+        // user-facing checkbox is a Tier 1 source per the rubric and
+        // takes priority over AI auto-detection.
+        $touchpointsOp = (array) ($context['touchpoints_operational'] ?? []);
+        $priceDeclared = (bool) ($touchpointsOp['price_list'] ?? false);
 
         // Sub-bucket 1: kehadiran_digital (cap 40). Count of present
         // touchpoints across IG, website, GMaps, WhatsApp, TikTok.
@@ -109,8 +116,9 @@ class KonsistensiScorer
         [$kelengkapanScore, $kelengkapanBreakdown] = $this->scoreKelengkapanLayanan($varietyCount);
 
         // Sub-bucket 4: transparansi_harga (cap 10). PriceListDetector
-        // detected flag with source attribution by method.
-        [$transparansiScore, $transparansiBreakdown] = $this->scoreTransparansiHarga($priceList);
+        // detected flag (Tier 2) OR operator-declared checkbox (Tier
+        // 1) — declaration alone qualifies for full 10 pts.
+        [$transparansiScore, $transparansiBreakdown] = $this->scoreTransparansiHarga($priceList, $priceDeclared);
 
         $subBuckets = [
             'kehadiran_digital'   => $kehadiranScore,
@@ -120,10 +128,28 @@ class KonsistensiScorer
         ];
         $total = max(0, min(100, array_sum($subBuckets)));
 
+        // Phase 12c.4 FIX F — per-sub-bucket "why not full" reasoning
+        // so the dashboard can always explain a less-than-cap score.
+        // Visual reasoning comes from the vision LLM; the other three
+        // are deterministic so we compose a one-liner from the inputs.
+        $touchpointsPresent = (int) ($kehadiranBreakdown['raw_inputs']['count'] ?? 0);
+        $subBucketReasoning = [
+            'kehadiran_digital'   => $kehadiranScore >= 40
+                ? ''
+                : "Hanya {$touchpointsPresent} dari 5 touchpoint (Instagram, Website, Google Maps, WhatsApp, TikTok) yang terisi. Setiap touchpoint tambahan menambah 8 pt.",
+            'kelengkapan_layanan' => $kelengkapanScore >= 15
+                ? ''
+                : "Variasi layanan yang dicatat operator: {$varietyCount}. Skor penuh aktif saat operator mencatat ≥ 4 variasi (mis. kiloan + satuan + cuci sepatu + dry cleaning).",
+            'transparansi_harga'  => $transparansiScore >= 10
+                ? ''
+                : 'Operator belum mencentang "Daftar harga dipublikasikan" di wizard Step 3. Centang ketika daftar harga sudah ditampilkan di IG, foto outlet, atau website.',
+        ];
+
         $breakdown = [
             'analysis_path'        => 'v3_ppt_rubric',
             'data_source'          => $this->v3DataSources($evidence, $context, $priceDetected),
             'sub_bucket_scores'    => $subBuckets,
+            'sub_bucket_reasoning' => $subBucketReasoning,
             'kehadiran_digital'    => $kehadiranBreakdown,
             'konsistensi_visual'   => $visualBreakdown,
             'kelengkapan_layanan'  => $kelengkapanBreakdown,
@@ -386,44 +412,43 @@ class KonsistensiScorer
     }
 
     /**
-     * V3 sub-bucket — transparansi_harga (cap 10). Reads
-     * PriceListDetector evidence. Source attribution adapts by
-     * detection method (caption-only / vision / combined).
+     * V3 sub-bucket — transparansi_harga (cap 10).
      *
-     * @param array<string,mixed> $priceList
+     * Phase 12c.4 FIX A (round 3) — Single source of truth: the
+     * operator's wizard checkbox. AI auto-detection (PriceListDetector)
+     * is no longer consulted — it caused false zeros for brands that
+     * legitimately published prices but in formats the detector
+     * couldn't recognise (handwritten signage, watermarked photos,
+     * non-Indo keywords). The operator declaration is fast, reliable,
+     * and a fair Tier 1 signal.
+     *
+     *   declared = true  → 10/10, tier "Dinyatakan oleh pemilik"
+     *   declared = false → 0/10,  tier "Tidak dinyatakan"
+     *
+     * The legacy ``$priceList`` arg is kept (signature compat with
+     * scoreV3 caller) but only its presence is surfaced in raw_inputs
+     * for auditability — it does NOT influence the score.
+     *
+     * @param array<string,mixed> $priceList  legacy auto-detection payload (informational only)
      * @return array{0:int,1:array<string,mixed>}
      */
-    private function scoreTransparansiHarga(array $priceList): array
+    private function scoreTransparansiHarga(array $priceList, bool $priceDeclared = false): array
     {
-        $detected   = (bool) ($priceList['detected'] ?? false);
-        $method     = (string) ($priceList['method']     ?? 'fallback');
-        $confidence = (float)  ($priceList['confidence'] ?? 0.0);
-        $score      = $detected ? 10 : 0;
-
-        $source = match ($method) {
-            'caption_only'         => 'Sumber: scan keyword "harga / tarif / Rp" di caption Instagram',
-            'caption_only_partial' => 'Sumber: scan keyword caption Instagram (vision tidak dijalankan)',
-            'vision'               => 'Sumber: analisis AI Haiku 4.5 atas foto Google Places',
-            'caption+vision'       => 'Sumber: caption Instagram + analisis AI foto Google Places',
-            default                => 'Sumber: tidak tersedia (caption + vision keduanya gagal)',
-        };
+        $score = $priceDeclared ? 10 : 0;
+        $tier  = $priceDeclared ? 'Dinyatakan oleh pemilik' : 'Tidak dinyatakan';
 
         return [$score, [
             'score'      => $score,
             'cap'        => 10,
-            'tier'       => $detected ? 'terdeteksi' : 'tidak terdeteksi',
+            'tier'       => $tier,
             'raw_inputs' => [
-                'detected'   => $detected,
-                'method'     => $method,
-                'confidence' => $confidence,
-                'source'     => $source,
+                'declared' => $priceDeclared,
+                'source'   => 'Sumber: deklarasi operator (wizard Step 3 — checkbox "Daftar harga dipublikasikan")',
             ],
-            'formula'           => 'deterministic_threshold',
-            'unavailable_reason'=> isset($priceList['unavailable_reason']) ? (string) $priceList['unavailable_reason'] : null,
-            'evidence'          => (array) ($priceList['evidence'] ?? []),
-            'tier_table'        => [
-                ['range' => 'Terdeteksi',       'points' => 10, 'matched' => $detected],
-                ['range' => 'Tidak terdeteksi', 'points' => 0,  'matched' => ! $detected],
+            'formula'    => 'operator_declaration',
+            'tier_table' => [
+                ['range' => 'Dinyatakan oleh pemilik', 'points' => 10, 'matched' => $priceDeclared],
+                ['range' => 'Tidak dinyatakan',        'points' => 0,  'matched' => ! $priceDeclared],
             ],
             'explanation_id' => 'transparansi_harga_v3',
         ]];

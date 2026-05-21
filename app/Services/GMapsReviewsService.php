@@ -161,12 +161,17 @@ class GMapsReviewsService
                     'rating'             => $result->rating,
                     'total_review_count' => $result->totalReviewCount,
                     'reviews'            => array_map(
+                        // Phase 12c.4 FIX 3 — owner_reply is now passed
+                        // through to the persisted payload so
+                        // OwnerReplyRateScorer (BB115) sees scraped
+                        // replies instead of an always-empty corpus.
                         static fn ($r) => [
                             'author'        => $r->author,
                             'rating_label'  => $r->ratingLabel,
                             'rating_value'  => $r->ratingValue,
                             'date_relative' => $r->dateRelative,
                             'text'          => $r->text,
+                            'owner_reply'   => isset($r->ownerReply) ? $r->ownerReply : null,
                         ],
                         $result->reviews,
                     ),

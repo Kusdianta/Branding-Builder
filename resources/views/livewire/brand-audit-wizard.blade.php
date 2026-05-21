@@ -10,6 +10,7 @@ use App\Services\HandleCheckers\InstagramHandleChecker;
 use App\Services\HandleCheckers\TikTokHandleChecker;
 use App\Services\PlacesApiService;
 use App\Services\PlatformHealthChecker;
+use App\Services\Scoring\WebsiteLivenessScorer;
 use App\Support\AuditLabels;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
@@ -104,6 +105,12 @@ new class extends Component {
     public array  $validationWarnings   = [];
     public float  $validationConfidence = 1.0;
 
+    // Phase 12c.4 FIX E — full audit_evidence array surfaced to the
+    // dashboard so the target-skor card can read the LLM-generated
+    // ``target_score_reasoning`` paragraphs.
+    /** @var array<string,mixed> */
+    public array  $auditEvidence        = [];
+
     // BB21: per-step progress for the live loading view. Each entry:
     // ['key', 'track', 'status', 'order', 'elapsed_s', 'detail']
     public array   $auditSteps = [];
@@ -194,6 +201,36 @@ new class extends Component {
     public string $ttCheckStatus    = 'idle';
     public string $whatsappValidity = 'idle';
 
+    // BB130 — follower counts captured from the HandleChecker DTO on
+    // a successful check, surfaced next to the "Ditemukan" badge so
+    // operators can disambiguate near-duplicate handles before
+    // committing to the audit. Reset to null whenever the handle
+    // field is edited (the *Username updated hook flips the status
+    // back to 'idle' and clears these alongside).
+    public ?int $igFollowerCount = null;
+    public ?int $ttFollowerCount = null;
+
+    // BB138 — Step 3 website URL + liveness check.
+    //
+    // Renders below the WhatsApp input. The operator can paste any URL
+    // (with or without scheme — normalised on check); we run a single
+    // 5-second HEAD-with-GET-fallback via WebsiteLivenessScorer and
+    // surface the result inline. When non-empty, $wizardWebsiteUrl
+    // overrides $placeWebsite (Google Places auto-fill) in
+    // deriveTouchpoints(); a blank value falls back to Places.
+    //
+    // Status enum: idle | checking | live | dead | error
+    //   - idle      → never checked or field edited since last check
+    //   - checking  → request in flight
+    //   - live      → 2xx/3xx response within timeout
+    //   - dead      → 4xx/5xx response or timeout (treated as Tidak aktif)
+    //   - error     → transport/exception path (advisory, not blocking)
+    public string $wizardWebsiteUrl       = '';
+    public string $websiteCheckStatus     = 'idle';
+    public ?int   $websiteCheckHttpStatus = null;
+    public ?int   $websiteCheckResponseMs = null;
+    public ?string $websiteCheckHost      = null;
+
     // Step 4 — optional free-form context for the LLM analysis layer.
     public ?string $notes = null;
 
@@ -207,27 +244,34 @@ new class extends Component {
      * @var list<array{slug:string,label:string,icon:string,subtitle:string}>
      */
     public array $availableServiceTypes = [
-        ['slug' => 'kiloan',       'label' => 'Kiloan',       'icon' => '🧺', 'subtitle' => 'Per kg'],
-        ['slug' => 'self_service', 'label' => 'Self Service', 'icon' => '🪙', 'subtitle' => 'Cuci sendiri'],
-        ['slug' => 'satuan',       'label' => 'Satuan',       'icon' => '👔', 'subtitle' => 'Per pakaian'],
-        ['slug' => 'express',      'label' => 'Express',      'icon' => '⚡', 'subtitle' => '3-6 jam selesai'],
-        ['slug' => 'premium',      'label' => 'Premium',      'icon' => '💎', 'subtitle' => 'Kain halus'],
-        ['slug' => 'campuran',     'label' => 'Campuran',     'icon' => '🎯', 'subtitle' => 'Beberapa jenis'],
+        // BB137 — catalogue aligned with PPT laundry-segment taxonomy.
+        // Old slugs (express/premium/campuran) retired from the wizard
+        // but still accepted by the validator below for backwards-compat
+        // with audits created before 2026-05-19. Slug `kiloan`/`satuan`/
+        // `self_service` are preserved verbatim so existing rows + the
+        // BrandAudit.service_type column don't need a data migration.
+        ['slug' => 'kiloan',        'label' => 'Cuci Kiloan',           'icon' => '🧺', 'subtitle' => 'Per kg'],
+        ['slug' => 'satuan',        'label' => 'Cuci Satuan',           'icon' => '👔', 'subtitle' => 'Per pakaian'],
+        ['slug' => 'dry_cleaning',  'label' => 'Dry Cleaning',          'icon' => '🥼', 'subtitle' => 'Kain halus / jas'],
+        ['slug' => 'cuci_sepatu',   'label' => 'Cuci Sepatu',           'icon' => '👟', 'subtitle' => 'Sneaker, sandal'],
+        ['slug' => 'cuci_karpet',   'label' => 'Cuci Karpet/Bedcover',  'icon' => '🛋️', 'subtitle' => 'Karpet, bedcover, gorden'],
+        ['slug' => 'self_service',  'label' => 'Self Service',          'icon' => '🪙', 'subtitle' => 'Laundry koin'],
     ];
 
     protected array $rules = [
         'brandName'              => 'required|string|max:100',
         'city'                   => 'nullable|string|max:100',
-        // BB93 — v2 wizard adds 'self_service' + 'campuran'. 'mixed' is
-        // kept on the validator so any in-flight legacy v1 submission
-        // (where serviceType defaulted to a 'mixed' string) still
-        // passes. New v2 audits use 'campuran' as the canonical slug.
-        'serviceType'            => 'required|string|in:kiloan,self_service,satuan,express,premium,campuran,mixed',
-        // BB111 — secondary layanan multi-select. Each entry must be a
-        // valid service slug; deduplication against the primary slug
-        // happens at persistence time.
+        // BB137 — service-type slugs realigned to the PPT laundry-segment
+        // taxonomy. Old slugs (express/premium/campuran/mixed) retained
+        // on the IN: rule so audits created before 2026-05-19 still
+        // round-trip through editAndRerun(). New audits go through one
+        // of the six canonical slugs in $availableServiceTypes.
+        'serviceType'            => 'required|string|in:kiloan,satuan,dry_cleaning,cuci_sepatu,cuci_karpet,self_service,express,premium,campuran,mixed',
+        // BB111/BB137 — secondary layanan multi-select. Each entry must
+        // be a valid service slug; deduplication against the primary
+        // slug happens at persistence time.
         'secondaryServiceTypes'   => 'nullable|array',
-        'secondaryServiceTypes.*' => 'string|in:kiloan,self_service,satuan,express,premium,campuran',
+        'secondaryServiceTypes.*' => 'string|in:kiloan,satuan,dry_cleaning,cuci_sepatu,cuci_karpet,self_service,express,premium,campuran',
         'instagramUrl'           => 'nullable|url|max:500',
         'websiteUrl'             => 'nullable|url|max:500',
         'tiktokUrl'              => 'nullable|url|max:500',
@@ -248,10 +292,17 @@ new class extends Component {
         'declSopKeluhanUrl'      => 'nullable|url|max:500',
         'declPriceList'          => 'nullable|boolean',
         'declPriceListUrl'       => 'nullable|url|max:500',
-        // BB102 — Step 3 WhatsApp local part (Indonesian mobile, no
-        // country code, no leading zero). normalizeWhatsApp() strips
-        // formatting before the validator sees it.
-        'whatsappNumber'         => 'nullable|string|regex:/^8\d{8,11}$/',
+        // BB102 → Phase 12c.4 FIX 5 — Step 3 WhatsApp local part
+        // (Indonesian mobile, no country code, no leading zero).
+        // normalizeWhatsApp() strips formatting before the validator
+        // sees it. WhatsApp is the de facto CTA for laundry brands;
+        // making it required prevents the audit-without-WA situation
+        // that produces a confusing 0/15 Digital Presence score the
+        // operator can't explain.
+        'whatsappNumber'         => 'required|string|regex:/^8\d{8,11}$/',
+        // BB138 — Step 3 website URL input. Optional; when set,
+        // overrides $placeWebsite in deriveTouchpoints().
+        'wizardWebsiteUrl'       => 'nullable|url|max:500',
     ];
 
     protected array $messages = [
@@ -260,6 +311,7 @@ new class extends Component {
         'websiteUrl.url'         => 'Format URL website tidak valid.',
         'tiktokUrl.url'          => 'Format URL TikTok tidak valid.',
         'gmapsUrl.url'           => 'Format URL Google Maps tidak valid.',
+        'whatsappNumber.required'=> 'Nomor WhatsApp wajib diisi — wajib untuk skor Digital Presence.',
         'whatsappNumber.regex'   => 'Nomor WhatsApp tidak valid. Contoh: 8123456789.',
         'outletPhotosOuter.max'  => 'Maksimal 3 foto outlet luar.',
         'outletPhotosOuter.*.image' => 'File harus berupa gambar.',
@@ -327,6 +379,13 @@ new class extends Component {
         $this->instagramAuditStatus = $audit->instagram_audit_status;
         $this->auditWizardVersion   = $audit->wizard_version;
 
+        // BB144 — hydrate placeRaw so the dashboard's "Foto outlet"
+        // strip can iterate place_raw.photos. Wizard Step 1 already
+        // populates this property on the new-audit path; loadAudit()
+        // covers the /audit/{token} entry where the wizard state is
+        // hydrated from the DB row, not from selectPlace().
+        $this->placeRaw = is_array($audit->place_raw) ? $audit->place_raw : null;
+
         // Phase 8 BB29: GMaps reviews data for the new "Ulasan
         // Pelanggan" dashboard section.
         $this->gmapsReviews         = (array) ($audit->gmaps_reviews ?? []);
@@ -340,6 +399,10 @@ new class extends Component {
             || ((float) ($validation['confidence'] ?? 1.0)) < 0.5;
         $this->validationWarnings = (array) ($validation['warnings'] ?? []);
         $this->validationConfidence = (float) ($validation['confidence'] ?? 1.0);
+        // Phase 12c.4 FIX E — expose the entire evidence array so the
+        // dashboard can read ``target_score_reasoning`` (and any
+        // future evidence-backed surfaces) without an extra DB call.
+        $this->auditEvidence = (array) ($audit->audit_evidence ?? []);
 
         // BB21: load audit_steps for live loading view.
         $this->auditSteps = AuditStep::where('brand_audit_id', $audit->id)
@@ -537,14 +600,29 @@ new class extends Component {
     {
         $this->instagramUsername = $this->normalizeUsername($this->instagramUsername, 'instagram');
         // BB106 — any edit invalidates the previous check result.
-        $this->igCheckStatus = 'idle';
+        $this->igCheckStatus    = 'idle';
+        $this->igFollowerCount  = null;
     }
 
     public function updatedTiktokUsername(): void
     {
         $this->tiktokUsername = $this->normalizeUsername($this->tiktokUsername, 'tiktok');
         // BB106 — any edit invalidates the previous check result.
-        $this->ttCheckStatus = 'idle';
+        $this->ttCheckStatus    = 'idle';
+        $this->ttFollowerCount  = null;
+    }
+
+    /**
+     * BB138 — any edit to the website URL invalidates the previous
+     * check result. The operator must re-click "Cek dulu" before the
+     * dashboard reads the live/dead state.
+     */
+    public function updatedWizardWebsiteUrl(): void
+    {
+        $this->websiteCheckStatus     = 'idle';
+        $this->websiteCheckHttpStatus = null;
+        $this->websiteCheckResponseMs = null;
+        $this->websiteCheckHost       = null;
     }
 
     /**
@@ -655,23 +733,78 @@ new class extends Component {
     public function checkInstagram(InstagramHandleChecker $checker): void
     {
         if (! $this->instagramUsername) {
-            $this->igCheckStatus = 'idle';
+            $this->igCheckStatus   = 'idle';
+            $this->igFollowerCount = null;
             return;
         }
-        $this->igCheckStatus = 'checking';
+        $this->igCheckStatus   = 'checking';
+        $this->igFollowerCount = null;
         $result = $checker->check($this->instagramUsername);
-        $this->igCheckStatus = $this->mapHandleStatus($result->exists, $result->status);
+        $this->igCheckStatus   = $this->mapHandleStatus($result->exists, $result->status);
+        // BB130 — only retain follower count on a clean 'found'; for
+        // 'not_found' / 'error' the DTO carries null anyway, but
+        // forcing null here keeps the view branch tidy.
+        $this->igFollowerCount = $this->igCheckStatus === 'found' ? $result->followerCount : null;
     }
 
     public function checkTiktok(TikTokHandleChecker $checker): void
     {
         if (! $this->tiktokUsername) {
-            $this->ttCheckStatus = 'idle';
+            $this->ttCheckStatus   = 'idle';
+            $this->ttFollowerCount = null;
             return;
         }
-        $this->ttCheckStatus = 'checking';
+        $this->ttCheckStatus   = 'checking';
+        $this->ttFollowerCount = null;
         $result = $checker->check($this->tiktokUsername);
-        $this->ttCheckStatus = $this->mapHandleStatus($result->exists, $result->status);
+        $this->ttCheckStatus   = $this->mapHandleStatus($result->exists, $result->status);
+        $this->ttFollowerCount = $this->ttCheckStatus === 'found' ? $result->followerCount : null;
+    }
+
+    /**
+     * BB138 — "Cek dulu" handler for the Step 3 website URL input.
+     *
+     * Normalises the URL (prepends https:// when scheme is missing),
+     * runs WebsiteLivenessScorer::check() (single 5-second HTTP probe),
+     * and stores the human-readable bits the wizard view needs. The
+     * downstream ScorePillarsJob re-runs the same check against
+     * touchpoints.website_url at scoring time — the wizard probe is
+     * UX feedback only, not the score source of truth (otherwise a
+     * site that flickered down at submit would land a stale 'live'
+     * read on the dashboard).
+     */
+    public function checkWebsite(WebsiteLivenessScorer $scorer): void
+    {
+        $raw = trim($this->wizardWebsiteUrl);
+        if ($raw === '') {
+            $this->websiteCheckStatus     = 'idle';
+            $this->websiteCheckHttpStatus = null;
+            $this->websiteCheckResponseMs = null;
+            $this->websiteCheckHost       = null;
+            return;
+        }
+
+        // Prepend https:// when missing. The Volt validation rule below
+        // requires a scheme; this hook lets operators paste "foo.com".
+        if (! preg_match('#^https?://#i', $raw)) {
+            $raw = 'https://' . $raw;
+            $this->wizardWebsiteUrl = $raw;
+        }
+
+        $this->websiteCheckStatus = 'checking';
+        try {
+            $result = $scorer->check($raw);
+        } catch (\Throwable $e) {
+            $this->websiteCheckStatus = 'error';
+            return;
+        }
+
+        $evidence = (array) ($result['evidence'] ?? []);
+        $this->websiteCheckHttpStatus = isset($evidence['http_status']) ? (int) $evidence['http_status'] : null;
+        $this->websiteCheckResponseMs = isset($evidence['response_time_ms']) ? (int) $evidence['response_time_ms'] : null;
+        $this->websiteCheckHost       = parse_url($raw, PHP_URL_HOST) ?: $raw;
+
+        $this->websiteCheckStatus = ($result['is_live'] ?? false) ? 'live' : 'dead';
     }
 
     /**
@@ -705,6 +838,16 @@ new class extends Component {
         $this->igCheckStatus     = 'idle';
         $this->ttCheckStatus     = 'idle';
         $this->whatsappValidity  = 'idle';
+        $this->igFollowerCount   = null;
+        $this->ttFollowerCount   = null;
+        // BB138 — also clear the website override so "Lewati semua"
+        // falls back to Places.website (the GMaps-derived URL) instead
+        // of carrying a half-typed string into deriveTouchpoints().
+        $this->wizardWebsiteUrl       = '';
+        $this->websiteCheckStatus     = 'idle';
+        $this->websiteCheckHttpStatus = null;
+        $this->websiteCheckResponseMs = null;
+        $this->websiteCheckHost       = null;
         $this->nextStep();
     }
 
@@ -716,8 +859,13 @@ new class extends Component {
      */
     public function getCanAdvanceFromStep3Property(): bool
     {
+        // BB135 — `error` (rate-limit / CAPTCHA) is treated as advisory,
+        // not blocking. IG handle still gates on `found` because the
+        // downstream IG audit needs a confirmed username; TikTok is
+        // bonus-only (+10 Digital Presence) so an unverified TT handle
+        // is allowed through (it just won't earn the bonus).
         if ($this->instagramUsername && $this->igCheckStatus !== 'found') return false;
-        if ($this->tiktokUsername    && $this->ttCheckStatus !== 'found') return false;
+        if ($this->tiktokUsername    && ! in_array($this->ttCheckStatus, ['found', 'error'], true)) return false;
         // BB106 — gate on validity, not field presence. normalizeWhatsApp()
         // collapses both empty and malformed input to null; without this
         // check, typing "12345" silently passes the gate because
@@ -746,8 +894,12 @@ new class extends Component {
         if ($this->igCheckStatus === 'not_found' || $this->ttCheckStatus === 'not_found') {
             return 'Periksa lagi handle yang ditandai merah.';
         }
-        if ($this->igCheckStatus === 'error' || $this->ttCheckStatus === 'error') {
-            return 'Worker tidak bisa cek sekarang. Pastikan worker aktif lalu coba lagi.';
+        // BB135 — IG `error` still blocks (downstream audit requires
+        // a confirmed username). TikTok `error` is advisory only:
+        // canAdvanceFromStep3 lets it through, so the gate hint stays
+        // silent for TT errors and only fires for IG.
+        if ($this->igCheckStatus === 'error') {
+            return 'Cek Instagram sedang dibatasi. Coba lagi sebentar — kalau masih gagal, kosongkan field-nya untuk lanjut.';
         }
         if ($this->whatsappValidity === 'invalid') {
             return 'Format nomor WhatsApp belum valid.';
@@ -950,11 +1102,30 @@ new class extends Component {
         )));
         $varietyCount = count(array_unique([$this->serviceType, ...$secondaries]));
 
+        // BB138 — operator-supplied website URL (Step 3) overrides the
+        // Places auto-fill. Trim + null-coalesce so an empty string
+        // doesn't masquerade as a populated website signal.
+        $wizardWebsite = trim($this->wizardWebsiteUrl);
+        $websiteUrl    = $wizardWebsite !== '' ? $wizardWebsite : ($this->placeWebsite ?: null);
+
+        // Phase 12c.4 FIX D — persist the TikTok verification result so
+        // the scorer can read it. The wizard's own checker (oembed)
+        // already confirmed the handle exists when ttCheckStatus is
+        // 'found'; that signal was lost downstream because the
+        // BrandAudit model has no tiktok_check_status column. Storing
+        // the boolean on touchpoints (a JSON column) avoids a
+        // migration and matches the BB102 whatsapp_business_active
+        // pattern.
+        $tiktokVerified = $this->tiktokUsername !== null
+            && $this->tiktokUsername !== ''
+            && ($this->ttCheckStatus ?? null) === 'found';
+
         return [
             'gmaps_url'                => $gmapsUrl,
             'instagram_url'            => $instagramUrl,
             'tiktok_url'               => $tiktokUrl,
-            'website_url'              => $this->placeWebsite ?: null,
+            'tiktok_verified'          => $tiktokVerified,
+            'website_url'              => $websiteUrl,
             'whatsapp_url'             => $whatsappUrl,
             'whatsapp_number'          => $whatsappE164,
             'whatsapp_business_active' => $whatsappUrl !== null,
@@ -1910,17 +2081,12 @@ new class extends Component {
                 'generate_positioning'       => 'Generate posisi kompetitif',
                 'generate_pdf'               => 'Generate activation kit PDF',
             ];
-            $trackLabels = [
-                'gather'    => 'Fase 1 · Kumpulkan data',
-                'analyze'   => 'Fase 2 · Analisis AI',
-                'validate'  => 'Fase 3 · Validasi',
-                'score'     => 'Fase 4 · Skoring pilar',
-                'final'     => 'Fase 5 · Insight + PDF',
-            ];
-            $groupedSteps = [];
-            foreach ($auditSteps as $s) {
-                $groupedSteps[$s['track']][] = $s;
-            }
+            // BB134 — the previous build grouped $auditSteps by track
+            // ($trackLabels: gather / analyze / validate / score / final)
+            // and rendered five cards. The hero badge above already
+            // surfaces the active phase in plain copy, so the detailed
+            // breakdown collapses to a single flat list and the track
+            // grouping is dead code.
             $stepIcon = static fn (string $st): string => match ($st) {
                 'done'    => '✓',
                 'running' => '⏳',
@@ -2019,74 +2185,72 @@ new class extends Component {
                 .pomelli-badge { animation: pomelli-pulse 2.2s ease-in-out infinite; }
             </style>
 
-            <p style="text-align: center; font-size: 13px; color: var(--text-tertiary); margin: 28px 0 16px;">
-                <i class="ti ti-list-details" style="font-size: 13px;"></i> Detail teknis per langkah pipeline:
-            </p>
-
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                {{-- BB72: render the 5-phase tracks (gather / analyze /
-                     validate / score). Final goes in its own row below. --}}
-                @foreach (['gather', 'analyze', 'validate', 'score'] as $trackKey)
-                    <x-nui-card>
-                        <p style="font-size: 11px; font-weight: 600; color: var(--text-tertiary); letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 12px;">
-                            {{ $trackLabels[$trackKey] ?? $trackKey }}
-                        </p>
-                        @forelse ($groupedSteps[$trackKey] ?? [] as $s)
-                            <div class="flex items-center justify-between py-2" style="border-bottom: 1px solid var(--border-default);">
-                                <div class="flex items-center gap-3">
-                                    <span style="font-size: 16px; color: {{ $stepClr($s['status']) }}; min-width: 18px; display: inline-block; text-align: center;">{{ $stepIcon($s['status']) }}</span>
-                                    <span style="font-size: 13px; color: {{ $s['status'] === 'pending' ? 'var(--text-tertiary)' : 'var(--text-primary)' }};">
-                                        {{ $stepLabels[$s['key']] ?? $s['key'] }}
-                                    </span>
-                                </div>
-                                <div class="flex items-center gap-2">
-                                    @if ($s['elapsed_s'] !== null)
-                                        <span style="font-size: 11px; color: var(--text-tertiary); font-variant-numeric: tabular-nums;">{{ $s['elapsed_s'] }}s</span>
-                                    @endif
-                                    {{-- BB59: per-row "Coba lagi" button for retryable gather steps. --}}
-                                    @if ($s['status'] === 'failed' && in_array($s['key'], ['gather_gmaps', 'gather_instagram']))
-                                        <button
-                                            type="button"
-                                            wire:click="retryStep('{{ $s['key'] }}')"
-                                            wire:loading.attr="disabled"
-                                            style="font-size: 11px; padding: 4px 10px; border: 1px solid var(--color-danger); color: var(--color-danger); border-radius: var(--radius-pill); background: var(--surface-card);"
-                                            title="Ulangi langkah ini dan re-skor"
-                                        >
-                                            Coba lagi
-                                        </button>
-                                    @endif
-                                </div>
-                            </div>
-                        @empty
-                            <p style="font-size: 13px; color: var(--text-tertiary);">(menunggu jadwal)</p>
-                        @endforelse
-                    </x-nui-card>
-                @endforeach
-            </div>
-
-            @if (! empty($groupedSteps['final']))
-                <div class="mt-6">
-                    <x-nui-card>
-                        <p style="font-size: 11px; font-weight: 600; color: var(--text-tertiary); letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 12px;">
-                            {{ $trackLabels['final'] }}
-                        </p>
-                        @foreach ($groupedSteps['final'] as $s)
-                            <div class="flex items-center justify-between py-2">
-                                <div class="flex items-center gap-3">
-                                    <span style="font-size: 16px; color: {{ $stepClr($s['status']) }}; min-width: 18px; display: inline-block; text-align: center;">{{ $stepIcon($s['status']) }}</span>
-                                    <span style="font-size: 13px; color: {{ $s['status'] === 'pending' ? 'var(--text-tertiary)' : 'var(--text-primary)' }};">
-                                        {{ $stepLabels[$s['key']] ?? $s['key'] }}
-                                        @if ($s['status'] === 'pending') <span style="color: var(--text-tertiary); font-size: 11px;">(menunggu skoring pilar selesai)</span> @endif
-                                    </span>
-                                </div>
-                                @if ($s['elapsed_s'] !== null)
-                                    <span style="font-size: 11px; color: var(--text-tertiary); font-variant-numeric: tabular-nums;">{{ $s['elapsed_s'] }}s</span>
-                                @endif
-                            </div>
-                        @endforeach
-                    </x-nui-card>
+            {{-- BB136 — progress bar + single status line.
+                 Replaces the BB134 15-step checklist. Operators were
+                 confused by raw pipeline step names ("extract_service_signals",
+                 "score_konsistensi") that didn't tell them how close
+                 they were to a result. The pomelli hero already names
+                 WHAT we're doing; this block answers HOW FAR. Percentage
+                 is derived from done-count / total-count; running steps
+                 don't add a partial credit (overstates progress when a
+                 long LLM call is mid-flight). Retry control is preserved
+                 below the bar — only renders when a retryable gather
+                 step failed, so the happy path stays minimal. --}}
+            @php
+                $totalSteps      = max(1, count($auditSteps));
+                $doneSteps       = 0;
+                $runningStep     = null;
+                $failedGather    = null;
+                foreach ($auditSteps as $s) {
+                    if ($s['status'] === 'done') {
+                        $doneSteps++;
+                    }
+                    if ($s['status'] === 'running' && $runningStep === null) {
+                        $runningStep = $s;
+                    }
+                    if ($s['status'] === 'failed' && in_array($s['key'], ['gather_gmaps', 'gather_instagram'], true) && $failedGather === null) {
+                        $failedGather = $s;
+                    }
+                }
+                $progressPct = (int) round(($doneSteps / $totalSteps) * 100);
+                // The status line prefers the running step's plain-language
+                // label. When nothing is running (between batches, or at
+                // 100%), it falls back to the most recent done step.
+                $statusKey = $runningStep['key']
+                    ?? ($pomelliLastDoneStep['key'] ?? null);
+                $statusLine = $statusKey !== null
+                    ? ($stepLabels[$statusKey] ?? 'Menganalisis…')
+                    : 'Mempersiapkan pipeline…';
+                if ($auditStatus === 'done') {
+                    $statusLine  = 'Selesai. Mengarahkan ke hasil…';
+                    $progressPct = 100;
+                }
+            @endphp
+            <div style="max-width: 480px; margin: 32px auto 0; padding: 0 16px;">
+                <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px;">
+                    <span style="font-size: 13px; color: var(--text-primary); font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ $statusLine }}</span>
+                    <span style="font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; margin-left: 12px; flex-shrink: 0;">{{ $progressPct }}%</span>
                 </div>
-            @endif
+                <div style="height: 8px; border-radius: var(--radius-pill); background: var(--surface-muted); overflow: hidden;" role="progressbar" aria-valuenow="{{ $progressPct }}" aria-valuemin="0" aria-valuemax="100">
+                    <div style="height: 100%; width: {{ $progressPct }}%; background: linear-gradient(90deg, var(--chimera-500), var(--chimera-600)); transition: width 600ms ease-out;"></div>
+                </div>
+
+                @if ($failedGather)
+                    <div style="margin-top: 18px; padding: 12px 14px; border-radius: var(--radius-md); background: var(--surface-card); border: 1px solid var(--color-danger); display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+                        <p style="font-size: 12px; color: var(--text-primary); margin: 0; line-height: 1.5;">
+                            <strong>{{ $stepLabels[$failedGather['key']] ?? $failedGather['key'] }}</strong> gagal. Saya bisa coba lagi tanpa menyentuh skor lainnya.
+                        </p>
+                        <button
+                            type="button"
+                            wire:click="retryStep('{{ $failedGather['key'] }}')"
+                            wire:loading.attr="disabled"
+                            style="font-size: 11px; padding: 6px 12px; border: 1px solid var(--color-danger); color: var(--color-danger); border-radius: var(--radius-pill); background: var(--surface-card); flex-shrink: 0; cursor: pointer;"
+                        >
+                            Coba lagi
+                        </button>
+                    </div>
+                @endif
+            </div>
         </div>
     @endif
 
@@ -2241,6 +2405,20 @@ new class extends Component {
                             {{ $overallLabel }}
                         </p>
                     @endif
+                    {{-- BB145 — explicit tier badge under the overall score
+                         ring. $overallLabel already carries a tier string
+                         (e.g. "EXCELLENT — Brand Kuat & Terpercaya") but
+                         operators wanted the PPT's 5-tier vocabulary surfaced
+                         consistently across overall + pillar headers. --}}
+                    @if ($overallScore !== null)
+                        @php
+                            $overallTier        = AuditLabels::pillarTier((int) $overallScore);
+                            $overallTierVariant = AuditLabels::pillarTierVariant((int) $overallScore);
+                        @endphp
+                        <div style="margin-top: 10px;">
+                            <span class="bb-tier-badge bb-tier-badge--{{ $overallTierVariant }}" style="font-size: 12px;">{{ $overallTier }}</span>
+                        </div>
+                    @endif
                 </div>
 
                 {{-- ===== Phase 12c.2 BB111: Pillar breakdown table =====
@@ -2308,6 +2486,83 @@ new class extends Component {
                     </div>
                 @endif
 
+                {{-- ============================================================
+                     BB144 — Outlet photos from Google Places.
+                     Data source: $audit->place_raw['photos'] (captured by
+                     PlacesApiService::fetchPlaceDetails during the wizard's
+                     Step 1 selectPlace). Each entry carries a photo_reference
+                     that we proxy through audit.place-photo to keep the
+                     server-side Maps API key out of the HTML. The proxy also
+                     caches the binary so a repeat page-view doesn't re-bill
+                     against our Places Photo quota.
+
+                     Renders a horizontal scroll of up to 8 thumbnails; the
+                     row is hidden entirely (not rendered at all) when no
+                     photos are present, so legacy / pre-BB90 audits without
+                     a place_raw blob don't get an empty strip.
+                     ============================================================ --}}
+                @php
+                    $placePhotos = is_array($placeRaw ?? null) ? ($placeRaw['photos'] ?? []) : [];
+                    if (! is_array($placePhotos)) {
+                        $placePhotos = [];
+                    }
+                    $placePhotos = array_slice(array_values($placePhotos), 0, 8);
+                @endphp
+                @if (count($placePhotos) > 0 && $sessionToken)
+                    <div class="mb-10">
+                        <p style="font-size: 11px; font-weight: 600; color: var(--text-tertiary); letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 12px;">Foto outlet dari Google Maps</p>
+                        <div
+                            x-data="{ open: false, src: null, alt: '' }"
+                            style="display: flex; gap: 12px; overflow-x: auto; padding: 4px 2px 8px; scroll-snap-type: x mandatory;"
+                        >
+                            @foreach ($placePhotos as $pIdx => $photo)
+                                @php
+                                    $thumbUrl = route('audit.place-photo', ['token' => $sessionToken, 'idx' => $pIdx]) . '?w=400';
+                                    $bigUrl   = route('audit.place-photo', ['token' => $sessionToken, 'idx' => $pIdx]) . '?w=800';
+                                @endphp
+                                <button
+                                    type="button"
+                                    @click="open = true; src = '{{ $bigUrl }}'; alt = 'Foto outlet {{ $pIdx + 1 }}'"
+                                    style="flex: 0 0 auto; width: 200px; height: 150px; border-radius: var(--radius-md); overflow: hidden; border: 1px solid var(--border-default); background: var(--surface-muted); padding: 0; cursor: zoom-in; scroll-snap-align: start;"
+                                    aria-label="Buka foto outlet {{ $pIdx + 1 }}"
+                                >
+                                    <img
+                                        src="{{ $thumbUrl }}"
+                                        alt="Foto outlet {{ $pIdx + 1 }} dari Google Maps"
+                                        loading="lazy"
+                                        style="width: 100%; height: 100%; object-fit: cover; display: block;"
+                                    />
+                                </button>
+                            @endforeach
+
+                            {{-- Lightbox — single-instance, Alpine-driven so it
+                                 doesn't re-render per thumbnail. --}}
+                            <div
+                                x-show="open"
+                                x-cloak
+                                x-transition.opacity
+                                @keydown.escape.window="open = false"
+                                @click.self="open = false"
+                                style="position: fixed; inset: 0; z-index: 50; background: rgba(15,20,17,0.85); display: flex; align-items: center; justify-content: center; padding: 32px; cursor: zoom-out;"
+                            >
+                                <img
+                                    :src="src"
+                                    :alt="alt"
+                                    style="max-width: 92vw; max-height: 88vh; border-radius: var(--radius-md); box-shadow: var(--shadow-popover);"
+                                />
+                                <button
+                                    type="button"
+                                    @click="open = false"
+                                    style="position: absolute; top: 20px; right: 24px; width: 40px; height: 40px; border-radius: var(--radius-pill); border: none; background: var(--surface-card); color: var(--text-primary); cursor: pointer; font-size: 18px;"
+                                    aria-label="Tutup"
+                                >
+                                    ✕
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                @endif
+
                 {{-- ===== Pillar grid (single column) ===== --}}
                 @php
                     // BB32: methodology copy explaining WHY each pillar gets its
@@ -2323,7 +2578,7 @@ new class extends Component {
                     $pillarMethodology = [
                         'brand-konsistensi' => 'Brand Konsistensi (35% dari skor total) mengukur seberapa kompak identitas brand kita di seluruh touchpoint digital — prediktor terkuat untuk recall jangka panjang dalam wawancara pelanggan. Kehadiran Digital (40 pts) punya bobot tertinggi karena konsistensi presence di Instagram + Website + Google Maps + WhatsApp menandakan brand yang benar-benar beroperasi, bukan sambilan. Konsistensi Visual (35 pts) menilai apakah logo, warna, dan tone tetap menyatu saat pelanggan menyapu pandang antar kanal. Kelengkapan Layanan (15 pts) dan Transparansi Harga (10 pts) melengkapi skor dengan sinyal operasional yang spesifik.',
                         'brand-recall' => 'Brand Recall (35% dari skor total) mengukur seberapa mudah calon pelanggan mengenali brand kita ketika mencari jasa laundry. Search Recall (35 pts) punya bobot tertinggi karena permintaan Google Autocomplete adalah proxy terkuat untuk kesadaran brand yang nyata di area kita. Rating (25 pts) dan Jumlah Review (15 pts) mencerminkan akumulasi social proof. Kata Kunci Positif di Ulasan (15 pts) dan Sentimen (10 pts) mengukur kualitas penerimaan yang diambil dari hingga 30 review Google Maps yang di-scrape per audit.',
-                        'brand-experience' => 'Brand Experience (20% dari skor total) mengukur sinyal operasional yang pelanggan rasakan saat berinteraksi dengan brand. Setiap audit mulai dari Dasar 30 pts, dengan bonus yang dipicu analisis LLM atas copy di touchpoint: Variasi Layanan (+15), SOP Keluhan (+15), Antar Jemput (+12), Layanan Ekspres (+10), Daftar Harga (+10). Penalti — Pakaian Hilang (−10), Keterlambatan (−8), No-Response WA (−8) — bersifat deterministik dan hanya tercetak ketika korpus review Google Maps memuat keluhan eksplisit.',
+                        'brand-experience' => 'Brand Experience (20% dari skor total) mengukur sinyal operasional yang pelanggan rasakan saat berinteraksi dengan brand. Setiap audit mulai dari Dasar 30 pts, dengan bonus yang dipicu deklarasi operator + verifikasi otomatis: Variasi Layanan (+15), SOP Keluhan (+15), Antar Jemput (+12), Layanan Ekspres (+10), Daftar Harga (+10). Sinyal keluhan dari ulasan Google Maps mengurangi skor secara deterministik: "pakaian tertukar/hilang" (−10), "telat/lambat" (−8), "tidak respons WA" (−8). Jika korpus ulasan tidak memuat kata kunci keluhan, sinyal-sinyal ini tetap 0 — itu sinyal baik, bukan data yang hilang.',
                         'digital-presence' => 'Digital Presence (10% dari skor total) mengukur seberapa mudah brand kita ditemukan dan selengkap apa kehadirannya di kanal yang benar-benar dicek pelanggan. Bobotnya mencerminkan dampak platform untuk UMKM laundry: Google Maps (25 pts — driver penemuan utama), Instagram (20 pts), Website (20 pts), WhatsApp Business (15 pts — kanal pesan langsung). TikTok (bonus 3 pts) bersifat opsional dan tidak menjadi penalti kalau belum ada. Bonus Review hingga 15 pts tambahan tercetak saat listing Google Maps sudah mengakumulasi volume review yang signifikan.',
                     ];
                 @endphp
@@ -2333,6 +2588,24 @@ new class extends Component {
                             $ps      = $pillarScoreInts[$slug] ?? null;
                             $pc      = $tierColor($ps);
                             $sbs     = $subBucketScores[$slug] ?? [];
+                            // Phase 12c.4 FIX 6 — legacy-data migration.
+                            // Pre-BB141 audits stored Digital Presence's
+                            // review bonus as two 5-pt sub-buckets
+                            // (review_count_5plus + review_count_50plus).
+                            // The current scorer emits a single
+                            // review_bonus row (0/5/10). Collapse the
+                            // legacy keys at render time so the
+                            // dashboard never shows two rows side-by-
+                            // side; sum is identical at every tier.
+                            if ($slug === 'digital-presence' && is_array($sbs)
+                                && array_key_exists('review_count_5plus', $sbs)
+                                && array_key_exists('review_count_50plus', $sbs)
+                                && ! array_key_exists('review_bonus', $sbs)) {
+                                $r10 = (int) ($sbs['review_count_5plus']  ?? 0);
+                                $r50 = (int) ($sbs['review_count_50plus'] ?? 0);
+                                $sbs['review_bonus'] = $r10 + $r50;
+                                unset($sbs['review_count_5plus'], $sbs['review_count_50plus']);
+                            }
                             $hasRecs = ($recsByPillar[$slug] ?? 0) > 0;
                             $methodology = $pillarMethodology[$slug] ?? null;
                             // BB34: pillar-level LLM reasoning — rendered ONCE above
@@ -2345,6 +2618,16 @@ new class extends Component {
                             );
                         @endphp
                         <x-nui-card>
+                            {{-- BB145 — tier badge added next to the score.
+                                 Shows the qualitative label (Sempurna /
+                                 Sangat Baik / Baik / Cukup / Perlu Perbaikan)
+                                 alongside the "X / 100" so operators get an
+                                 instant read on where the score sits without
+                                 having to mentally translate a number. --}}
+                            @php
+                                $pillarTierLabel   = $ps !== null ? AuditLabels::pillarTier($ps) : null;
+                                $pillarTierVariant = $ps !== null ? AuditLabels::pillarTierVariant($ps) : 'bad';
+                            @endphp
                             <div class="flex items-center justify-between mb-4">
                                 <div class="flex items-center gap-3">
                                     <div style="width: 36px; height: 36px; border-radius: var(--radius-md); background: var(--chimera-50); display: flex; align-items: center; justify-content: center;">
@@ -2352,7 +2635,12 @@ new class extends Component {
                                     </div>
                                     <span style="font-size: 15px; font-weight: 600; color: var(--text-primary);">{{ $meta['label'] }}</span>
                                 </div>
-                                <span style="font-size: 28px; font-weight: 700; color: {{ $pc }}; line-height: 1;">{{ $ps ?? '—' }}</span>
+                                <div class="flex items-center gap-3">
+                                    @if ($pillarTierLabel)
+                                        <span class="bb-tier-badge bb-tier-badge--{{ $pillarTierVariant }}" style="font-size: 11px;">{{ $pillarTierLabel }}</span>
+                                    @endif
+                                    <span style="font-size: 28px; font-weight: 700; color: {{ $pc }}; line-height: 1;">{{ $ps ?? '—' }}<span style="font-size: 14px; font-weight: 400; color: var(--text-tertiary);">/100</span></span>
+                                </div>
                             </div>
 
                             <div style="height: 6px; background: var(--chimera-50); border-radius: 999px; margin-bottom: 16px;">
@@ -2388,9 +2676,22 @@ new class extends Component {
                                         @php
                                             $bd = is_array($scoreBreakdown[$slug][$k] ?? null) ? $scoreBreakdown[$slug][$k] : null;
                                             $isDigitalPresence = $slug === 'digital-presence';
-                                            $cap = (int) (config('branding.pillar_sub_buckets.' . $slug . '.' . $k . '.cap', 0));
+                                            // BB141 — prefer the breakdown's per-row cap (V3 scorers
+                                            // emit their own caps that may differ from the legacy
+                                            // config) over the static config value. Falls back to
+                                            // config for legacy rows without a per-row cap.
+                                            $cap = is_array($bd) && isset($bd['cap'])
+                                                ? (int) $bd['cap']
+                                                : (int) (config('branding.pillar_sub_buckets.' . $slug . '.' . $k . '.cap', 0));
                                             $hasPresence = ((int) $v) > 0;
-                                            $touchpointOptional = $k === 'has_tiktok' || $k === 'review_bonus';
+                                            // Phase 12c.4 FIX D — TikTok no longer carries the
+                                            // "opsional, tidak mengurangi skor" decoration. If the
+                                            // operator declared a TikTok handle that the wizard
+                                            // verified, it counts the same as any other
+                                            // touchpoint. ``review_bonus`` stays optional — it is
+                                            // a derived signal from review volume, not an
+                                            // operator-declared touchpoint.
+                                            $touchpointOptional = $k === 'review_bonus';
                                         @endphp
                                         <div style="border-bottom: 1px solid var(--border-default);">
                                             @if ($isDigitalPresence)
@@ -2425,13 +2726,53 @@ new class extends Component {
                                                         $tierLabel = AuditLabels::tierForRatio($scoreInt / max(1, $cap));
                                                     }
                                                     $tierVariant = AuditLabels::tierVariant($tierLabel);
+
+                                                    // BB140 — penalty rows get neutral phrasing when no
+                                                    // complaints were detected. A score of 0 means the
+                                                    // detector found nothing — that is a GOOD outcome,
+                                                    // not a missing-data signal. Negative scores keep the
+                                                    // red badge but show the magnitude as "−X poin".
+                                                    $isPenaltyRow = str_starts_with($k, 'penalty_');
+                                                    if ($isPenaltyRow) {
+                                                        if ($scoreInt >= 0) {
+                                                            $tierLabel   = 'Tidak ditemukan keluhan ✓';
+                                                            $tierVariant = 'good';
+                                                        } else {
+                                                            $tierLabel   = '−' . abs($scoreInt) . ' poin';
+                                                            $tierVariant = 'bad';
+                                                        }
+                                                    }
+                                                    // Phase 12c.4 FIX C — declaration-driven rows that
+                                                    // scored 0 should show "Tidak dinyatakan" with NO
+                                                    // numeric "0/X pt" — the row is qualitative, not
+                                                    // measured. Triggers on the new scorer formulas.
+                                                    $declarationFormula = is_array($bd) && in_array(
+                                                        (string) ($bd['formula'] ?? ''),
+                                                        ['operator_declaration'],
+                                                        true,
+                                                    );
+                                                    $isUndeclaredRow = $declarationFormula && $scoreInt === 0;
+                                                    if ($isUndeclaredRow) {
+                                                        $tierLabel   = 'Tidak dinyatakan';
+                                                        $tierVariant = 'warning';
+                                                    }
+                                                    // FIX C — penalty rows with score=0 hide the
+                                                    // numeric counter entirely; only the green tier
+                                                    // badge "Tidak ditemukan keluhan ✓" remains.
+                                                    $hidePointValue = ($isPenaltyRow && $scoreInt === 0) || $isUndeclaredRow;
                                                 @endphp
                                                 <div class="flex justify-between items-center py-2 gap-3">
                                                     <span style="font-size: 12px; color: var(--text-secondary);">{{ AuditLabels::subBucket($k) }}</span>
                                                     <span class="flex items-center gap-2" style="flex-shrink: 0;">
-                                                        <span style="font-size: 13px; font-weight: 600; color: var(--text-primary); white-space: nowrap;">
-                                                            {{ $scoreInt }}{{ $cap > 0 ? ' / ' . $cap : '' }} pt
-                                                        </span>
+                                                        @if (! $hidePointValue)
+                                                            <span style="font-size: 13px; font-weight: 600; color: var(--text-primary); white-space: nowrap;">
+                                                                @if ($isPenaltyRow)
+                                                                    {{ '−' . abs($scoreInt) . ' pt' }}
+                                                                @else
+                                                                    {{ $scoreInt }}{{ $cap > 0 ? ' / ' . $cap : '' }} pt
+                                                                @endif
+                                                            </span>
+                                                        @endif
                                                         @if ($tierLabel !== null && $tierLabel !== '')
                                                             <span class="bb-tier-badge bb-tier-badge--{{ $tierVariant }}">{{ $tierLabel }}</span>
                                                         @endif
@@ -2453,6 +2794,31 @@ new class extends Component {
                                                 @if ($bd === null)
                                                     <p style="font-size: 11px; color: var(--text-tertiary); margin: 0 0 8px; line-height: 1.5;">
                                                         {{ $rowSource }}
+                                                    </p>
+                                                @endif
+                                                {{-- Phase 12c.4 FIX F — surface a one-line reason
+                                                     when this sub-bucket scored less than its cap.
+                                                     Reads from (in order):
+                                                       1. $bd['llm_reasoning']  (per-row LLM judgment)
+                                                       2. $scoreBreakdown[$slug]['sub_bucket_reasoning'][$k]
+                                                          (pillar-level map populated by KonsistensiScorer
+                                                          + ExperienceScorer V3)
+                                                     Hidden for: full-marks rows, penalty rows (already
+                                                     covered by the green/red badge), and undeclared
+                                                     declaration rows (FIX C handles those). --}}
+                                                @php
+                                                    $isUnderCap = $cap > 0 && $scoreInt < $cap;
+                                                    $reasonText = '';
+                                                    if ($isUnderCap && ! $isPenaltyRow && ! ($isUndeclaredRow ?? false)) {
+                                                        $reasonText = (string) (
+                                                            (is_array($bd) ? ($bd['llm_reasoning'] ?? '') : '')
+                                                            ?: ($scoreBreakdown[$slug]['sub_bucket_reasoning'][$k] ?? '')
+                                                        );
+                                                    }
+                                                @endphp
+                                                @if ($reasonText !== '')
+                                                    <p style="font-size: 12px; color: var(--text-secondary); margin: 0 0 8px; padding: 8px 10px; background: var(--surface-muted); border-left: 3px solid var(--chimera-200); border-radius: var(--radius-sm); line-height: 1.55;">
+                                                        <span style="font-weight: 600; color: var(--chimera-700);">Kenapa belum penuh:</span> {{ $reasonText }}
                                                     </p>
                                                 @endif
                                             @endif
@@ -2535,16 +2901,32 @@ new class extends Component {
                                                         <p style="margin: 0 0 6px;"><strong>Berdasarkan:</strong> {{ $inputLine }}</p>
                                                     @endif
 
-                                                    @if ($formula === 'deterministic_threshold' && count($tierTable) > 0)
+                                                    @if (in_array($formula, ['deterministic_threshold', 'qualitative_tier', 'operator_declaration'], true) && count($tierTable) > 0)
                                                         <table style="width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 6px;">
                                                             @foreach ($tierTable as $tier)
-                                                                @php $isMatch = (bool) ($tier['matched'] ?? false); @endphp
+                                                                @php
+                                                                    $isMatch = (bool) ($tier['matched'] ?? false);
+                                                                    // FIX B — new scorers emit `label`; legacy ones use `range`.
+                                                                    $rowText = (string) ($tier['label'] ?? $tier['range'] ?? '');
+                                                                @endphp
                                                                 <tr style="background: {{ $isMatch ? 'var(--chimera-500)' : 'transparent' }}; color: {{ $isMatch ? '#FFFFFF' : 'inherit' }}; border-radius: 4px;">
-                                                                    <td style="padding: 3px 8px;">{{ $tier['range'] }}</td>
+                                                                    <td style="padding: 3px 8px;">{{ $rowText }}</td>
                                                                     <td style="padding: 3px 8px; text-align: right; font-weight: {{ $isMatch ? '600' : 'normal' }};">{{ $tier['points'] }} pt</td>
                                                                 </tr>
                                                             @endforeach
                                                         </table>
+                                                        @php $sopBonus = $bd['sop_bonus'] ?? null; @endphp
+                                                        @if (is_array($sopBonus))
+                                                            <p style="font-size: 11px; color: {{ ($sopBonus['awarded'] ?? false) ? 'var(--color-success)' : 'var(--text-tertiary)' }}; margin: 4px 0 0;">
+                                                                {{ ($sopBonus['awarded'] ?? false) ? '✓' : '○' }}
+                                                                +{{ (int) ($sopBonus['points'] ?? 0) }} bonus jika SOP keluhan ada
+                                                            </p>
+                                                        @endif
+                                                        @if (! empty($bd['unavailable_reason']))
+                                                            <p style="font-size: 11px; color: var(--text-tertiary); font-style: italic; margin: 6px 0 0;">
+                                                                {{ $bd['unavailable_reason'] }}
+                                                            </p>
+                                                        @endif
                                                     @endif
 
                                                     @if ($formula === 'deterministic_signals' && count($signals) > 0)
@@ -2642,11 +3024,10 @@ new class extends Component {
                     @endforeach
                 </div>
 
-                {{-- ===== Phase 7-C BB15: Audit Profil Instagram ===== --}}
-                @include('livewire._instagram-audit-section', [
-                    'instagramAudit'       => $instagramAudit,
-                    'instagramAuditStatus' => $instagramAuditStatus,
-                ])
+                {{-- BB142 — Instagram audit moved to a "Bonus" section at the
+                     bottom of the dashboard (see below, after Ringkasan Brand
+                     Health). The detailed IG profile analysis is supplemental
+                     to the 4-pillar Brand Health, not a peer of it. --}}
 
                 {{-- ===== Phase 8 BB29: Ulasan Pelanggan (Google Maps) ===== --}}
                 @include('livewire._gmaps-reviews-section', ['audit' => (object) [
@@ -2737,6 +3118,12 @@ new class extends Component {
                                     <span style="font-size: 13px; color: var(--text-tertiary);">/100</span>
                                 </div>
                                 <p style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">{{ $overallLabel }}</p>
+                                {{-- BB145 — tier badge mirrors the one under the
+                                     overall score ring at the top, so the
+                                     Ringkasan card is self-contained. --}}
+                                @if ($overallScore !== null)
+                                    <span class="bb-tier-badge bb-tier-badge--{{ AuditLabels::pillarTierVariant((int) $overallScore) }}" style="font-size: 11px; display: inline-block; margin-top: 8px;">{{ AuditLabels::pillarTier((int) $overallScore) }}</span>
+                                @endif
                             </div>
 
                             <div>
@@ -2833,6 +3220,100 @@ new class extends Component {
 
                     </x-nui-card>
                 @endif
+
+                {{-- ============================================================
+                     Phase 12c.4 FIX 7 (revised) + FIX E — Target Skor
+                     Berikutnya card. Calculation is centralised in
+                     ``App\Services\TargetScoreCalculator`` so the
+                     LLM reasoning (AggregateAuditJob) and the view
+                     can never disagree on which actions were chosen.
+                     The LLM-generated reasoning paragraphs are read
+                     from ``audit_evidence.target_score_reasoning``
+                     when present.
+                     ============================================================ --}}
+                @if (isset($overallScore) && $overallScore !== null)
+                    @php
+                        $targetPayload = App\Services\TargetScoreCalculator::compute(
+                            (int) $overallScore,
+                            $pillarScoreInts,
+                            $subBucketScores,
+                            $scoreBreakdown,
+                        );
+                        $current     = $targetPayload['current'];
+                        $targetScore = $targetPayload['target'];
+                        $delta       = $targetPayload['delta'];
+                        $actions     = $targetPayload['actions'];
+
+                        $cachedReasoning = (array) ($auditEvidence['target_score_reasoning'] ?? []);
+                        $reasoningParagraphs = is_array($cachedReasoning['paragraphs'] ?? null)
+                            ? array_values(array_filter(
+                                array_map(static fn ($p) => is_string($p) ? trim($p) : '', $cachedReasoning['paragraphs']),
+                                static fn (string $p) => $p !== '',
+                            ))
+                            : [];
+                    @endphp
+                    <x-nui-card padding="lg" style="margin-top: 32px;">
+                        <p style="font-size: 11px; font-weight: 600; color: var(--text-tertiary); letter-spacing: 0.4px; text-transform: uppercase; margin: 0 0 8px;">Target skor berikutnya (3 bulan)</p>
+                        <div class="flex items-baseline gap-3" style="margin-bottom: 4px;">
+                            <span style="font-size: 44px; font-weight: 700; color: var(--chimera-700); line-height: 1;">{{ $targetScore }}</span>
+                            <span style="font-size: 18px; font-weight: 500; color: var(--text-tertiary);">/ 100</span>
+                            <span style="font-size: 13px; font-weight: 600; color: var(--color-success); margin-left: 8px;">
+                                ↑ +{{ $delta }} dari skor saat ini ({{ $current }})
+                            </span>
+                        </div>
+
+                        @if (count($actions) > 0)
+                            <ul style="list-style: none; padding: 0; margin: 20px 0 0; display: flex; flex-direction: column; gap: 10px;">
+                                @foreach ($actions as $a)
+                                    <li style="display: flex; align-items: flex-start; gap: 10px; font-size: 14px; color: var(--text-primary); line-height: 1.55;">
+                                        <span style="color: var(--chimera-600); font-weight: 700; flex-shrink: 0;">•</span>
+                                        <span><strong>{{ $a['text'] }}</strong> <span style="color: var(--text-tertiary);">→ +{{ $a['gain'] }} pt {{ $a['pillar'] }}</span></span>
+                                    </li>
+                                @endforeach
+                            </ul>
+                        @endif
+
+                        {{-- Phase 12c.4 FIX E — LLM-generated reasoning paragraphs.
+                             Read from audit_evidence.target_score_reasoning,
+                             populated by AggregateAuditJob after status flip
+                             to DONE. Block stays hidden when generation
+                             failed or hasn't run yet — never an error UI. --}}
+                        @if (count($reasoningParagraphs) > 0)
+                            <div style="margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border-default);">
+                                <p style="font-size: 11px; font-weight: 600; color: var(--chimera-700); letter-spacing: 0.4px; text-transform: uppercase; margin: 0 0 12px;">Mengapa target ini realistis?</p>
+                                @foreach ($reasoningParagraphs as $para)
+                                    <p style="font-size: 13px; color: var(--text-secondary); line-height: 1.65; margin: 0 0 12px;">{{ $para }}</p>
+                                @endforeach
+                            </div>
+                        @endif
+                    </x-nui-card>
+                @endif
+
+                {{-- ============================================================
+                     BB142 — Bonus: Audit Profil Instagram.
+                     Moved here from above the Ringkasan card so the 4-pillar
+                     Brand Health stays the primary focus on the result page.
+                     Instagram still contributes +20 pts to Digital Presence
+                     (sub-bucket has_instagram); this section is the detailed
+                     profile breakdown, which is supplemental — keep it visible
+                     but below the headline summary.
+                     ============================================================ --}}
+                <div style="margin-top: 48px; padding-top: 32px; border-top: 1px dashed var(--border-default);">
+                    <div style="text-align: center; margin-bottom: 24px;">
+                        <span style="display: inline-block; font-size: 10px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; color: var(--chimera-700); background: var(--chimera-50); border: 1px solid var(--chimera-100); border-radius: var(--radius-pill); padding: 4px 14px;">
+                            Bonus
+                        </span>
+                        <h2 style="font-size: 22px; font-weight: 600; color: var(--text-primary); margin: 12px 0 4px;">Audit Profil Instagram</h2>
+                        <p style="font-size: 13px; color: var(--text-secondary); margin: 0; max-width: 480px; margin-left: auto; margin-right: auto;">
+                            Analisis mendalam atas profil Instagram brand-mu — terpisah dari skor 4 pilar Brand Health di atas.
+                        </p>
+                    </div>
+
+                    @include('livewire._instagram-audit-section', [
+                        'instagramAudit'       => $instagramAudit,
+                        'instagramAuditStatus' => $instagramAuditStatus,
+                    ])
+                </div>
 
             @endif
         </div>

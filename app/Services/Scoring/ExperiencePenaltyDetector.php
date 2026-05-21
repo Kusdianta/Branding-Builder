@@ -50,7 +50,7 @@ final class ExperiencePenaltyDetector
             'patterns'  => [
                 // Indonesian SLA / lateness vocabulary
                 'telat', 'terlambat', 'molor', 'lewat batas', 'lewat janji',
-                'lama banget', 'kelamaan', 'lambat banget',
+                'lama banget', 'lama sekali', 'kelamaan', 'lambat banget',
                 'jam belum', 'jam belom', 'hari belum', 'hari belom',
                 'sudah seminggu', 'udah seminggu', 'sampai sekarang belum',
                 'tidak tepat waktu', 'gak tepat waktu', 'ga tepat waktu',
@@ -65,8 +65,14 @@ final class ExperiencePenaltyDetector
             'per_match' => -3,
             'cap'       => -10,
             'patterns'  => [
-                // Loss / damage / quantity-mismatch vocabulary
-                'hilang', 'kurang satu', 'kurang dua', 'kurang baju',
+                // Loss / damage / quantity-mismatch / mix-up vocabulary
+                // BB139 — added 'tertukar' + 'kehilangan' per PPT spec.
+                // 'tertukar' is the canonical Indonesian for clothes
+                // accidentally swapped between customers (a recurring
+                // laundry complaint pattern). 'kehilangan' catches the
+                // noun form when reviewers describe their own loss.
+                'hilang', 'kehilangan', 'tertukar',
+                'kurang satu', 'kurang dua', 'kurang baju',
                 'pakaian hilang', 'baju hilang', 'celana hilang',
                 'tidak kembali', 'ga kembali', 'gak balik',
                 'rusak',
@@ -79,6 +85,7 @@ final class ExperiencePenaltyDetector
                 'missing item', 'lost', 'missing', 'damaged', 'ruined',
                 'destroyed', 'torn', 'shrunk', 'discolored', 'stained',
                 'no compensation', 'won\'t replace', 'didn\'t replace',
+                'mixed up', 'swapped', 'wrong order',
             ],
         ],
         'penalty_no_response_wa' => [
@@ -86,6 +93,15 @@ final class ExperiencePenaltyDetector
             'cap'       => -8,
             'patterns'  => [
                 // Communication / WA responsiveness vocabulary
+                // BB139 — broadened beyond explicit "wa ..." prefix per
+                // PPT spec. Plain "tidak dibalas" / "ga direspon" /
+                // "tidak respons" cover reviews where the medium is
+                // implied (most laundry brands route complaints
+                // through WA but reviewers don't always name it).
+                'tidak dibalas', 'ga dibalas', 'gak dibalas',
+                'tidak dijawab', 'ga dijawab', 'gak dijawab',
+                'tidak respons', 'tidak respond',
+                'ga direspon', 'gak direspon', 'tidak direspon',
                 'wa tidak dibalas', 'wa ga dibalas', 'wa gak dibalas',
                 'wa tidak dijawab', 'wa ga dijawab', 'wa gak dijawab',
                 'tidak ada respon', 'tidak ada respond', 'gak ada respon',

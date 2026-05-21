@@ -33,6 +33,35 @@
     $banner = null;
     if ($igStatus !== 'done') {
         $banner = $statusBannerMap[$igStatus] ?? null;
+        // BB132 — `audit_failed` is a catch-all bucket. The stored
+        // instagram_audit.error carries the actual failure code
+        // (worker_unavailable / worker_auth_failed / claude_analysis_failed /
+        // raw exception). Surface the friendlier wording so operators
+        // don't all see the same "error teknis" banner regardless of
+        // root cause. Falls through to the generic banner when the
+        // detail prefix isn't recognised.
+        if ($banner !== null && $igStatus === 'audit_failed') {
+            $errDetail = (string) ($igAudit['error'] ?? '');
+            if (str_starts_with($errDetail, 'worker_unavailable')) {
+                $banner = [
+                    'severity' => 'warning',
+                    'title'    => 'Audit Instagram gagal — worker tidak merespons',
+                    'body'     => 'Worker Instagram tidak menjawab dalam waktu yang tersedia (timeout). Worker mungkin sedang restart atau menangani audit lain. Jalankan ulang dalam 1–2 menit; jika berulang, periksa worker via /admin/worker-health.',
+                ];
+            } elseif (str_starts_with($errDetail, 'worker_auth_failed')) {
+                $banner = [
+                    'severity' => 'warning',
+                    'title'    => 'Audit Instagram gagal — autentikasi worker',
+                    'body'     => 'Worker menolak request audit (token salah atau kedaluwarsa). Operator perlu memeriksa konfigurasi WORKER_AUTH_TOKEN di Hub dan spoke.',
+                ];
+            } elseif (str_starts_with($errDetail, 'claude_analysis_failed')) {
+                $banner = [
+                    'severity' => 'warning',
+                    'title'    => 'Audit Instagram tersaji sebagian — analisis AI gagal',
+                    'body'     => 'Scraping Instagram berhasil, namun analisis AI gagal diselesaikan (Claude error / kuota habis). Data mentah tersimpan; coba jalankan ulang untuk regenerasi analisis.',
+                ];
+            }
+        }
         if ($banner === null) {
             return;
         }

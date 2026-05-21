@@ -8,6 +8,7 @@ use App\Models\AuditStep;
 use App\Models\BrandAudit;
 use App\Services\Fetchers\GoogleMapsReviewsFetcher;
 use App\Services\HubUsageLogger;
+use App\Services\PlacesApiService;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -37,7 +38,7 @@ class FetchPlacesApiJob implements ShouldQueue
 
     public function __construct(public readonly string $auditId) {}
 
-    public function handle(HubUsageLogger $usageLogger): void
+    public function handle(HubUsageLogger $usageLogger, PlacesApiService $placesApi): void
     {
         if ($this->batch()?->cancelled()) {
             return;
@@ -67,10 +68,33 @@ class FetchPlacesApiJob implements ShouldQueue
             // posts a row to the Hub api_usage_log endpoint.
             $payload = (new GoogleMapsReviewsFetcher($apiKey, $usageLogger, $this->auditId))
                 ->fetch($gmapsUrl, $brandName);
+
+            // BB144 — fetch outlet photos via the legacy Place Details
+            // endpoint (PlacesApiService) so the dashboard can render
+            // thumbnails via AuditController::placePhoto. The reviews
+            // fetcher above uses the Places API (New) which has a
+            // tighter FIELD_MASK; rather than pollute that fetcher with
+            // a heavier mask, we run a parallel cheap call that ONLY
+            // captures photo_references + cache them onto place_raw +
+            // mirror under audit_evidence.places_api.photos for the
+            // PriceListDetector path. Failure here is non-fatal — the
+            // photo strip simply won't render.
+            if ($payload !== null && is_string($audit->place_id) && $audit->place_id !== '') {
+                $details = $placesApi->fetchPlaceDetails($audit->place_id);
+                $photos  = is_array($details['raw']['photos'] ?? null)
+                    ? $details['raw']['photos']
+                    : [];
+                if ($photos !== []) {
+                    $payload['photos'] = array_values($photos);
+                    $this->mergePhotosIntoPlaceRaw($audit, $photos);
+                }
+            }
+
             $this->writeEvidenceSlice($payload);
             $step?->markDone([
                 'review_count' => (int) ($payload['review_count'] ?? 0),
                 'rating'       => (float) ($payload['rating'] ?? 0.0),
+                'photo_count'  => (int) count((array) ($payload['photos'] ?? [])),
             ]);
         } catch (Throwable $e) {
             Log::warning('FetchPlacesApiJob: Places API call failed', [
@@ -80,6 +104,25 @@ class FetchPlacesApiJob implements ShouldQueue
             $this->writeEvidenceSlice(null);
             $step?->markFailed($e->getMessage());
         }
+    }
+
+    /**
+     * BB144 — merge photo references onto $audit->place_raw['photos'].
+     * The dashboard reads place_raw.photos directly (it's the canonical
+     * spot per the wizard's selectPlace contract). Preserves any
+     * existing place_raw payload that the wizard's autocomplete handler
+     * already wrote.
+     *
+     * @param array<int,array<string,mixed>> $photos
+     */
+    private function mergePhotosIntoPlaceRaw(BrandAudit $audit, array $photos): void
+    {
+        DB::transaction(function () use ($audit, $photos): void {
+            $fresh = BrandAudit::findOrFail($audit->id);
+            $raw   = is_array($fresh->place_raw) ? $fresh->place_raw : [];
+            $raw['photos'] = array_values($photos);
+            $fresh->update(['place_raw' => $raw]);
+        });
     }
 
     private function step(string $key): ?AuditStep

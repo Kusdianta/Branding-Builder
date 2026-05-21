@@ -251,10 +251,33 @@ class InstagramProfileAuditService
                 (string) $audit->service_type,
                 $audit->city !== null && $audit->city !== '' ? (string) $audit->city : null,
             );
-            $analysis['_meta'] = $meta;
+            // BB143 — preserve the scrape snapshot's raw_payload alongside
+            // the Claude analysis. The previous build wrote ONLY the
+            // analysis blob, which clobbered raw_payload.recent_posts;
+            // InstagramActivityScorer (Phase 4 score_digital) then
+            // returned null → DigitalPresenceScorer awarded 0/20 for
+            // Instagram even when the scrape itself succeeded.
+            //
+            // The merged shape carries:
+            //   - Claude analysis keys at top level (content_pillars,
+            //     voice_tone, posting_pattern, etc. — IG audit section
+            //     view reads these by name).
+            //   - raw_payload (recent_posts + profile + has_active_story)
+            //     so InstagramActivityScorer can compute its 20-pt
+            //     activity sub-score downstream.
+            //   - _meta (asset paths, scrape_status) for KonsistensiScorer
+            //     vision path + honest unavailability messages.
+            $snapshotBeforeAnalyze = (array) ($audit->instagram_audit ?? []);
+            $merged = array_merge(
+                $analysis,
+                [
+                    '_meta'       => $meta,
+                    'raw_payload' => $snapshotBeforeAnalyze['raw_payload'] ?? null,
+                ],
+            );
             $audit->update([
                 'instagram_audit_status' => 'done',
-                'instagram_audit'        => $analysis,
+                'instagram_audit'        => $merged,
             ]);
         } catch (Throwable $e) {
             Log::error('InstagramProfileAuditService::analyze: Claude analysis failed', [

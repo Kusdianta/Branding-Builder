@@ -57,9 +57,13 @@ final class AuditLabels
         'bonus_variasi_layanan'   => 'Variasi Layanan',
         'bonus_sop_keluhan'       => 'SOP Keluhan',
         'bonus_price_list'        => 'Daftar Harga',
-        'penalty_keterlambatan'   => 'Penalti Keterlambatan',
-        'penalty_pakaian_hilang'  => 'Penalti Pakaian Hilang',
-        'penalty_no_response_wa'  => 'Penalti No-Response WA',
+        // BB140 — relabelled from "Penalti X" to neutral "Keluhan 'X'"
+        // copy matching the PPT deck. "Penalti" felt punitive even when
+        // the score impact was zero; "Keluhan" describes what the rule
+        // is actually looking for in the GMaps review corpus.
+        'penalty_keterlambatan'   => "Keluhan 'telat/lambat'",
+        'penalty_pakaian_hilang'  => "Keluhan 'pakaian tertukar/hilang'",
+        'penalty_no_response_wa'  => "Keluhan 'tidak respons WA'",
     ];
 
     /**
@@ -229,6 +233,48 @@ final class AuditLabels
     public static function pillarColor(string $slug): string
     {
         return self::PILLAR_COLOR[$slug] ?? '#888888';
+    }
+
+    /**
+     * BB145 — qualitative tier label for an absolute 0-100 score.
+     * Mirrors the PPT deck tiers used at the pillar + overall level:
+     *
+     *   ≥85 → Sempurna
+     *   ≥70 → Sangat Baik
+     *   ≥55 → Baik
+     *   ≥35 → Cukup
+     *   <35 → Perlu Perbaikan
+     *
+     * The fractional tierForRatio() below remains the sub-bucket helper
+     * (driven by score/cap rather than an absolute threshold).
+     */
+    public static function pillarTier(?int $score): string
+    {
+        $s = (int) ($score ?? 0);
+        return match (true) {
+            $s >= 85 => 'Sempurna',
+            $s >= 70 => 'Sangat Baik',
+            $s >= 55 => 'Baik',
+            $s >= 35 => 'Cukup',
+            default  => 'Perlu Perbaikan',
+        };
+    }
+
+    /**
+     * BB145 — variant (good/warning/bad) for the absolute-score tier
+     * badges added at the overall + pillar level. Distinct from
+     * tierVariant() because the PPT 5-tier palette is wider than the
+     * 3-bucket sub-bucket palette.
+     */
+    public static function pillarTierVariant(?int $score): string
+    {
+        $s = (int) ($score ?? 0);
+        return match (true) {
+            $s >= 70 => 'good',     // Sempurna + Sangat Baik
+            $s >= 55 => 'good',     // Baik (still green-leaning)
+            $s >= 35 => 'warning',  // Cukup
+            default  => 'bad',      // Perlu Perbaikan
+        };
     }
 
     /**

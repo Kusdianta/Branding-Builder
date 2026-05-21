@@ -6,12 +6,16 @@ namespace App\Jobs;
 
 use App\Models\BrandAudit;
 use App\Services\CreditLedger;
+use App\Services\Recommendation\TargetScoreReasoningGenerator;
+use App\Services\TargetScoreCalculator;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Throwable;
 
 class AggregateAuditJob implements ShouldQueue
 {
@@ -74,6 +78,13 @@ class AggregateAuditJob implements ShouldQueue
                 'recommendations' => $recommendations,
                 'error_message'   => $errorMessage,
             ]);
+
+            // Phase 12c.4 FIX E — generate the target-skor reasoning
+            // paragraph and persist into audit_evidence. Fire-and-
+            // forget: an LLM failure never blocks the audit's DONE
+            // flip. The view degrades to "no reasoning shown" when
+            // the field is absent.
+            $this->generateTargetScoreReasoning($audit->fresh(), $overallScore);
         } catch (\Throwable $e) {
             Log::error('AggregateAuditJob failed', [
                 'audit_id' => $this->auditId,
@@ -213,5 +224,61 @@ class AggregateAuditJob implements ShouldQueue
         }
 
         return $recs;
+    }
+
+    // ── Phase 12c.4 FIX E — Target Skor LLM reasoning ─────────────────────────
+
+    private function generateTargetScoreReasoning(BrandAudit $audit, int $overallScore): void
+    {
+        try {
+            $pillarScores = (array) ($audit->pillar_scores ?? []);
+            $pillarInts   = [];
+            foreach ($pillarScores as $slug => $data) {
+                if (is_array($data) && isset($data['score'])) {
+                    $pillarInts[$slug] = (int) $data['score'];
+                }
+            }
+            $payload = TargetScoreCalculator::compute(
+                $overallScore,
+                $pillarInts,
+                (array) ($audit->sub_bucket_scores ?? []),
+                (array) ($audit->score_breakdown ?? []),
+            );
+            if ($payload['actions'] === []) {
+                return;
+            }
+
+            /** @var TargetScoreReasoningGenerator $generator */
+            $generator = app(TargetScoreReasoningGenerator::class);
+            $generator->setAuditContext($audit->id);
+            $reasoning = $generator->generate(
+                $audit,
+                $payload['current'],
+                $payload['target'],
+                $payload['actions'],
+            );
+
+            DB::transaction(function () use ($audit, $payload, $reasoning): void {
+                $fresh    = BrandAudit::findOrFail($audit->id);
+                $evidence = (array) ($fresh->audit_evidence ?? []);
+                $evidence['target_score_reasoning'] = [
+                    'current'      => $payload['current'],
+                    'target'       => $payload['target'],
+                    'delta'        => $payload['delta'],
+                    'actions'      => $payload['actions'],
+                    'paragraphs'   => (array) ($reasoning['paragraphs'] ?? []),
+                    'generated_at' => (string) ($reasoning['generated_at'] ?? now()->toIso8601String()),
+                ];
+                $fresh->update(['audit_evidence' => $evidence]);
+            });
+        } catch (Throwable $e) {
+            // Never block the DONE flip on this. The view safely
+            // hides the reasoning block when audit_evidence
+            // .target_score_reasoning is absent.
+            Log::warning('AggregateAuditJob: target_score_reasoning generation failed', [
+                'audit_id' => $audit->id,
+                'error'    => $e->getMessage(),
+            ]);
+        }
     }
 }

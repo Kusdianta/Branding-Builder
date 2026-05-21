@@ -132,6 +132,7 @@ final class DigitalPresenceScorer
     private function scoreV3(array $inputs): PillarScore
     {
         $hasGmaps    = (bool) ($inputs['has_gmaps'] ?? false);
+        $hasIg       = (bool) ($inputs['has_instagram'] ?? false);
         $hasWa       = (bool) ($inputs['has_wa_business'] ?? false);
         $reviewCount = (int) ($inputs['review_count'] ?? 0);
 
@@ -147,23 +148,59 @@ final class DigitalPresenceScorer
         $tiktokStatus = (string) ($inputs['tiktok_check_status'] ?? 'not_checked');
 
         $gmaps     = $hasGmaps ? 25 : 0;
-        $instagram = $igActivityScore === null ? 0 : (int) min(20, max(0, (int) $igActivityScore));
+        // Phase 12c.4 FIX 5 — Instagram presence floor.
+        //
+        // Root cause: when InstagramActivityScorer can't compute a
+        // graded activity score (the IG scrape returned no
+        // ``recent_posts`` / ``has_active_story`` payload — common
+        // when the profile is private or the scrape was rate-limited),
+        // ``$igActivityScore`` is null and Instagram scored 0/20 even
+        // though the operator clearly has an active IG handle. The
+        // result was unfair zeros on the dashboard for brands that
+        // *do* have IG presence — only their activity data couldn't
+        // be auto-graded.
+        //
+        // Fix: when activity is ungraded AND a handle exists in
+        // touchpoints, award 10/20 — a "presence-only" floor that
+        // reflects "we know IG exists; we just couldn't measure
+        // recency". Graded scores 11+ still beat the floor; graded
+        // scores 0-10 round up to the floor (the floor is the lower
+        // bound for any IG-having brand).
+        $instagram = match (true) {
+            $igActivityScore !== null   => (int) min(20, max(0, (int) $igActivityScore)),
+            $hasIg                      => 10,  // BB145 presence floor
+            default                     => 0,
+        };
+        // When the floor is applied, surface that in the evidence so
+        // operators understand the score has been clamped up rather
+        // than measured. Downstream breakdown rendering reads this.
+        $instagramSourceForBreakdown = $igActivityScore === null && $hasIg
+            ? 'Sumber: handle Instagram tercatat (skor minimum kehadiran 10/20 — aktivitas tidak dapat dianalisis)'
+            : $igActivitySource;
         $website   = $websiteIsLive ? 20 : 0;
         $wa        = $hasWa ? 15 : 0;
         // PPT: TikTok promoted back to 10 in v3 — operator-locked.
         $tiktok    = $tiktokStatus === 'found' ? 10 : 0;
 
-        $review10 = $reviewCount >= 10 ? 5 : 0;
-        $review50 = $reviewCount >= 50 ? 5 : 0;
+        // BB141 — single sub-bucket replaces the BB117 5+5 stack. PPT
+        // rubric awards max 10 pts from review volume: 10 if ≥50, 5 if
+        // ≥10 (but <50), else 0. The previous design split this into
+        // two 5-pt rows which double-counted visually ("0 + 5" vs
+        // "0 + 10") and confused operators reading the breakdown.
+        // Math is identical to the prior stack at every threshold.
+        $reviewBonus = match (true) {
+            $reviewCount >= 50 => 10,
+            $reviewCount >= 10 => 5,
+            default            => 0,
+        };
 
         $subBuckets = [
-            'has_gmaps'           => $gmaps,
-            'has_instagram'       => $instagram,
-            'has_website'         => $website,
-            'has_wa'              => $wa,
-            'has_tiktok'          => $tiktok,
-            'review_count_5plus'  => $review10,
-            'review_count_50plus' => $review50,
+            'has_gmaps'     => $gmaps,
+            'has_instagram' => $instagram,
+            'has_website'   => $website,
+            'has_wa'        => $wa,
+            'has_tiktok'    => $tiktok,
+            'review_bonus'  => $reviewBonus,
         ];
 
         $total = max(0, min(100, array_sum($subBuckets)));
@@ -174,12 +211,14 @@ final class DigitalPresenceScorer
                 'score'      => $instagram,
                 'cap'        => 20,
                 'raw_inputs' => [
-                    'activity_score'    => $igActivityScore,
-                    'last_post_days'    => $igActivityEvidence['last_post_days_ago'] ?? null,
-                    'has_active_story'  => $igActivityEvidence['has_active_story']   ?? null,
-                    'posts_per_week'    => $igActivityEvidence['posts_per_week_avg'] ?? null,
-                    'cadence_variance'  => $igActivityEvidence['cadence_variance']   ?? null,
-                    'source'            => $igActivitySource,
+                    'activity_score'        => $igActivityScore,
+                    'handle_present'        => $hasIg,
+                    'presence_floor_applied'=> $igActivityScore === null && $hasIg,
+                    'last_post_days'        => $igActivityEvidence['last_post_days_ago'] ?? null,
+                    'has_active_story'      => $igActivityEvidence['has_active_story']   ?? null,
+                    'posts_per_week'        => $igActivityEvidence['posts_per_week_avg'] ?? null,
+                    'cadence_variance'      => $igActivityEvidence['cadence_variance']   ?? null,
+                    'source'                => $instagramSourceForBreakdown,
                 ],
                 'formula'             => 'graded_activity',
                 'unavailable_reason'  => is_string($igActivityUnavail) ? $igActivityUnavail : null,
@@ -213,27 +252,23 @@ final class DigitalPresenceScorer
                 ],
                 'explanation_id' => 'tiktok_check_v3',
             ],
-            'review_count_5plus' => [
-                'score'      => $review10,
-                'cap'        => 5,
+            // BB141 — single review_bonus row replaces 5+5 stack.
+            'review_bonus' => [
+                'score'      => $reviewBonus,
+                'cap'        => 10,
+                'tier'       => match (true) {
+                    $reviewCount >= 50 => '≥50 ulasan',
+                    $reviewCount >= 10 => '10–49 ulasan',
+                    default            => '<10 ulasan',
+                },
                 'raw_inputs' => ['review_count' => $reviewCount, 'source' => 'Google Maps Places API'],
                 'formula'    => 'deterministic_threshold',
                 'tier_table' => [
-                    ['range' => '≥10', 'points' => 5, 'matched' => $reviewCount >= 10],
-                    ['range' => '<10', 'points' => 0, 'matched' => $reviewCount < 10],
+                    ['range' => '≥50 ulasan',   'points' => 10, 'matched' => $reviewCount >= 50],
+                    ['range' => '10–49 ulasan', 'points' => 5,  'matched' => $reviewCount >= 10 && $reviewCount < 50],
+                    ['range' => '<10 ulasan',   'points' => 0,  'matched' => $reviewCount < 10],
                 ],
-                'explanation_id' => 'review_count_5plus_v3',
-            ],
-            'review_count_50plus' => [
-                'score'      => $review50,
-                'cap'        => 5,
-                'raw_inputs' => ['review_count' => $reviewCount, 'source' => 'Google Maps Places API'],
-                'formula'    => 'deterministic_threshold',
-                'tier_table' => [
-                    ['range' => '≥50', 'points' => 5, 'matched' => $reviewCount >= 50],
-                    ['range' => '<50', 'points' => 0, 'matched' => $reviewCount < 50],
-                ],
-                'explanation_id' => 'review_count_50plus_v3',
+                'explanation_id' => 'review_bonus_v3',
             ],
         ];
 

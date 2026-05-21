@@ -36,6 +36,27 @@
     $igLabel = $socialLabels[$igCheckStatus] ?? null;
     $ttLabel = $socialLabels[$ttCheckStatus] ?? null;
     $waLabel = $waLabels[$whatsappValidity] ?? null;
+
+    // BB130 — compact human-readable follower count. The checker
+    // returns the absolute number (e.g. 12_400); the wizard shows a
+    // single short label next to "Ditemukan" so operators can spot
+    // the wrong account before submitting.
+    $formatFollowers = static function (?int $count): ?string {
+        if ($count === null || $count < 0) {
+            return null;
+        }
+        if ($count < 1000) {
+            return $count . ' followers';
+        }
+        if ($count < 1_000_000) {
+            $thousands = $count / 1000;
+            $label = $thousands >= 100 ? number_format($thousands, 0) : number_format($thousands, 1);
+            return rtrim(rtrim($label, '0'), '.') . 'K followers';
+        }
+        $millions = $count / 1_000_000;
+        $label    = $millions >= 100 ? number_format($millions, 0) : number_format($millions, 1);
+        return rtrim(rtrim($label, '0'), '.') . 'M followers';
+    };
 @endphp
 
 <div class="bb-step bb-step-3">
@@ -73,6 +94,17 @@
             <span class="bb-op-checkbox__body">
                 <strong>SOP Keluhan + Kompensasi</strong>
                 <span class="bb-op-checkbox__hint">Ada prosedur tertulis jika pakaian hilang atau rusak.</span>
+            </span>
+        </label>
+
+        {{-- BB137 — fourth operational signal added. Feeds Brand
+             Experience bonus_price_list when paired with the auto-
+             detected price_list_detection from PriceListDetector. --}}
+        <label class="bb-op-checkbox">
+            <input type="checkbox" wire:model.live="declPriceList" />
+            <span class="bb-op-checkbox__body">
+                <strong>Daftar harga dipublikasikan</strong>
+                <span class="bb-op-checkbox__hint">Daftar tarif terpajang di outlet, website, atau sosmed.</span>
             </span>
         </label>
     </div>
@@ -119,6 +151,14 @@
                 <span class="bb-status-pill bb-status-pill--{{ $igLabel['tone'] }}">
                     {{ $igLabel['text'] }}
                 </span>
+                {{-- BB130 — follower count next to the "Ditemukan" badge so
+                     operators can confirm they grabbed the right account
+                     before submitting the audit. --}}
+                @if ($igCheckStatus === 'found' && ($followerLabel = $formatFollowers($igFollowerCount ?? null)))
+                    <span class="bb-status-meta" style="font-size: 12px; color: var(--text-secondary); margin-left: 8px;">
+                        · {{ $followerLabel }}
+                    </span>
+                @endif
             </div>
         @endif
 
@@ -131,8 +171,13 @@
             </p>
         @endif
         @if ($igCheckStatus === 'error')
+            {{-- BB131 — checker uses a direct HTTP call to instagram.com, not
+                 the worker, so the prior "Worker tidak bisa cek" copy was
+                 misleading. Reword to describe what actually happened
+                 (Instagram rate-limited / blocked the unauthenticated probe)
+                 and reassure that the field is still usable. --}}
             <p class="bb-hint">
-                Worker tidak bisa cek sekarang. Pastikan worker aktif lalu coba lagi.
+                Belum bisa cek otomatis sekarang (Instagram membatasi pengecekan tanpa login). Lanjutkan saja — handle ini akan tetap diaudit pada tahap analisis.
             </p>
         @endif
 
@@ -188,23 +233,105 @@
     </div>
 
     {{-- ============================================================
-         TikTok — bonus signal, manual verification
-         BB107: gated behind the wizard_show_tiktok feature flag.
-                When the flag is off, $tiktokUsername stays null forever
-                and the Step 3 gate's TikTok branch becomes a no-op
-                (empty handle = no constraint). Server-side scoring +
-                /check-handle/tiktok route + TikTokHandleChecker service
-                stay live so re-enabling is a single env flip.
-                NOTE: TikTokHandleChecker has the same fixture-rot
-                problem as the pre-BB107 IG checker (anonymous TT HTML
-                scraping no longer reliably distinguishes real from fake
-                handles). Fix BB108 before flipping this flag back on.
+         BB138 — Website URL with HTTP liveness check.
+         Operator can paste with or without scheme; checkWebsite()
+         prepends https:// before probing. The wizard probe is UX
+         feedback; ScorePillarsJob re-runs WebsiteLivenessScorer at
+         scoring time against touchpoints.website_url, so a site that
+         flickered down between submit and scoring is reflected in the
+         final pillar — not in this badge.
          ============================================================ --}}
-    @if (config('features.wizard_show_tiktok', false))
+    @php
+        $websiteStatusLabel = match ($websiteCheckStatus) {
+            'checking' => ['text' => 'Mengecek...',            'tone' => 'warn'],
+            'live'     => ['text' => 'Aktif',                  'tone' => 'ok'],
+            'dead'     => ['text' => 'Tidak aktif',            'tone' => 'bad'],
+            'error'    => ['text' => 'Belum bisa cek',         'tone' => 'warn'],
+            default    => null,
+        };
+    @endphp
+    <div class="bb-field bb-field--optional">
+        <label for="wizard-website-url">
+            <i class="ti ti-world"></i> Website
+        </label>
+        <div class="bb-input-with-button">
+            <input
+                type="text"
+                id="wizard-website-url"
+                wire:model.live.debounce.400ms="wizardWebsiteUrl"
+                placeholder="https://"
+                inputmode="url"
+                autocomplete="off"
+                autocapitalize="off"
+                spellcheck="false"
+                @class([
+                    'bb-input',
+                    'bb-input-ok'  => $websiteCheckStatus === 'live',
+                    'bb-input-bad' => $websiteCheckStatus === 'dead',
+                ])
+                style="flex: 1;"
+            />
+            <button
+                type="button"
+                wire:click="checkWebsite"
+                wire:loading.attr="disabled"
+                wire:target="checkWebsite"
+                @disabled(empty(trim($wizardWebsiteUrl)) || $websiteCheckStatus === 'checking')
+                class="bb-btn-check"
+            >
+                <span wire:loading.remove wire:target="checkWebsite">Cek dulu</span>
+                <span wire:loading wire:target="checkWebsite">Mengecek...</span>
+            </button>
+        </div>
+
+        @if ($websiteStatusLabel)
+            <div class="bb-status-row">
+                <span class="bb-status-pill bb-status-pill--{{ $websiteStatusLabel['tone'] }}">
+                    {{ $websiteStatusLabel['text'] }}
+                </span>
+                @if ($websiteCheckStatus === 'live')
+                    <span class="bb-status-meta" style="font-size: 12px; color: var(--text-secondary); margin-left: 8px;">
+                        @if ($websiteCheckHttpStatus)
+                            · HTTP {{ $websiteCheckHttpStatus }}
+                        @endif
+                        @if ($websiteCheckHost)
+                            · {{ $websiteCheckHost }}
+                        @endif
+                    </span>
+                @elseif ($websiteCheckStatus === 'dead' && $websiteCheckHttpStatus)
+                    <span class="bb-status-meta" style="font-size: 12px; color: var(--text-secondary); margin-left: 8px;">
+                        · HTTP {{ $websiteCheckHttpStatus }}
+                    </span>
+                @endif
+            </div>
+        @endif
+
+        @if ($websiteCheckStatus === 'dead')
+            <p class="bb-hint">
+                Website tidak merespons saat dicek. Audit tetap lanjut, tapi sub-skor Website (20 poin) tidak akan diberi.
+            </p>
+        @endif
+        @if ($websiteCheckStatus === 'error')
+            <p class="bb-hint">
+                Belum bisa cek otomatis sekarang. Boleh dilanjut — server kita akan cek ulang saat audit dijalankan.
+            </p>
+        @endif
+
+        @error('wizardWebsiteUrl')<p class="bb-error">{{ $message }}</p>@enderror
+    </div>
+
+    {{-- ============================================================
+         TikTok — manual verification
+         BB135: un-gated. TikTokHandleChecker (BB113) calls TikTok's
+         /api/user/detail/ JSON endpoint, which the desktop SPA uses
+         after the shell loads — real vs fake handles disambiguate
+         reliably. "opsional · bonus" badge removed: TikTok contributes
+         +10 pts to Digital Presence, it's a genuine touchpoint, not
+         a tie-breaker bonus. The field stays leave-blank-friendly.
+         ============================================================ --}}
     <div class="bb-field bb-field--optional">
         <label for="tiktok-username">
             <i class="ti ti-brand-tiktok"></i> TikTok
-            <span class="bb-badge bb-badge--muted">opsional · bonus</span>
         </label>
         <div class="bb-input-with-button">
             <div class="bb-input-prefix">
@@ -241,23 +368,36 @@
                 <span class="bb-status-pill bb-status-pill--{{ $ttLabel['tone'] }}">
                     {{ $ttLabel['text'] }}
                 </span>
+                @if ($ttCheckStatus === 'found' && ($followerLabel = $formatFollowers($ttFollowerCount ?? null)))
+                    <span class="bb-status-meta" style="font-size: 12px; color: var(--text-secondary); margin-left: 8px;">
+                        · {{ $followerLabel }}
+                    </span>
+                @endif
             </div>
         @endif
 
         @if ($ttCheckStatus === 'not_found')
             <p class="bb-error">
-                Akun {{ '@' . $tiktokUsername }} tidak ditemukan di TikTok. Periksa lagi atau kosongkan.
+                Akun {{ '@' . $tiktokUsername }} tidak ditemukan di TikTok — periksa ejaan, atau kosongkan kalau memang belum punya.
             </p>
         @endif
         @if ($ttCheckStatus === 'error')
+            {{-- BB135 — TikTok aggressively blocks the unauthenticated
+                 JSON probe (CAPTCHA / 4xx). The check is best-effort.
+                 When TikTok rate-limits us, we tell the user the check
+                 is temporarily unavailable and let them proceed; the
+                 wizard gate treats 'error' as advisory, not blocking.
+                 If the handle was real, server-side scoring still picks
+                 up the URL via touchpoints.tiktok_url (bonus 10pt is
+                 awarded only when ttCheckStatus === 'found'; an
+                 unverified handle scores 0 from this bucket). --}}
             <p class="bb-hint">
-                Worker tidak bisa cek sekarang. Pastikan worker aktif lalu coba lagi.
+                Belum bisa cek otomatis sekarang (TikTok membatasi pengecekan tanpa login). Lanjutkan saja — handle akan tercatat, tapi bonus 10 poin baru aktif ketika verifikasi berhasil.
             </p>
         @endif
 
         @error('tiktokUsername')<p class="bb-error">{{ $message }}</p>@enderror
     </div>
-    @endif
 
     <p class="bb-hint">
         Boleh tempel link profil lengkap (misalnya <code>instagram.com/namaakun</code>) — saya akan ambil username-nya saja.

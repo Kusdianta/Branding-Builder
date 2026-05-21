@@ -99,21 +99,25 @@ class DigitalPresenceScorerV3Test extends TestCase
     }
 
     #[Test]
-    public function v3_review_bonus_split_into_5plus_and_50plus(): void
+    public function v3_review_bonus_consolidated_into_single_sub_bucket(): void
     {
+        // BB141 — review bonus was split into 5plus + 50plus (5 + 5 = 10)
+        // in the BB117 build. The single-line presentation lands the math
+        // in ONE sub-bucket: 10 if ≥50, 5 if ≥10 (and <50), 0 if <10. The
+        // legacy split keys must NOT appear in V3 output anymore.
         $zero = $this->scorer->score($this->v3Inputs(['review_count' => 0]));
-        $this->assertSame(0, $zero->subBucketScores['review_count_5plus']);
-        $this->assertSame(0, $zero->subBucketScores['review_count_50plus']);
+        $this->assertSame(0, $zero->subBucketScores['review_bonus']);
+        $this->assertArrayNotHasKey('review_count_5plus',  $zero->subBucketScores);
+        $this->assertArrayNotHasKey('review_count_50plus', $zero->subBucketScores);
 
         $ten = $this->scorer->score($this->v3Inputs(['review_count' => 10]));
-        $this->assertSame(5, $ten->subBucketScores['review_count_5plus']);
-        $this->assertSame(0, $ten->subBucketScores['review_count_50plus']);
+        $this->assertSame(5, $ten->subBucketScores['review_bonus']);
 
         $fifty = $this->scorer->score($this->v3Inputs(['review_count' => 60]));
-        $this->assertSame(5, $fifty->subBucketScores['review_count_5plus']);
-        $this->assertSame(5, $fifty->subBucketScores['review_count_50plus']);
+        $this->assertSame(10, $fifty->subBucketScores['review_bonus']);
 
-        $this->assertArrayNotHasKey('review_bonus', $fifty->subBucketScores);
+        $thousand = $this->scorer->score($this->v3Inputs(['review_count' => 5000]));
+        $this->assertSame(10, $thousand->subBucketScores['review_bonus']);
     }
 
     #[Test]

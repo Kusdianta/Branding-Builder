@@ -49,3 +49,13 @@ Route::post('/audit/{token}/retry-step', [AuditController::class, 'retryStep'])
     ->name('audit.retry-step');
 
 Route::get('/audit/{token}/kit/download', [AuditController::class, 'downloadKit'])->name('audit.kit.download');
+
+// BB144 — Places photo proxy. Streams a single outlet photo through
+// our backend so the dashboard can render thumbnails without exposing
+// the Google Places API key in client HTML. Throttle is intentionally
+// loose (60/min) — dashboard renders up to ~6-8 thumbnails per page
+// load and the cache hit-rate is high after the first request.
+Route::get('/audit/{token}/place-photo/{idx}', [AuditController::class, 'placePhoto'])
+    ->whereNumber('idx')
+    ->middleware('throttle:60,1')
+    ->name('audit.place-photo');

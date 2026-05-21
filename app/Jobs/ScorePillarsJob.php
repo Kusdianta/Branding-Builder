@@ -431,7 +431,17 @@ class ScorePillarsJob implements ShouldQueue
         $pillarInputs[ScoringRubric::PILLAR_DIGITAL]['website_is_live']                       = (bool) $webResult['is_live'];
         $pillarInputs[ScoringRubric::PILLAR_DIGITAL]['website_evidence']                      = (array) ($webResult['evidence'] ?? []);
         $pillarInputs[ScoringRubric::PILLAR_DIGITAL]['website_unavailable_reason']            = $webResult['unavailable_reason'] ?? null;
-        $pillarInputs[ScoringRubric::PILLAR_DIGITAL]['tiktok_check_status']                   = (string) ($audit->tiktok_check_status ?? 'not_checked');
+        // Phase 12c.4 FIX D — TikTok verification flag flows through
+        // touchpoints (no DB column exists for tiktok_check_status).
+        // The wizard's oembed checker writes touchpoints.tiktok_verified
+        // when the handle resolves; ScorePillarsJob maps that boolean
+        // back to the 'found' string the V3 scorer expects. Legacy
+        // ``tiktok_check_status`` accessor is honored when present.
+        $tiktokVerified = (bool) ($touchpoints['tiktok_verified'] ?? false);
+        $legacyTtStatus = (string) ($audit->tiktok_check_status ?? '');
+        $pillarInputs[ScoringRubric::PILLAR_DIGITAL]['tiktok_check_status'] = $tiktokVerified
+            ? 'found'
+            : ($legacyTtStatus !== '' ? $legacyTtStatus : 'not_checked');
 
         // Konsistensi bundle: tag version. Variety + price_list flow via $v3Context.
         $pillarInputs[ScoringRubric::PILLAR_KONSISTENSI]['_wizard_version'] = BrandAudit::WIZARD_V3;

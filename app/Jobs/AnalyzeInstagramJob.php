@@ -43,6 +43,15 @@ class AnalyzeInstagramJob implements ShouldQueue
     /** Claude analysis budget plus retry headroom. */
     public int $timeout = 180;
 
+    /**
+     * BB132 — analyze() is a no-op when scrape didn't set status='scraped'
+     * and never-throws on Claude failure (it persists a 'claude_analysis_failed'
+     * status). Queue retries on a 180s timeout are dead weight — they
+     * just delay the failure surface to the user. Operators can hit
+     * BB59's retryStep to force a fresh attempt.
+     */
+    public int $tries = 1;
+
     public function __construct(public readonly string $auditId) {}
 
     public function handle(InstagramProfileAuditService $service): void

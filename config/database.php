@@ -38,9 +38,16 @@ return [
             'database' => env('DB_DATABASE', database_path('database.sqlite')),
             'prefix' => '',
             'foreign_key_constraints' => env('DB_FOREIGN_KEYS', true),
-            'busy_timeout' => null,
-            'journal_mode' => null,
-            'synchronous' => null,
+            // BB133 — pipeline writes contend for the brand_audits row.
+            // GatherEvidenceJob + ScorePillarJob + queue worker reservation
+            // can all attempt SQLite writes within the same second on Windows
+            // where Herd's php-fpm spawns multiple workers. busy_timeout makes
+            // each writer wait up to 10s for the lock instead of immediately
+            // raising SQLSTATE[HY000] 5. WAL plus NORMAL fsync keeps reads
+            // non-blocking while writes serialize behind the held lock.
+            'busy_timeout' => env('DB_SQLITE_BUSY_TIMEOUT', 10000),
+            'journal_mode' => env('DB_SQLITE_JOURNAL_MODE', 'WAL'),
+            'synchronous' => env('DB_SQLITE_SYNCHRONOUS', 'NORMAL'),
             'transaction_mode' => 'DEFERRED',
         ],
 

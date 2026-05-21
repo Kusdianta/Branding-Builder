@@ -14,7 +14,10 @@ use App\Models\BrandAudit;
 use Illuminate\Bus\Batch;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Bus;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -157,6 +160,83 @@ class AuditController extends Controller
             'status' => 'queued',
             'step'   => $stepKey,
         ], 202);
+    }
+
+    /**
+     * BB144 — proxy a Google Places photo through our backend so the
+     * dashboard can render outlet thumbnails without leaking the
+     * server-side API key into the HTML. Photo references live on
+     * $audit->place_raw['photos'][$idx]['photo_reference'] (captured
+     * by the wizard Step 1 selectPlace handler via PlacesApiService).
+     *
+     * The image binary is cached in storage/places-photos/ keyed by
+     * (placeId, photoIdx, maxWidth) so a second page-view doesn't
+     * re-bill us against the Google Places Photo quota. TTL: 30 days.
+     *
+     * Returns 404 when:
+     *   - the audit token doesn't resolve
+     *   - place_raw is null (legacy audit before BB90)
+     *   - the index is out of bounds
+     *   - Google returns a non-2xx (rate limit, ref expired)
+     *
+     * @return Response|StreamedResponse
+     */
+    public function placePhoto(Request $request, string $token, int $idx)
+    {
+        $audit = BrandAudit::where('session_token', $token)->firstOrFail();
+
+        $placeRaw = is_array($audit->place_raw) ? $audit->place_raw : [];
+        $photos   = is_array($placeRaw['photos'] ?? null) ? $placeRaw['photos'] : [];
+        $photo    = $photos[$idx] ?? null;
+        if (! is_array($photo)) {
+            abort(404);
+        }
+        $photoRef = (string) ($photo['photo_reference'] ?? '');
+        if ($photoRef === '') {
+            abort(404);
+        }
+
+        $maxWidth = (int) min(800, max(120, (int) $request->input('w', 400)));
+        $apiKey   = (string) config('services.google.maps_api_key', '');
+        if ($apiKey === '') {
+            abort(404);
+        }
+
+        $cacheKey = sprintf(
+            'place_photo:%s:%d:%d',
+            (string) ($audit->place_id ?? $token),
+            $idx,
+            $maxWidth,
+        );
+
+        // Cache the binary as base64 — Laravel cache drivers (file,
+        // redis) round-trip strings reliably. 30-day TTL: photo
+        // references typically rotate at a slower cadence; if Google
+        // returns 404 next refresh we'll re-cache the failure as a
+        // shorter-lived empty string.
+        $imageData = Cache::remember($cacheKey, 60 * 60 * 24 * 30, function () use ($photoRef, $maxWidth, $apiKey): ?string {
+            try {
+                $response = Http::timeout(8)
+                    ->withOptions(['allow_redirects' => true])
+                    ->get('https://maps.googleapis.com/maps/api/place/photo', [
+                        'maxwidth'        => $maxWidth,
+                        'photo_reference' => $photoRef,
+                        'key'             => $apiKey,
+                    ]);
+            } catch (\Throwable) {
+                return null;
+            }
+            return $response->successful() ? $response->body() : null;
+        });
+
+        if (! is_string($imageData) || $imageData === '') {
+            abort(404);
+        }
+
+        return response($imageData, 200, [
+            'Content-Type'  => 'image/jpeg',
+            'Cache-Control' => 'public, max-age=86400, stale-while-revalidate=604800',
+        ]);
     }
 
     public function downloadKit(string $token): StreamedResponse

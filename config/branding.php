@@ -68,6 +68,12 @@ return [
             'has_website'   => ['cap' => 20, 'type' => 'deterministic'],
             'has_wa'        => ['cap' => 15, 'type' => 'deterministic'],
             'has_tiktok'    => ['cap' => 10, 'type' => 'deterministic'],
+            // BB141 — cap is 15 for the legacy v1/v2 path (5+15 split).
+            // V3 audits award max 10 from a single tier (≥50=10, ≥10=5)
+            // and override this cap in the per-row scoreBreakdown payload.
+            // The dashboard reads $bd['cap'] when present, falling back
+            // to this config value only for legacy rows without a
+            // per-row cap.
             'review_bonus'  => ['cap' => 15, 'type' => 'deterministic'],
         ],
     ],

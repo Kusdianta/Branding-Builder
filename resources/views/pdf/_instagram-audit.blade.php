@@ -43,6 +43,31 @@
     $banner = null;
     if ($igStatus !== 'done') {
         $banner = $statusBannerMap[$igStatus] ?? null;
+        // BB132 — mirror the dashboard view's per-error-code refinement
+        // so the PDF surface tells the same story (worker timeout vs.
+        // auth vs. analysis vs. generic).
+        if ($banner !== null && $igStatus === 'audit_failed') {
+            $errDetail = (string) ($igAudit['error'] ?? '');
+            if (str_starts_with($errDetail, 'worker_unavailable')) {
+                $banner = [
+                    'severity' => 'warning',
+                    'title'    => 'Audit Instagram gagal — worker tidak merespons',
+                    'body'     => 'Worker Instagram tidak menjawab dalam waktu yang tersedia (timeout). Jalankan ulang dalam 1–2 menit; jika berulang, periksa worker via /admin/worker-health.',
+                ];
+            } elseif (str_starts_with($errDetail, 'worker_auth_failed')) {
+                $banner = [
+                    'severity' => 'warning',
+                    'title'    => 'Audit Instagram gagal — autentikasi worker',
+                    'body'     => 'Worker menolak request audit (token salah atau kedaluwarsa). Operator perlu memeriksa konfigurasi WORKER_AUTH_TOKEN.',
+                ];
+            } elseif (str_starts_with($errDetail, 'claude_analysis_failed')) {
+                $banner = [
+                    'severity' => 'warning',
+                    'title'    => 'Audit Instagram tersaji sebagian — analisis AI gagal',
+                    'body'     => 'Scraping berhasil, analisis AI gagal. Data mentah tersimpan; coba jalankan ulang untuk regenerasi.',
+                ];
+            }
+        }
         // BB14 contract preserved: no IG audit at all → render nothing.
         // The bottom-summary footer is enough context for the operator;
         // a banner inside the document for "we never tried" adds noise.

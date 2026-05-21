@@ -44,6 +44,20 @@ class FetchInstagramAuditJob implements ShouldQueue
 
     public int $timeout = 240;
 
+    /**
+     * BB132 — InstagramProfileAuditService is never-throw: every failure
+     * path persists a terminal status onto the audit row (worker_unavailable,
+     * credentials_stale, profile_not_found, etc.). The only way this job
+     * "fails" in the queue's eyes is if the wall clock blows past 240s
+     * (two credential attempts × 120s worker HTTP timeout). When that
+     * happens, retrying buys nothing — the next attempt hits the same
+     * hung worker and the user just waits another four minutes. Cap at
+     * one attempt; the dashboard surfaces a "worker tidak merespons"
+     * banner and the BB59 retryStep button gives operators an explicit
+     * retry path.
+     */
+    public int $tries = 1;
+
     public function __construct(public readonly string $auditId) {}
 
     public function handle(InstagramProfileAuditService $service): void
