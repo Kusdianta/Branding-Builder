@@ -350,8 +350,15 @@ new class extends Component {
      * user-specific) so a single check per minute covers everyone. The
      * key is invalidated by submit() before the hard gate decision.
      */
-    public function checkPlatformHealth(): void
+    public function checkPlatformHealth(bool $force = false): void
     {
+        // "Cek lagi" passes $force=true so the button actually re-probes
+        // the platform instead of returning the same 60s-cached result
+        // (the old button re-read the cache and looked broken).
+        if ($force) {
+            Cache::forget('platform-health');
+        }
+
         $this->platformHealth = Cache::remember(
             'platform-health',
             60,
@@ -1466,9 +1473,16 @@ new class extends Component {
                          hard-gate via the modal below if still unhealthy. --}}
                     @if (! ($platformHealth['healthy'] ?? true))
                         <div class="bb-warning-banner" style="margin-bottom: 16px; padding: 12px 16px; background: #FFF7ED; border: 1px solid #FED7AA; border-left: 4px solid var(--color-warning); border-radius: var(--radius-md); color: var(--text-primary); font-size: 13px; line-height: 1.5;">
-                            <strong>⚠ Beberapa worker sedang tidak aktif.</strong>
-                            Audit mungkin gagal kalau dimulai sekarang.
-                            <button type="button" wire:click="checkPlatformHealth" style="margin-left: 8px; background: none; border: none; color: var(--text-link); text-decoration: underline; cursor: pointer; padding: 0; font-size: 13px;">
+                            <strong>⚠ Sistem belum sepenuhnya siap.</strong>
+                            {{-- Name the actual failing service(s) instead of a
+                                 generic "worker tidak aktif" — usually it's the
+                                 queue worker, not the scraping worker. --}}
+                            @foreach (($platformHealth['services'] ?? []) as $svc)
+                                @if (! ($svc['ok'] ?? true))
+                                    {{ $svc['message'] }}
+                                @endif
+                            @endforeach
+                            <button type="button" wire:click="checkPlatformHealth(true)" style="margin-left: 8px; background: none; border: none; color: var(--text-link); text-decoration: underline; cursor: pointer; padding: 0; font-size: 13px;">
                                 Cek lagi
                             </button>
                         </div>
