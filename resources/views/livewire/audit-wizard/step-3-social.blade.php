@@ -133,16 +133,18 @@
                     ])
                 />
             </div>
+            {{-- BB135 — single "Cek dulu" button checks Instagram + TikTok at
+                 once via checkBothHandles (parallel through the worker). --}}
             <button
                 type="button"
-                wire:click="checkInstagram"
+                wire:click="checkBothHandles"
                 wire:loading.attr="disabled"
-                wire:target="checkInstagram"
-                @disabled(empty($instagramUsername) || $igCheckStatus === 'checking')
+                wire:target="checkBothHandles"
+                @disabled((empty($instagramUsername) && empty($tiktokUsername)) || $igCheckStatus === 'checking' || $ttCheckStatus === 'checking')
                 class="bb-btn-check"
             >
-                <span wire:loading.remove wire:target="checkInstagram">Cek dulu</span>
-                <span wire:loading wire:target="checkInstagram">Mengecek...</span>
+                <span wire:loading.remove wire:target="checkBothHandles">Cek dulu</span>
+                <span wire:loading wire:target="checkBothHandles">Mengecek...</span>
             </button>
         </div>
 
@@ -151,9 +153,14 @@
                 <span class="bb-status-pill bb-status-pill--{{ $igLabel['tone'] }}">
                     {{ $igLabel['text'] }}
                 </span>
-                {{-- BB130 — follower count next to the "Ditemukan" badge so
-                     operators can confirm they grabbed the right account
-                     before submitting the audit. --}}
+                {{-- BB130/BB135 — display name + follower count next to the
+                     "Ditemukan" badge so operators can confirm they grabbed
+                     the right account before submitting the audit. --}}
+                @if ($igCheckStatus === 'found' && $igDisplayName)
+                    <span class="bb-status-meta" style="font-size: 12px; color: var(--text-secondary); margin-left: 8px;">
+                        · {{ $igDisplayName }}
+                    </span>
+                @endif
                 @if ($igCheckStatus === 'found' && ($followerLabel = $formatFollowers($igFollowerCount ?? null)))
                     <span class="bb-status-meta" style="font-size: 12px; color: var(--text-secondary); margin-left: 8px;">
                         · {{ $followerLabel }}
@@ -350,17 +357,8 @@
                     ])
                 />
             </div>
-            <button
-                type="button"
-                wire:click="checkTiktok"
-                wire:loading.attr="disabled"
-                wire:target="checkTiktok"
-                @disabled(empty($tiktokUsername) || $ttCheckStatus === 'checking')
-                class="bb-btn-check"
-            >
-                <span wire:loading.remove wire:target="checkTiktok">Cek dulu</span>
-                <span wire:loading wire:target="checkTiktok">Mengecek...</span>
-            </button>
+            {{-- BB135 — TikTok no longer has its own button; the single
+                 "Cek dulu" button under Instagram checks both at once. --}}
         </div>
 
         @if ($ttLabel)
@@ -368,6 +366,11 @@
                 <span class="bb-status-pill bb-status-pill--{{ $ttLabel['tone'] }}">
                     {{ $ttLabel['text'] }}
                 </span>
+                @if ($ttCheckStatus === 'found' && $ttDisplayName)
+                    <span class="bb-status-meta" style="font-size: 12px; color: var(--text-secondary); margin-left: 8px;">
+                        · {{ $ttDisplayName }}
+                    </span>
+                @endif
                 @if ($ttCheckStatus === 'found' && ($followerLabel = $formatFollowers($ttFollowerCount ?? null)))
                     <span class="bb-status-meta" style="font-size: 12px; color: var(--text-secondary); margin-left: 8px;">
                         · {{ $followerLabel }}

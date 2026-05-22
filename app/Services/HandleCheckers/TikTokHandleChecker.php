@@ -4,47 +4,43 @@ declare(strict_types=1);
 
 namespace App\Services\HandleCheckers;
 
-use Illuminate\Http\Client\RequestException;
+use App\Services\HubCredentialsClient;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Nema\WorkerClient\NemaWorkerClient;
 use Throwable;
 
 /**
- * BB113 → Phase 12c.4 — TikTok username availability check.
+ * BB135 — worker-first TikTok username availability check.
  *
- * History:
- *   BB101 parsed og:title from the public HTML shell; TikTok rotated
- *   the shell and og:title became identical for real and fake handles.
- *   BB113 switched to api/user/detail JSON endpoint; that endpoint is
- *   undocumented and returns HTML (captcha/login wall) for some
- *   user-agents, causing "Tidak bisa cek".
+ * Mirrors {@see InstagramHandleChecker}: TikTok's unauthenticated HTTP
+ * endpoints are defended (oembed exposes no follower count; api/user/detail
+ * returns an empty body to the spoke server). The reliable path is an
+ * authenticated Playwright session through the worker, exactly like IG.
  *
- * Phase 12c.4 fix (FIX 1): the **oembed** endpoint is a public,
- * documented TikTok API that needs no login and gives a clean
- * found/not_found distinction:
+ * Resolution order:
+ *   1. Claim a healthy TikTok session from the Hub (HubCredentialsClient).
+ *   2. Call the worker's /v1/tiktok/profile-audit
+ *      (NemaWorkerClient::auditTikTokProfile) with those cookies — reads the
+ *      profile from inside the authenticated browser, returning the real
+ *      follower count + display name.
+ *   3. Fall back to {@see TikTokHandleCheckerLegacy} (oembed) ONLY when no
+ *      healthy credential exists or the worker errors. The legacy path
+ *      resolves found/not_found but rarely a follower count.
  *
- *   GET https://www.tiktok.com/oembed?url=https://www.tiktok.com/@{username}
- *
- *   - real handle  → 200 OK + JSON {author_name, thumbnail_url, title, ...}
- *   - fake handle  → 400 + JSON   {status_msg: "Something went wrong"}
- *   - rate-limited → 429/5xx     → 'error' (never 'not_found' — TikTok
- *                                  is bonus-only, must not block submit)
- *
- * Fallback chain: if oembed returns a transport error or a 5xx, we
- * fall back to the api/user/detail endpoint (BB113 path) so we don't
- * regress against the small percentage of cases where oembed itself
- * is flaky. Both paths are cached together per username — once we
- * resolve found/not_found via either path, the second path is skipped
- * for the next hour.
+ * Caching: 1 hour per username, ONLY for definitive results (found /
+ * not_found). 'error' is never cached so a transient failure doesn't lock
+ * the operator out of re-checking for an hour.
  */
 final class TikTokHandleChecker
 {
     private const CACHE_TTL_SECONDS = 3600;
-    private const REQUEST_TIMEOUT_SECONDS = 8;
-    private const OEMBED_URL      = 'https://www.tiktok.com/oembed?url=https://www.tiktok.com/@%s';
-    private const USER_DETAIL_URL = 'https://www.tiktok.com/api/user/detail/?uniqueId=%s';
-    private const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+    public function __construct(
+        private readonly NemaWorkerClient $worker,
+        private readonly HubCredentialsClient $hub,
+        private readonly TikTokHandleCheckerLegacy $legacy,
+    ) {}
 
     public function check(string $username): TikTokHandleResult
     {
@@ -53,19 +49,19 @@ final class TikTokHandleChecker
             return TikTokHandleResult::error($username);
         }
 
-        $payload = Cache::remember(
-            "tt-handle:{$normalized}",
-            self::CACHE_TTL_SECONDS,
-            fn () => $this->fetchAndParse($normalized)->toArray(),
-        );
-
-        if (! is_array($payload)) {
-            Cache::forget("tt-handle:{$normalized}");
-            $payload = $this->fetchAndParse($normalized)->toArray();
-            Cache::put("tt-handle:{$normalized}", $payload, self::CACHE_TTL_SECONDS);
+        $cacheKey = "tt-handle:{$normalized}";
+        $cached = Cache::get($cacheKey);
+        if (is_array($cached)) {
+            return TikTokHandleResult::fromArray($cached);
         }
 
-        return TikTokHandleResult::fromArray($payload);
+        $result = $this->resolve($normalized);
+
+        if ($result->status === 'found' || $result->status === 'not_found') {
+            Cache::put($cacheKey, $result->toArray(), self::CACHE_TTL_SECONDS);
+        }
+
+        return $result;
     }
 
     private function normalize(string $raw): ?string
@@ -77,174 +73,55 @@ final class TikTokHandleChecker
         return $clean;
     }
 
-    private function fetchAndParse(string $username): TikTokHandleResult
+    /** Worker-first resolution with the legacy oembed probe as fallback. */
+    private function resolve(string $username): TikTokHandleResult
     {
-        // Primary path: oembed. Public, documented, no login required,
-        // and the only TikTok endpoint that distinguishes found/not-
-        // found by HTTP code (200 vs 400) instead of by JSON sentinel.
-        $oembed = $this->tryOembed($username);
-        if ($oembed !== null) {
-            // BB136 — oembed gives a reliable found/not_found verdict but
-            // never exposes follower stats. When the handle exists, enrich
-            // the follower count from api/user/detail so the wizard shows it
-            // the same way the Instagram check does. Best-effort: a blocked
-            // enrichment probe leaves the trusted oembed verdict intact.
-            if ($oembed->status === 'found' && $oembed->followerCount === null) {
-                return $this->enrichWithFollowerCount($oembed, $username);
-            }
-
-            return $oembed;
+        $viaWorker = $this->checkViaWorker($username);
+        if ($viaWorker !== null) {
+            return $viaWorker;
         }
 
-        // Fallback path: api/user/detail (BB113 endpoint). Used only
-        // when oembed errored at the transport layer or returned a
-        // 5xx — the JSON-sentinel parsing here is more brittle but
-        // covers the rare oembed flakiness window.
-        return $this->tryUserDetail($username);
+        return $this->legacy->check($username);
     }
 
     /**
-     * BB136 — best-effort follower-count enrichment for an oembed-confirmed
-     * handle. The handle is already known to exist, so any failure here is
-     * non-fatal: we return the original oembed result unchanged (follower
-     * count stays null) rather than downgrading a real 'found' to 'error'.
+     * Resolve via the worker using a Hub-claimed TikTok session. Returns null
+     * (→ caller falls back to the legacy probe) when no healthy credential is
+     * available or the worker can't give a definitive answer. Never throws.
      */
-    private function enrichWithFollowerCount(TikTokHandleResult $base, string $username): TikTokHandleResult
-    {
-        $detail = $this->tryUserDetail($username);
-
-        // Only adopt the enrichment when user/detail also resolved a real
-        // follower count; if TikTok served a captcha/HTML wall (→ 'error')
-        // or omitted stats, keep the trusted oembed verdict as-is.
-        if ($detail->status !== 'found' || $detail->followerCount === null) {
-            return $base;
-        }
-
-        return new TikTokHandleResult(
-            username:      $base->username,
-            status:        'found',
-            exists:        true,
-            displayName:   $base->displayName   ?? $detail->displayName,
-            profilePicUrl: $base->profilePicUrl ?? $detail->profilePicUrl,
-            followerCount: $detail->followerCount,
-            checkedAt:     $base->checkedAt ?? now()->toIso8601String(),
-        );
-    }
-
-    /**
-     * Returns a result when oembed gave a definitive 200 (found) or
-     * 400 (not_found). Returns null on 5xx / 429 / transport error so
-     * the caller can fall back to user/detail.
-     */
-    private function tryOembed(string $username): ?TikTokHandleResult
+    private function checkViaWorker(string $username): ?TikTokHandleResult
     {
         try {
-            $response = Http::withUserAgent(self::USER_AGENT)
-                ->withHeaders([
-                    'Accept'          => 'application/json, text/plain, */*',
-                    'Accept-Language' => 'en-US,en;q=0.9',
-                ])
-                ->timeout(self::REQUEST_TIMEOUT_SECONDS)
-                ->get(sprintf(self::OEMBED_URL, $username));
-        } catch (RequestException|Throwable $e) {
-            Log::info('TikTokHandleChecker oembed transport error; will fall back', [
+            $credential = $this->hub->getNextCredential('tiktok');
+        } catch (Throwable $e) {
+            Log::info('TikTokHandleChecker: Hub credential fetch failed; legacy fallback', [
+                'error' => $e->getMessage(),
+            ]);
+            return null;
+        }
+
+        if (! is_array($credential)) {
+            return null; // no healthy credential — fall back
+        }
+
+        $cookies = $credential['session_cookies'] ?? null;
+        if (! is_array($cookies) || $cookies === []) {
+            return null;
+        }
+
+        try {
+            $audit = $this->worker->auditTikTokProfile($username, $cookies);
+        } catch (Throwable $e) {
+            // login_wall_hit / captcha_hit / timeout / worker down — advisory.
+            // Fall back to the legacy probe (best-effort name, no follower).
+            Log::info('TikTokHandleChecker: worker audit failed; legacy fallback', [
                 'username' => $username,
                 'error'    => $e->getMessage(),
             ]);
             return null;
         }
 
-        $status = $response->status();
-
-        // 400 is TikTok's "no such profile" signal for oembed.
-        if ($status === 400 || $status === 404) {
-            return TikTokHandleResult::notFound($username);
-        }
-
-        // 429 / 5xx → indeterminate, defer to fallback.
-        if ($status >= 500 || $status === 429) {
-            Log::info('TikTokHandleChecker oembed non-success; will fall back', [
-                'username' => $username,
-                'status'   => $status,
-            ]);
-            return null;
-        }
-
-        if (! $response->successful()) {
-            Log::info('TikTokHandleChecker oembed unexpected non-2xx; will fall back', [
-                'username' => $username,
-                'status'   => $status,
-            ]);
-            return null;
-        }
-
-        $json = $response->json();
-        if (! is_array($json) || ! isset($json['author_name']) && ! isset($json['title'])) {
-            // 200 with no profile fields → still treat as found (oembed
-            // is permissive about field presence) only if we have any
-            // author_url; otherwise fall back.
-            if (! isset($json['author_url']) && ! isset($json['html'])) {
-                return null;
-            }
-        }
-
-        return new TikTokHandleResult(
-            username:      $username,
-            status:        'found',
-            exists:        true,
-            displayName:   $this->stringOrNull($json['author_name'] ?? null),
-            profilePicUrl: $this->stringOrNull($json['thumbnail_url'] ?? null),
-            followerCount: null, // oembed doesn't expose follower count
-            checkedAt:     now()->toIso8601String(),
-        );
-    }
-
-    private function tryUserDetail(string $username): TikTokHandleResult
-    {
-        try {
-            $response = Http::withUserAgent(self::USER_AGENT)
-                ->withHeaders([
-                    'Accept'          => 'application/json, text/plain, */*',
-                    'Accept-Language' => 'en-US,en;q=0.9',
-                    'Referer'         => 'https://www.tiktok.com/',
-                ])
-                ->timeout(self::REQUEST_TIMEOUT_SECONDS)
-                ->get(sprintf(self::USER_DETAIL_URL, $username));
-        } catch (RequestException|Throwable $e) {
-            Log::warning('TikTokHandleChecker user/detail transport error', [
-                'username' => $username,
-                'error'    => $e->getMessage(),
-            ]);
-            return TikTokHandleResult::error($username);
-        }
-
-        if ($response->status() === 404) {
-            return TikTokHandleResult::notFound($username);
-        }
-
-        if (! $response->successful()) {
-            return TikTokHandleResult::error($username);
-        }
-
-        $contentType = strtolower($response->header('Content-Type') ?? '');
-        if (str_contains($contentType, 'text/html')) {
-            return TikTokHandleResult::error($username);
-        }
-
-        $json = $response->json();
-        if (! is_array($json)) {
-            return TikTokHandleResult::error($username);
-        }
-
-        $statusCode = $json['statusCode'] ?? null;
-        if ($statusCode !== null && (int) $statusCode !== 0) {
-            return TikTokHandleResult::notFound($username);
-        }
-
-        $user  = $json['userInfo']['user']  ?? null;
-        $stats = $json['userInfo']['stats'] ?? null;
-
-        if (! is_array($user)) {
+        if ($audit->status === 'not_found') {
             return TikTokHandleResult::notFound($username);
         }
 
@@ -252,30 +129,10 @@ final class TikTokHandleChecker
             username:      $username,
             status:        'found',
             exists:        true,
-            displayName:   $this->stringOrNull($user['nickname'] ?? null),
-            profilePicUrl: $this->stringOrNull(
-                $user['avatarLarger'] ?? $user['avatarMedium'] ?? $user['avatarThumb'] ?? null,
-            ),
-            followerCount: $this->intOrNull(
-                is_array($stats) ? ($stats['followerCount'] ?? null) : null,
-            ),
+            displayName:   $audit->displayName,
+            profilePicUrl: null,
+            followerCount: $audit->followerCount,
             checkedAt:     now()->toIso8601String(),
         );
-    }
-
-    private function stringOrNull(mixed $value): ?string
-    {
-        if ($value === null || $value === '') {
-            return null;
-        }
-        return is_string($value) ? $value : (string) $value;
-    }
-
-    private function intOrNull(mixed $value): ?int
-    {
-        if ($value === null || $value === '') {
-            return null;
-        }
-        return is_numeric($value) ? (int) $value : null;
     }
 }

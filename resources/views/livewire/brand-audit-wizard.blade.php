@@ -8,6 +8,7 @@ use App\Models\BrandAudit;
 use App\Services\CreditLedger;
 use App\Services\HandleCheckers\InstagramHandleChecker;
 use App\Services\HandleCheckers\TikTokHandleChecker;
+use App\Services\HubCredentialsClient;
 use App\Services\PlacesApiService;
 use App\Services\PlatformHealthChecker;
 use App\Services\Scoring\WebsiteLivenessScorer;
@@ -15,7 +16,9 @@ use App\Support\AuditLabels;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Nema\WorkerClient\NemaWorkerClient;
 use Livewire\Volt\Component;
 use Livewire\WithFileUploads;
 use function Livewire\Volt\layout;
@@ -209,6 +212,12 @@ new class extends Component {
     // back to 'idle' and clears these alongside).
     public ?int $igFollowerCount = null;
     public ?int $ttFollowerCount = null;
+
+    // BB135 — display name from the handle check, shown next to the badge so
+    // the operator can confirm the right account (e.g. "Ion Laundry Surabaya").
+    // Cleared alongside the follower counts on edit.
+    public ?string $igDisplayName = null;
+    public ?string $ttDisplayName = null;
 
     // BB138 — Step 3 website URL + liveness check.
     //
@@ -609,6 +618,7 @@ new class extends Component {
         // BB106 — any edit invalidates the previous check result.
         $this->igCheckStatus    = 'idle';
         $this->igFollowerCount  = null;
+        $this->igDisplayName    = null;
     }
 
     public function updatedTiktokUsername(): void
@@ -617,6 +627,7 @@ new class extends Component {
         // BB106 — any edit invalidates the previous check result.
         $this->ttCheckStatus    = 'idle';
         $this->ttFollowerCount  = null;
+        $this->ttDisplayName    = null;
     }
 
     /**
@@ -742,16 +753,19 @@ new class extends Component {
         if (! $this->instagramUsername) {
             $this->igCheckStatus   = 'idle';
             $this->igFollowerCount = null;
+            $this->igDisplayName   = null;
             return;
         }
         $this->igCheckStatus   = 'checking';
         $this->igFollowerCount = null;
+        $this->igDisplayName   = null;
         $result = $checker->check($this->instagramUsername);
         $this->igCheckStatus   = $this->mapHandleStatus($result->exists, $result->status);
         // BB130 — only retain follower count on a clean 'found'; for
         // 'not_found' / 'error' the DTO carries null anyway, but
         // forcing null here keeps the view branch tidy.
         $this->igFollowerCount = $this->igCheckStatus === 'found' ? $result->followerCount : null;
+        $this->igDisplayName   = $this->igCheckStatus === 'found' ? $result->displayName : null;
     }
 
     public function checkTiktok(TikTokHandleChecker $checker): void
@@ -759,13 +773,148 @@ new class extends Component {
         if (! $this->tiktokUsername) {
             $this->ttCheckStatus   = 'idle';
             $this->ttFollowerCount = null;
+            $this->ttDisplayName   = null;
             return;
         }
         $this->ttCheckStatus   = 'checking';
         $this->ttFollowerCount = null;
+        $this->ttDisplayName   = null;
         $result = $checker->check($this->tiktokUsername);
         $this->ttCheckStatus   = $this->mapHandleStatus($result->exists, $result->status);
         $this->ttFollowerCount = $this->ttCheckStatus === 'found' ? $result->followerCount : null;
+        $this->ttDisplayName   = $this->ttCheckStatus === 'found' ? $result->displayName : null;
+    }
+
+    /**
+     * BB135 — unified "Cek dulu" handler. Checks Instagram and TikTok in ONE
+     * click. When healthy credentials exist for the relevant platforms, both
+     * run in PARALLEL through the worker's /v1/handles/check-both (≈ the time
+     * of the slower one); platforms without a credential fall back to their
+     * per-platform checker (IG anonymous probe; TikTok legacy oembed).
+     *
+     * No-op when both fields are empty so a stray morph-time click can't flip
+     * a status off 'idle'.
+     */
+    public function checkBothHandles(
+        HubCredentialsClient $hub,
+        NemaWorkerClient $worker,
+        InstagramHandleChecker $igChecker,
+        TikTokHandleChecker $ttChecker,
+    ): void {
+        $ig = $this->instagramUsername;
+        $tt = $this->tiktokUsername;
+        if (! $ig && ! $tt) {
+            return;
+        }
+
+        if ($ig) {
+            $this->igCheckStatus = 'checking';
+            $this->igFollowerCount = null;
+            $this->igDisplayName = null;
+        }
+        if ($tt) {
+            $this->ttCheckStatus = 'checking';
+            $this->ttFollowerCount = null;
+            $this->ttDisplayName = null;
+        }
+
+        // Claim cookies for the parallel worker path (best-effort).
+        $igCookies = $ig ? $this->claimHandleCookies($hub, 'instagram') : null;
+        $ttCookies = $tt ? $this->claimHandleCookies($hub, 'tiktok') : null;
+
+        $igViaWorker = $ig && is_array($igCookies);
+        $ttViaWorker = $tt && is_array($ttCookies);
+
+        if ($igViaWorker || $ttViaWorker) {
+            try {
+                $res = $worker->checkBothHandles(
+                    $igViaWorker ? $ig : null,
+                    $igViaWorker ? $igCookies : null,
+                    $ttViaWorker ? $tt : null,
+                    $ttViaWorker ? $ttCookies : null,
+                );
+                if ($igViaWorker) {
+                    $this->applyHandleResult('ig', $res['instagram'] ?? null);
+                }
+                if ($ttViaWorker) {
+                    $this->applyHandleResult('tt', $res['tiktok'] ?? null);
+                }
+            } catch (\Throwable $e) {
+                Log::info('checkBothHandles worker call failed; per-platform fallback', [
+                    'error' => $e->getMessage(),
+                ]);
+                $igViaWorker = false;
+                $ttViaWorker = false;
+            }
+        }
+
+        // Per-platform fallback for whatever the worker didn't resolve.
+        if ($ig && ! $igViaWorker) {
+            $r = $igChecker->check($ig);
+            $this->igCheckStatus   = $this->mapHandleStatus($r->exists, $r->status);
+            $this->igFollowerCount = $this->igCheckStatus === 'found' ? $r->followerCount : null;
+            $this->igDisplayName   = $this->igCheckStatus === 'found' ? $r->displayName : null;
+        }
+        if ($tt && ! $ttViaWorker) {
+            $r = $ttChecker->check($tt);
+            $this->ttCheckStatus   = $this->mapHandleStatus($r->exists, $r->status);
+            $this->ttFollowerCount = $this->ttCheckStatus === 'found' ? $r->followerCount : null;
+            $this->ttDisplayName   = $this->ttCheckStatus === 'found' ? $r->displayName : null;
+        }
+    }
+
+    /**
+     * Apply one normalized worker check-both result (shape:
+     * ['status','exists','display_name','follower_count', ...]) to the ig/tt
+     * wizard state.
+     *
+     * @param array<string,mixed>|null $r
+     */
+    private function applyHandleResult(string $platform, ?array $r): void
+    {
+        $status = is_array($r) ? (string) ($r['status'] ?? 'error') : 'error';
+        $mapped = match ($status) {
+            'found'     => 'found',
+            'not_found' => 'not_found',
+            default     => 'error',
+        };
+        $followers = ($mapped === 'found' && is_array($r)) ? ($r['follower_count'] ?? null) : null;
+        $name      = ($mapped === 'found' && is_array($r)) ? ($r['display_name'] ?? null) : null;
+
+        if ($platform === 'ig') {
+            $this->igCheckStatus   = $mapped;
+            $this->igFollowerCount = $followers !== null ? (int) $followers : null;
+            $this->igDisplayName   = $name !== null ? (string) $name : null;
+        } else {
+            $this->ttCheckStatus   = $mapped;
+            $this->ttFollowerCount = $followers !== null ? (int) $followers : null;
+            $this->ttDisplayName   = $name !== null ? (string) $name : null;
+        }
+    }
+
+    /**
+     * Claim a healthy session's cookies for $platform from the Hub. Returns
+     * null (→ caller uses the per-platform fallback) when no credential is
+     * available or the Hub call fails.
+     *
+     * @return list<array<string,mixed>>|null
+     */
+    private function claimHandleCookies(HubCredentialsClient $hub, string $platform): ?array
+    {
+        try {
+            $cred = $hub->getNextCredential($platform);
+        } catch (\Throwable $e) {
+            Log::info('checkBothHandles: Hub credential fetch failed', [
+                'platform' => $platform,
+                'error'    => $e->getMessage(),
+            ]);
+            return null;
+        }
+        if (! is_array($cred)) {
+            return null;
+        }
+        $cookies = $cred['session_cookies'] ?? null;
+        return (is_array($cookies) && $cookies !== []) ? $cookies : null;
     }
 
     /**
@@ -847,6 +996,8 @@ new class extends Component {
         $this->whatsappValidity  = 'idle';
         $this->igFollowerCount   = null;
         $this->ttFollowerCount   = null;
+        $this->igDisplayName     = null;
+        $this->ttDisplayName     = null;
         // BB138 — also clear the website override so "Lewati semua"
         // falls back to Places.website (the GMaps-derived URL) instead
         // of carrying a half-typed string into deriveTouchpoints().
