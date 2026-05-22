@@ -125,11 +125,20 @@ class HandleCheckTest extends TestCase
     }
 
     #[Test]
-    public function instagram_worker_error_falls_back_to_anonymous_probe(): void
+    public function instagram_login_wall_reports_credential_stale_and_returns_error(): void
     {
-        // Worker raises (e.g. stale cookies) → checker falls back to the
-        // anonymous probe, which here is rate-limited (429) → 'error'.
-        $this->bindHub($this->fakeCredential());
+        // BB137 — a login wall means the claimed session's cookies are stale.
+        // The checker must mark the Hub credential requires_2fa (fires the
+        // admin "Cookies Instagram kedaluwarsa" banner) and surface 'error' to
+        // the wizard — NOT a fake 'found' and NOT the pointless anonymous
+        // fallback (IP-blocked → would only mask the operator-actionable cause).
+        $cred = $this->fakeCredential();
+        $hub  = Mockery::mock(HubCredentialsClient::class);
+        $hub->shouldReceive('getNextCredential')->andReturn($cred);
+        $hub->shouldReceive('reportCredentialStatus')
+            ->once()
+            ->with($cred['id'], 'requires_2fa', Mockery::type('string'));
+        $this->app->instance(HubCredentialsClient::class, $hub);
 
         $worker = Mockery::mock(NemaWorkerClient::class);
         $worker->shouldReceive('checkInstagramHandle')
@@ -138,6 +147,33 @@ class HandleCheckTest extends TestCase
                 errorCode: 'login_wall_hit',
                 httpStatus: 400,
                 detail: 'stale cookies',
+                retryAfterSeconds: null,
+            ));
+        $this->app->instance(NemaWorkerClient::class, $worker);
+
+        Http::fake(); // anonymous probe must NOT be touched
+
+        $response = $this->postJson('/check-handle/instagram', ['username' => 'somehandle']);
+
+        $response->assertOk()->assertJson(['exists' => false, 'status' => 'error']);
+        Http::assertNothingSent(); // no anonymous fallback on a login wall
+    }
+
+    #[Test]
+    public function instagram_transient_worker_error_falls_back_to_anonymous_probe(): void
+    {
+        // A NON-wall worker error (timeout / rate_limited / worker down) is
+        // advisory — the checker still falls back to the anonymous probe,
+        // which here is rate-limited (429) → 'error'.
+        $this->bindHub($this->fakeCredential());
+
+        $worker = Mockery::mock(NemaWorkerClient::class);
+        $worker->shouldReceive('checkInstagramHandle')
+            ->once()
+            ->andThrow(new ProfileAuditException(
+                errorCode: 'timeout',
+                httpStatus: 504,
+                detail: 'nav timeout',
                 retryAfterSeconds: null,
             ));
         $this->app->instance(NemaWorkerClient::class, $worker);

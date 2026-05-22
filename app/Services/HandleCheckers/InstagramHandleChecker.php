@@ -9,6 +9,7 @@ use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Nema\WorkerClient\Exceptions\ProfileAuditException;
 use Nema\WorkerClient\NemaWorkerClient;
 use Throwable;
 
@@ -128,12 +129,38 @@ final class InstagramHandleChecker
             return null;
         }
 
+        $credentialId = isset($credential['id']) && is_string($credential['id'])
+            ? $credential['id']
+            : null;
+
         try {
             $result = $this->worker->checkInstagramHandle($username, $cookies);
+        } catch (ProfileAuditException $e) {
+            // BB137 — a login wall / Bloks chooser means the claimed session's
+            // cookies are stale. Mark the Hub credential requires_2fa (fires the
+            // admin "Cookies Instagram kedaluwarsa" banner) and surface 'error'
+            // to the wizard — NOT a fake 'found'. Do NOT fall back to the
+            // anonymous probe here: it is IP-blocked (429 → error) and would
+            // only mask the real, operator-actionable cause.
+            if (in_array($e->errorCode, ['login_wall_hit', 'interstitial_blocked'], true)) {
+                if ($credentialId !== null) {
+                    $this->reportCredentialStale(
+                        $credentialId,
+                        $e->errorCode . ' during wizard handle check',
+                    );
+                }
+                return InstagramHandleResult::error($username);
+            }
+
+            // Other codes (timeout / rate_limited) are advisory — fall back to
+            // the anonymous probe as before.
+            Log::info('InstagramHandleChecker: worker handle-check failed; anonymous fallback', [
+                'username'   => $username,
+                'error_code' => $e->errorCode,
+            ]);
+            return null;
         } catch (Throwable $e) {
-            // login_wall_hit / interstitial_blocked / timeout / worker down.
-            // All advisory — fall back to the anonymous probe (which will
-            // most likely surface 'error', shown as "tidak bisa cek").
+            // Worker unreachable / unexpected — advisory fallback.
             Log::info('InstagramHandleChecker: worker handle-check failed; anonymous fallback', [
                 'username' => $username,
                 'error'    => $e->getMessage(),
@@ -158,6 +185,23 @@ final class InstagramHandleChecker
             isBusiness:    $result->isBusiness,
             checkedAt:     now()->toIso8601String(),
         );
+    }
+
+    /**
+     * BB137 — report a stale IG session to the Hub so the admin banner warns
+     * the operator. Best-effort: a Hub hiccup must never break the wizard
+     * check (which already degrades to 'error').
+     */
+    private function reportCredentialStale(string $credentialId, string $reason): void
+    {
+        try {
+            $this->hub->reportCredentialStatus($credentialId, 'requires_2fa', $reason);
+        } catch (Throwable $e) {
+            Log::warning('InstagramHandleChecker: failed to report credential stale', [
+                'credential_id' => $credentialId,
+                'error'         => $e->getMessage(),
+            ]);
+        }
     }
 
     private function normalize(string $raw): ?string
