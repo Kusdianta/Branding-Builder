@@ -133,19 +133,9 @@
                     ])
                 />
             </div>
-            {{-- BB135 — single "Cek dulu" button checks Instagram + TikTok at
-                 once via checkBothHandles (parallel through the worker). --}}
-            <button
-                type="button"
-                wire:click="checkBothHandles"
-                wire:loading.attr="disabled"
-                wire:target="checkBothHandles"
-                @disabled((empty($instagramUsername) && empty($tiktokUsername)) || $igCheckStatus === 'checking' || $ttCheckStatus === 'checking')
-                class="bb-btn-check"
-            >
-                <span wire:loading.remove wire:target="checkBothHandles">Cek dulu</span>
-                <span wire:loading wire:target="checkBothHandles">Mengecek...</span>
-            </button>
+            {{-- BB136 — the per-field "Cek dulu" button was removed. The single
+                 "Cek semua" button at the bottom of this step now verifies
+                 Instagram + TikTok + Website together via checkAllHandles. --}}
         </div>
 
         @if ($igLabel)
@@ -278,17 +268,8 @@
                 ])
                 style="flex: 1;"
             />
-            <button
-                type="button"
-                wire:click="checkWebsite"
-                wire:loading.attr="disabled"
-                wire:target="checkWebsite"
-                @disabled(empty(trim($wizardWebsiteUrl)) || $websiteCheckStatus === 'checking')
-                class="bb-btn-check"
-            >
-                <span wire:loading.remove wire:target="checkWebsite">Cek dulu</span>
-                <span wire:loading wire:target="checkWebsite">Mengecek...</span>
-            </button>
+            {{-- BB136 — the per-field website "Cek dulu" button was removed;
+                 the bottom "Cek semua" button verifies it via checkAllHandles. --}}
         </div>
 
         @if ($websiteStatusLabel)
@@ -400,6 +381,31 @@
         @endif
 
         @error('tiktokUsername')<p class="bb-error">{{ $message }}</p>@enderror
+    </div>
+
+    {{-- ============================================================
+         BB136 — single "Cek semua" button at the bottom of the step.
+         Replaces the old per-field buttons (Instagram+TikTok, Website).
+         One click runs checkAllHandles, which verifies every filled
+         field: IG + TikTok via the worker check-both, Website via the
+         HTTP liveness probe. Results land in the per-field status pills
+         above. Disabled only when all three fields are empty.
+         ============================================================ --}}
+    <div class="bb-cek-semua-row">
+        <button
+            type="button"
+            wire:click="checkAllHandles"
+            wire:loading.attr="disabled"
+            wire:target="checkAllHandles"
+            @disabled(empty($instagramUsername) && empty($tiktokUsername) && empty(trim($wizardWebsiteUrl)))
+            class="bb-btn-check bb-btn-check--block"
+        >
+            <span wire:loading.remove wire:target="checkAllHandles">
+                <i class="ti ti-circle-check"></i> Cek semua
+            </span>
+            <span wire:loading wire:target="checkAllHandles">Mengecek...</span>
+        </button>
+        <p class="bb-substep-hint" style="margin-top:6px;">Cek Instagram, TikTok &amp; website sekaligus sebelum lanjut.</p>
     </div>
 
     <p class="bb-hint">

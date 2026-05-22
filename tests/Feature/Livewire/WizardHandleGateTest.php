@@ -297,7 +297,7 @@ class WizardHandleGateTest extends TestCase
     {
         $this->authedComponent()
             ->set('instagramUsername', 'nasa')
-            ->assertSet('step3BlockReason', 'Klik "Cek dulu" pada Instagram sebelum lanjut.');
+            ->assertSet('step3BlockReason', 'Klik "Cek semua" dulu sebelum lanjut.');
     }
 
     #[Test]

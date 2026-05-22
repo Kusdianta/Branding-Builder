@@ -588,6 +588,31 @@
     cursor: not-allowed;
 }
 
+/* BB136 — single bottom "Cek semua" button. Replaces the per-field outline
+   check buttons; it is the primary action of Step 3, so it reads as a
+   full-width filled green button, separated from the fields above by a rule. */
+.bb-cek-semua-row {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-default);
+}
+.bb-btn-check--block {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    height: 40px;
+    background: var(--chimera-500);
+    color: var(--text-on-primary);
+    border-color: var(--chimera-500);
+}
+.bb-btn-check--block:hover:not(:disabled) {
+    background: var(--chimera-600);
+    border-color: var(--chimera-600);
+    color: var(--text-on-primary);
+}
+
 .bb-status-row {
     display: flex;
     flex-wrap: wrap;

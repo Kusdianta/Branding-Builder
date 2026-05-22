@@ -747,6 +747,9 @@ new class extends Component {
      *
      * No-op when the field is empty so a stray button click during a
      * Livewire morph cannot flip status off 'idle'.
+     *
+     * @deprecated BB136 — the wizard's bottom button calls checkAllHandles()
+     *   now. Retained for WizardHandleGateTest per-platform coverage.
      */
     public function checkInstagram(InstagramHandleChecker $checker): void
     {
@@ -768,6 +771,10 @@ new class extends Component {
         $this->igDisplayName   = $this->igCheckStatus === 'found' ? $result->displayName : null;
     }
 
+    /**
+     * @deprecated BB136 — the wizard's bottom button calls checkAllHandles()
+     *   now. Retained for WizardHandleGateTest per-platform coverage.
+     */
     public function checkTiktok(TikTokHandleChecker $checker): void
     {
         if (! $this->tiktokUsername) {
@@ -964,6 +971,43 @@ new class extends Component {
     }
 
     /**
+     * BB136 — single bottom "Cek semua handle" handler. Verifies Instagram +
+     * TikTok + Website in ONE click by composing the existing checks:
+     *   - IG + TikTok via checkBothHandles() (parallel worker path when
+     *     credentials exist, per-platform fallback when they don't).
+     *   - Website via checkWebsite() (one HTTP liveness probe).
+     *
+     * Each sub-check only runs for a filled field, and a failure in one does
+     * not abort the others — checkBothHandles isolates worker errors and the
+     * website probe is independent. No-op when all three fields are empty so
+     * a stray morph-time click can't flip a status off 'idle'.
+     *
+     * Website stays ADVISORY (BB138): a dead/unreachable site shows its badge
+     * but does NOT block Lanjutkan — canAdvanceFromStep3 ignores website
+     * state. Only IG ('found') and WhatsApp ('valid') gate advancement.
+     */
+    public function checkAllHandles(
+        HubCredentialsClient $hub,
+        NemaWorkerClient $worker,
+        InstagramHandleChecker $igChecker,
+        TikTokHandleChecker $ttChecker,
+        WebsiteLivenessScorer $webScorer,
+    ): void {
+        $hasHandle  = $this->instagramUsername || $this->tiktokUsername;
+        $hasWebsite = trim((string) $this->wizardWebsiteUrl) !== '';
+        if (! $hasHandle && ! $hasWebsite) {
+            return;
+        }
+
+        if ($hasHandle) {
+            $this->checkBothHandles($hub, $worker, $igChecker, $ttChecker);
+        }
+        if ($hasWebsite) {
+            $this->checkWebsite($webScorer);
+        }
+    }
+
+    /**
      * BB106 — collapse the DTO (exists, status) pair into the Volt enum.
      * Mirrors the old Alpine fetchHandle() resolver: only a clean
      * exists=true + status='found' clears the gate; everything else
@@ -1043,11 +1087,12 @@ new class extends Component {
         if ($this->igCheckStatus === 'checking' || $this->ttCheckStatus === 'checking') {
             return 'Sebentar, sedang mengecek...';
         }
-        if ($this->instagramUsername && $this->igCheckStatus === 'idle') {
-            return 'Klik "Cek dulu" pada Instagram sebelum lanjut.';
-        }
-        if ($this->tiktokUsername && $this->ttCheckStatus === 'idle') {
-            return 'Klik "Cek dulu" pada TikTok sebelum lanjut.';
+        // BB136 — one bottom "Cek semua" button now triggers every check, so
+        // the per-field "Cek dulu pada X" hints collapse into one consistent
+        // prompt that matches the button label.
+        if (($this->instagramUsername && $this->igCheckStatus === 'idle')
+            || ($this->tiktokUsername && $this->ttCheckStatus === 'idle')) {
+            return 'Klik "Cek semua" dulu sebelum lanjut.';
         }
         if ($this->igCheckStatus === 'not_found' || $this->ttCheckStatus === 'not_found') {
             return 'Periksa lagi handle yang ditandai merah.';
