@@ -8,6 +8,7 @@ use App\Jobs\AnalyzeBrand;
 use App\Models\BrandAudit;
 use App\Models\User;
 use App\Services\PlacesApiService;
+use App\Services\PlatformHealthChecker;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Http;
@@ -39,6 +40,21 @@ class BrandAuditWizardTest extends TestCase
         parent::setUp();
         Bus::fake();
         Http::preventStrayRequests();
+
+        // BB134 — BB105 Part 3 added a hard platform-health gate at the top
+        // of submit() (and a probe in mount()) that force-refreshes a live
+        // PlatformHealthChecker::check(). With preventStrayRequests() on, the
+        // real probe resolves unhealthy and submit() bounces off the gate
+        // before any tested logic runs. Bind a healthy stub so the wizard's
+        // submit flow is exercised; the gate itself is covered elsewhere.
+        $this->app->instance(PlatformHealthChecker::class, new class extends PlatformHealthChecker {
+            public function __construct() {}
+
+            public function check(): array
+            {
+                return ['healthy' => true, 'services' => [], 'checked_at' => now()->toIso8601String()];
+            }
+        });
     }
 
     private function signedInUser(int $creditsBalance = 5): User
@@ -192,7 +208,7 @@ class BrandAuditWizardTest extends TestCase
             ->assertSet('tiktokUsername', null);
     }
 
-    public function test_submit_creates_v2_audit_charges_credit_and_dispatches(): void
+    public function test_submit_creates_v3_audit_charges_credit_and_dispatches(): void
     {
         $user = $this->signedInUser(3);
 
@@ -207,7 +223,9 @@ class BrandAuditWizardTest extends TestCase
         $this->assertSame(1, BrandAudit::count(), 'one audit row created');
 
         $audit = BrandAudit::first();
-        $this->assertSame(BrandAudit::WIZARD_V2, $audit->wizard_version);
+        // BB134 — the wizard stamps WIZARD_V3 (BB118 rubric alignment,
+        // blade submit() line ~1052); the BB97 test predated that bump.
+        $this->assertSame(BrandAudit::WIZARD_V3, $audit->wizard_version);
         $this->assertSame('ChIJtest1234567890', $audit->place_id);
         $this->assertSame('Laundry Bersih Sentosa', $audit->place_name);
         $this->assertSame('Laundry Bersih Sentosa', $audit->brand_name, 'brand_name mirrors place_name for legacy compat');

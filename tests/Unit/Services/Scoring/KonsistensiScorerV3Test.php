@@ -105,19 +105,25 @@ class KonsistensiScorerV3Test extends TestCase
     }
 
     #[Test]
-    public function v3_transparansi_harga_detects_when_evidence_flagged(): void
+    public function v3_transparansi_harga_uses_operator_declaration(): void
     {
-        $detected = $this->scorer->scoreFromEvidence(
-            $this->emptyEvidence(['detected' => true, 'method' => 'caption_only', 'confidence' => 0.9]),
-            $this->context(),
+        // BB134 — Phase 12c.4 FIX A (round 3) made transparansi_harga a
+        // single-source-of-truth score driven by the operator's wizard
+        // Step 3 checkbox (context.touchpoints_operational.price_list).
+        // The legacy price_list_detection auto-detection is informational
+        // only and no longer influences the score, so the test drives the
+        // operator declaration rather than the detector flag.
+        $declared = $this->scorer->scoreFromEvidence(
+            $this->emptyEvidence(),
+            $this->context(['touchpoints_operational' => ['price_list' => true]]),
         );
-        $this->assertSame(10, $detected->subBucketScores['transparansi_harga']);
+        $this->assertSame(10, $declared->subBucketScores['transparansi_harga']);
 
-        $undetected = $this->scorer->scoreFromEvidence(
-            $this->emptyEvidence(['detected' => false, 'method' => 'fallback', 'confidence' => 0.0]),
-            $this->context(),
+        $notDeclared = $this->scorer->scoreFromEvidence(
+            $this->emptyEvidence(),
+            $this->context(['touchpoints_operational' => ['price_list' => false]]),
         );
-        $this->assertSame(0, $undetected->subBucketScores['transparansi_harga']);
+        $this->assertSame(0, $notDeclared->subBucketScores['transparansi_harga']);
     }
 
     #[Test]
@@ -132,7 +138,7 @@ class KonsistensiScorerV3Test extends TestCase
     public function v3_total_caps_at_100(): void
     {
         $score = $this->scorer->scoreFromEvidence(
-            $this->emptyEvidence(['detected' => true, 'method' => 'caption_only', 'confidence' => 0.9]),
+            $this->emptyEvidence(),
             $this->context([
                 'variety_count'             => 5,
                 'instagram_url'             => 'https://instagram.com/test',
@@ -140,6 +146,10 @@ class KonsistensiScorerV3Test extends TestCase
                 'gmaps_url'                 => 'https://maps.google.com/test',
                 'tiktok_url'                => 'https://tiktok.com/@test',
                 'whatsapp_business_active'  => true,
+                // BB134 — transparansi_harga is operator-declaration driven
+                // (Phase 12c.4 FIX A), so the full 10 pts requires the
+                // wizard Step 3 checkbox, not the auto-detector flag.
+                'touchpoints_operational'   => ['price_list' => true],
             ]),
         );
         // 40 + 0 (no vision) + 15 + 10 = 65

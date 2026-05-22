@@ -323,12 +323,19 @@ class HandleCheckTest extends TestCase
         $this->assertIsArray(\Illuminate\Support\Facades\Cache::get('ig-handle:nasa'));
     }
 
-    // ─── TikTok (BB113 — JSON user/detail endpoint, mirrors BB107 IG fix) ───
+    // ─── TikTok (Phase 12c.4 — oembed-first, api/user/detail fallback) ───
+    //
+    // BB134: TikTokHandleChecker now calls the public oembed endpoint FIRST
+    // and only falls back to api/user/detail on a 5xx/429/transport error.
+    // These cases target the user/detail parser, so each fakes oembed -> 503
+    // to force the fallback — which also keeps the suite free of the stray
+    // live oembed call the pre-BB134 fakes were leaking.
 
     #[Test]
     public function tiktok_found_parses_user_detail_json(): void
     {
         Http::fake([
+            'tiktok.com/oembed*'          => Http::response('', 503),
             'tiktok.com/api/user/detail*' => Http::response(
                 $this->ttFoundFixture(
                     nickname:      'Less Worry Laundry',
@@ -355,6 +362,7 @@ class HandleCheckTest extends TestCase
     public function tiktok_status_code_10221_returns_not_found(): void
     {
         Http::fake([
+            'tiktok.com/oembed*'          => Http::response('', 503),
             'tiktok.com/api/user/detail*' => Http::response(
                 json_encode(['statusCode' => 10221, 'statusMsg' => 'user_not_exist']),
                 200,
@@ -371,6 +379,7 @@ class HandleCheckTest extends TestCase
     public function tiktok_captcha_html_returns_error_not_not_found(): void
     {
         Http::fake([
+            'tiktok.com/oembed*'          => Http::response('', 503),
             'tiktok.com/api/user/detail*' => Http::response(
                 '<!DOCTYPE html><html><body>Captcha</body></html>',
                 200,

@@ -101,8 +101,12 @@ class RecallScorerV3Test extends TestCase
         ]));
         $this->assertSame(10, $mid->subBucketScores['manajemen_ulasan']);
 
+        // BB134 — Phase 12c.4 FIX B (round 3) moved the "kadang membalas"
+        // (10 pt) floor from 50% down to >=10%. A reply rate of exactly
+        // 0.10 is now the bottom of the 10-pt band, so the "never replies"
+        // (0 pt) tier must be exercised with a value clearly below 10%.
         $low = $this->scorer->score($this->v3Inputs([
-            'owner_reply_rate' => 0.10,
+            'owner_reply_rate' => 0.05,
             'has_sop_declared' => false,
         ]));
         $this->assertSame(0, $low->subBucketScores['manajemen_ulasan']);
