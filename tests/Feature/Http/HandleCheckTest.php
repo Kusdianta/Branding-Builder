@@ -393,6 +393,67 @@ class HandleCheckTest extends TestCase
     }
 
     #[Test]
+    public function tiktok_oembed_found_enriches_follower_count_from_user_detail(): void
+    {
+        // BB136 — oembed confirms the handle but never exposes follower
+        // stats. After a found verdict the checker enriches the count from
+        // api/user/detail so the wizard shows it exactly like the Instagram
+        // check does.
+        Http::fake([
+            'tiktok.com/oembed*'          => Http::response(
+                $this->ttOembedFoundFixture('Less Worry Laundry'),
+                200,
+                ['Content-Type' => 'application/json'],
+            ),
+            'tiktok.com/api/user/detail*' => Http::response(
+                $this->ttFoundFixture(
+                    nickname:      'Less Worry Laundry',
+                    avatar:        'https://p16.tiktokcdn.com/lw.jpg',
+                    followerCount: 1200,
+                ),
+                200,
+                ['Content-Type' => 'application/json'],
+            ),
+        ]);
+
+        $response = $this->postJson('/check-handle/tiktok', ['username' => 'lessworry']);
+
+        $response->assertOk()
+            ->assertJson([
+                'exists'         => true,
+                'status'         => 'found',
+                'display_name'   => 'Less Worry Laundry',
+                'follower_count' => 1200,
+            ]);
+    }
+
+    #[Test]
+    public function tiktok_oembed_found_stays_found_when_detail_enrichment_blocked(): void
+    {
+        // BB136 — the follower enrichment is best-effort. When TikTok blocks
+        // api/user/detail (captcha / rate limit), the oembed-confirmed result
+        // stands: still 'found', just without a follower count (never an error).
+        Http::fake([
+            'tiktok.com/oembed*'          => Http::response(
+                $this->ttOembedFoundFixture('Less Worry Laundry'),
+                200,
+                ['Content-Type' => 'application/json'],
+            ),
+            'tiktok.com/api/user/detail*' => Http::response(
+                '<!DOCTYPE html><html><body>Captcha</body></html>',
+                200,
+                ['Content-Type' => 'text/html'],
+            ),
+        ]);
+
+        $response = $this->postJson('/check-handle/tiktok', ['username' => 'lessworry']);
+
+        $response->assertOk()
+            ->assertJson(['exists' => true, 'status' => 'found', 'display_name' => 'Less Worry Laundry'])
+            ->assertJsonPath('follower_count', null);
+    }
+
+    #[Test]
     public function tiktok_validator_rejects_too_short_username(): void
     {
         $response = $this->postJson('/check-handle/tiktok', ['username' => '']);
@@ -413,6 +474,25 @@ class HandleCheckTest extends TestCase
         return file_get_contents(
             base_path('tests/fixtures/instagram/web_profile_info-not-found.html'),
         );
+    }
+
+    /**
+     * BB136: synthetic oembed JSON for a found handle. oembed confirms the
+     * profile (author_name/thumbnail) but carries no follower stats — the
+     * checker enriches those from api/user/detail.
+     */
+    private function ttOembedFoundFixture(string $authorName): string
+    {
+        return (string) json_encode([
+            'version'       => '1.0',
+            'type'          => 'video',
+            'title'         => $authorName . ' on TikTok',
+            'author_url'    => 'https://www.tiktok.com/@lessworry',
+            'author_name'   => $authorName,
+            'thumbnail_url' => 'https://p16.tiktokcdn.com/lw.jpg',
+            'provider_name' => 'TikTok',
+            'provider_url'  => 'https://www.tiktok.com',
+        ]);
     }
 
     /**

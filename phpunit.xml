@@ -18,6 +18,12 @@
         </include>
     </source>
     <php>
+        <!-- BB136: the full Feature suite renders the ~2,800-line audit
+             wizard Blade hundreds of times; PHPUnit retains per-test state
+             so cumulative memory crept past the 128M php.ini default and
+             OOM-killed the runner mid-suite (each test still passes in
+             isolation). Give the test subprocess headroom. -->
+        <ini name="memory_limit" value="512M"/>
         <env name="APP_ENV" value="testing"/>
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>
         <env name="BCRYPT_ROUNDS" value="4"/>

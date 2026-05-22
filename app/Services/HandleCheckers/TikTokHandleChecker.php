@@ -84,6 +84,15 @@ final class TikTokHandleChecker
         // found by HTTP code (200 vs 400) instead of by JSON sentinel.
         $oembed = $this->tryOembed($username);
         if ($oembed !== null) {
+            // BB136 — oembed gives a reliable found/not_found verdict but
+            // never exposes follower stats. When the handle exists, enrich
+            // the follower count from api/user/detail so the wizard shows it
+            // the same way the Instagram check does. Best-effort: a blocked
+            // enrichment probe leaves the trusted oembed verdict intact.
+            if ($oembed->status === 'found' && $oembed->followerCount === null) {
+                return $this->enrichWithFollowerCount($oembed, $username);
+            }
+
             return $oembed;
         }
 
@@ -92,6 +101,34 @@ final class TikTokHandleChecker
         // 5xx — the JSON-sentinel parsing here is more brittle but
         // covers the rare oembed flakiness window.
         return $this->tryUserDetail($username);
+    }
+
+    /**
+     * BB136 — best-effort follower-count enrichment for an oembed-confirmed
+     * handle. The handle is already known to exist, so any failure here is
+     * non-fatal: we return the original oembed result unchanged (follower
+     * count stays null) rather than downgrading a real 'found' to 'error'.
+     */
+    private function enrichWithFollowerCount(TikTokHandleResult $base, string $username): TikTokHandleResult
+    {
+        $detail = $this->tryUserDetail($username);
+
+        // Only adopt the enrichment when user/detail also resolved a real
+        // follower count; if TikTok served a captcha/HTML wall (→ 'error')
+        // or omitted stats, keep the trusted oembed verdict as-is.
+        if ($detail->status !== 'found' || $detail->followerCount === null) {
+            return $base;
+        }
+
+        return new TikTokHandleResult(
+            username:      $base->username,
+            status:        'found',
+            exists:        true,
+            displayName:   $base->displayName   ?? $detail->displayName,
+            profilePicUrl: $base->profilePicUrl ?? $detail->profilePicUrl,
+            followerCount: $detail->followerCount,
+            checkedAt:     $base->checkedAt ?? now()->toIso8601String(),
+        );
     }
 
     /**
