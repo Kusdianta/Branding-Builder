@@ -67,11 +67,13 @@ Route::get('/audit/{token}/place-photo/{idx}', [AuditController::class, 'placePh
     ->middleware('throttle:60,1')
     ->name('audit.place-photo');
 
-// BB131 — Instagram scrape screenshot proof. Streams the worker-captured
-// profile screenshot (stored on the PRIVATE local disk under
-// audits/{id}/instagram/screenshot.png) so the dashboard can show users
-// proof the real profile was captured. The unguessable session_token is
-// the access capability — same model as kit/download + place-photo; the
-// file is never moved to the public disk.
-Route::get('/audit/{token}/instagram/screenshot', [AuditController::class, 'instagramScreenshot'])
+// BB131 + BB133 — Instagram scrape screenshot proof. Streams a worker-
+// captured section screenshot (profile / feed / reels) stored on the
+// PRIVATE local disk under audits/{id}/instagram/{section}.png so the
+// dashboard can show users proof the real profile was captured. The
+// unguessable session_token is the access capability — same model as
+// kit/download + place-photo; the file is never moved to the public disk.
+// {section} is optional and defaults to 'profile' (BB131 back-compat).
+Route::get('/audit/{token}/instagram/screenshot/{section?}', [AuditController::class, 'instagramScreenshot'])
+    ->where('section', 'profile|feed|reels')
     ->name('audit.instagram-screenshot');

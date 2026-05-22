@@ -299,6 +299,118 @@ class InstagramProfileAuditServiceTest extends TestCase
         $this->assertSame(0, $meta['posts_count']);
     }
 
+    // -- BB133: multi-section screenshots ---------------------------------
+
+    #[Test]
+    public function it_persists_three_section_screenshots_when_worker_returns_screenshots_map(): void
+    {
+        $audit = $this->makeAudit();
+
+        $pngBytes = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=');
+        $b64 = base64_encode($pngBytes);
+
+        $this->hub->expects($this->once())
+            ->method('getNextCredential')
+            ->willReturn([
+                'id'              => '01j_CRED',
+                'platform'        => 'instagram',
+                'session_cookies' => [['name' => 'sessionid', 'value' => 'abc']],
+            ]);
+        $this->worker->expects($this->once())
+            ->method('auditInstagramProfile')
+            ->willReturn(new InstagramProfileAudit(
+                username: 'lessworry.id',
+                capturedAt: new DateTimeImmutable('2026-05-11T10:00:00Z'),
+                isPrivate: false,
+                profile: new ProfileMetadata(
+                    name: 'Less Worry',
+                    bio: 'Laundry',
+                    externalUrl: '',
+                    followers: 100,
+                    following: 10,
+                    postsCount: 50,
+                    isVerified: false,
+                    isBusiness: true,
+                    profilePicBase64: '',
+                ),
+                profilePicFetchError: null,
+                screenshotBase64: $b64,
+                recentPosts: [],
+                highlights: [],
+                durationMs: 1000,
+                hasActiveStory: false,
+                screenshots: ['profile' => $b64, 'feed' => $b64, 'reels' => $b64],
+            ));
+        $this->claude->expects($this->once())
+            ->method('analyzeInstagramProfile')
+            ->willReturn(['executive_summary' => 'OK']);
+
+        $this->makeService()->audit($audit);
+
+        $audit->refresh();
+        $base = "audits/{$audit->id}/instagram";
+        Storage::disk('local')->assertExists("{$base}/profile.png");
+        Storage::disk('local')->assertExists("{$base}/feed.png");
+        Storage::disk('local')->assertExists("{$base}/reels.png");
+
+        $meta = $audit->instagram_audit['_meta'];
+        $this->assertSame("{$base}/profile.png", $meta['screenshot_paths']['profile']);
+        $this->assertSame("{$base}/feed.png", $meta['screenshot_paths']['feed']);
+        $this->assertSame("{$base}/reels.png", $meta['screenshot_paths']['reels']);
+        // Back-compat: screenshot_path mirrors the profile section so the
+        // KonsistensiScorer vision path + legacy route keep resolving.
+        $this->assertSame("{$base}/profile.png", $meta['screenshot_path']);
+    }
+
+    #[Test]
+    public function it_persists_only_present_sections_and_omits_missing_ones(): void
+    {
+        $audit = $this->makeAudit();
+
+        $pngBytes = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=');
+        $b64 = base64_encode($pngBytes);
+
+        $this->hub->expects($this->once())
+            ->method('getNextCredential')
+            ->willReturn([
+                'id'              => '01j_CRED',
+                'platform'        => 'instagram',
+                'session_cookies' => [['name' => 'sessionid', 'value' => 'abc']],
+            ]);
+        $this->worker->expects($this->once())
+            ->method('auditInstagramProfile')
+            ->willReturn(new InstagramProfileAudit(
+                username: 'noreels.id',
+                capturedAt: new DateTimeImmutable('2026-05-11T10:00:00Z'),
+                isPrivate: false,
+                profile: new ProfileMetadata('NoReels', '', '', 5, 5, 5, false, false, ''),
+                profilePicFetchError: null,
+                screenshotBase64: $b64,
+                recentPosts: [],
+                highlights: [],
+                durationMs: 1000,
+                hasActiveStory: false,
+                // Account with no reels tab → only profile + feed captured.
+                screenshots: ['profile' => $b64, 'feed' => $b64],
+            ));
+        $this->claude->expects($this->once())
+            ->method('analyzeInstagramProfile')
+            ->willReturn(['executive_summary' => 'OK']);
+
+        $this->makeService()->audit($audit);
+
+        $audit->refresh();
+        $base = "audits/{$audit->id}/instagram";
+        Storage::disk('local')->assertExists("{$base}/profile.png");
+        Storage::disk('local')->assertExists("{$base}/feed.png");
+        Storage::disk('local')->assertMissing("{$base}/reels.png");
+
+        $meta = $audit->instagram_audit['_meta'];
+        $this->assertArrayHasKey('profile', $meta['screenshot_paths']);
+        $this->assertArrayHasKey('feed', $meta['screenshot_paths']);
+        $this->assertArrayNotHasKey('reels', $meta['screenshot_paths']);
+    }
+
     // -- no IG url path ----------------------------------------------------
 
     #[Test]

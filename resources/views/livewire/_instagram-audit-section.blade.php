@@ -122,13 +122,35 @@
     $execSummaryString = $execIsStructured ? '' : (string) $execSummaryRaw;
     $hasExecStructured = $execHeadline !== '' || $execKekuatan !== [] || $execAreaPerbaikan !== [] || $execKonteks !== '';
 
-    // BB131 — screenshot proof. The PNG is on the private disk; we serve
-    // it through the token-scoped audit.instagram-screenshot route.
-    $screenshotPath = (string) ($meta['screenshot_path'] ?? '');
+    // BB131 + BB133 — screenshot proof. PNGs are on the private disk; we
+    // serve each section through the token-scoped audit.instagram-screenshot
+    // route. BB133 captures up to three sections (profile / feed / reels);
+    // pre-BB133 audits only recorded the single screenshot_path → render it
+    // as the lone "Profil" tab.
     $sessionTokenForProof = (string) ($sessionToken ?? '');
-    $screenshotUrl  = ($screenshotPath !== '' && $sessionTokenForProof !== '')
-        ? route('audit.instagram-screenshot', ['token' => $sessionTokenForProof])
-        : '';
+    $screenshotPathsRaw   = (array) ($meta['screenshot_paths'] ?? []);
+    $proofSections        = [];
+    if ($sessionTokenForProof !== '') {
+        foreach (['profile' => 'Profil', 'feed' => 'Feed', 'reels' => 'Reels'] as $section => $label) {
+            if (! empty($screenshotPathsRaw[$section])) {
+                $proofSections[$section] = [
+                    'label' => $label,
+                    'url'   => route('audit.instagram-screenshot', [
+                        'token'   => $sessionTokenForProof,
+                        'section' => $section,
+                    ]),
+                ];
+            }
+        }
+        // Back-compat: pre-BB133 audits only have the single screenshot_path.
+        if ($proofSections === [] && ! empty($meta['screenshot_path'])) {
+            $proofSections['profile'] = [
+                'label' => 'Profil',
+                'url'   => route('audit.instagram-screenshot', ['token' => $sessionTokenForProof]),
+            ];
+        }
+    }
+    $proofDefaultTab = $proofSections !== [] ? array_key_first($proofSections) : '';
 
     $profileBranding        = (array) ($igAudit['profile_branding'] ?? []);
     $bioAnalysis            = (array) ($profileBranding['bio_analysis'] ?? []);
@@ -299,22 +321,41 @@
         </div>
     </x-nui-card>
 
-    {{-- ===== BB131: Bukti Scrape (screenshot proof) ===== --}}
-    @if ($screenshotUrl !== '')
+    {{-- ===== BB131 + BB133: Bukti Scrape (multi-section screenshot proof) ===== --}}
+    @if ($proofSections !== [])
         <x-nui-card style="margin-bottom: 16px;">
-            <div x-data="{ proofOpen: false }">
+            <div x-data="{ proofOpen: false, proofTab: '{{ $proofDefaultTab }}' }">
                 <button type="button" @click="proofOpen = !proofOpen" class="w-full flex items-center justify-between" style="background: none; border: none; cursor: pointer; text-align: left; padding: 0;">
                     <div>
                         <p style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 0;">Bukti Scrape</p>
-                        <p style="font-size: 12px; color: var(--text-tertiary); margin-top: 2px;">Screenshot profil Instagram yang diambil saat audit — bukti data ini benar dari profil brand kita.</p>
+                        <p style="font-size: 12px; color: var(--text-tertiary); margin-top: 2px;">Screenshot Instagram yang diambil saat audit — bukti data ini benar dari profil brand kita.</p>
                     </div>
                     <span x-text="proofOpen ? '−' : '+'" style="font-size: 22px; color: var(--text-tertiary); font-weight: 300; line-height: 1;"></span>
                 </button>
                 <div x-show="proofOpen" x-cloak style="margin-top: 14px;">
-                    <img src="{{ $screenshotUrl }}"
-                         alt="Screenshot profil Instagram {{ $meta['username'] ?? '' }}"
-                         loading="lazy"
-                         style="max-width: 100%; border-radius: var(--radius-md); border: 1px solid var(--border-default); display: block;" />
+                    @if (count($proofSections) > 1)
+                        <div role="tablist" class="flex items-center gap-1" style="border-bottom: 1px solid var(--border-default); margin-bottom: 12px;">
+                            @foreach ($proofSections as $section => $info)
+                                <button type="button"
+                                        role="tab"
+                                        @click="proofTab = '{{ $section }}'"
+                                        :style="proofTab === '{{ $section }}'
+                                            ? 'color: var(--text-primary); border-bottom-color: var(--chimera-500); font-weight: 500;'
+                                            : 'color: var(--text-secondary); border-bottom-color: transparent;'"
+                                        style="padding: 8px 16px; background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer; font-size: 13px;">
+                                    {{ $info['label'] }}
+                                </button>
+                            @endforeach
+                        </div>
+                    @endif
+                    @foreach ($proofSections as $section => $info)
+                        <div x-show="proofTab === '{{ $section }}'" x-cloak>
+                            <img src="{{ $info['url'] }}"
+                                 alt="Screenshot Instagram {{ $info['label'] }} {{ $meta['username'] ?? '' }}"
+                                 loading="lazy"
+                                 style="max-width: 100%; border-radius: var(--radius-md); border: 1px solid var(--border-default); display: block;" />
+                        </div>
+                    @endforeach
                 </div>
             </div>
         </x-nui-card>

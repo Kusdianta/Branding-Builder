@@ -240,29 +240,45 @@ class AuditController extends Controller
     }
 
     /**
-     * BB131 — stream the Instagram scrape screenshot as proof the real
-     * profile was captured. The PNG lives on the PRIVATE ``local`` disk at
-     * audits/{id}/instagram/screenshot.png (persisted by
-     * InstagramProfileAuditService::persistInstagramAssets); its path is
-     * recorded in instagram_audit._meta.screenshot_path.
+     * BB131 + BB133 — stream a section of the Instagram scrape (profile /
+     * feed / reels) as proof the real profile was captured. The PNGs live on
+     * the PRIVATE ``local`` disk at audits/{id}/instagram/{section}.png
+     * (persisted by InstagramProfileAuditService::persistInstagramAssets);
+     * their paths are recorded in instagram_audit._meta.screenshot_paths.
+     *
+     * ``$section`` defaults to 'profile' and is constrained to
+     * profile|feed|reels by the route. Back-compat: pre-BB133 audits only
+     * recorded the single _meta.screenshot_path, so a 'profile' request
+     * falls back to it (and to the legacy screenshot.png on disk).
      *
      * Access control mirrors kit/download + place-photo: the unguessable
-     * session_token in the URL is the capability. We deliberately do NOT
-     * move screenshots to the public disk — they stay private and are only
-     * reachable through this token-scoped route.
+     * session_token in the URL is the capability. Screenshots stay on the
+     * private disk and are only reachable through this token-scoped route.
      *
-     * 404 when: token doesn't resolve, no screenshot_path recorded, or the
-     * file is missing on disk (legacy audit / failed scrape).
+     * 404 when: token doesn't resolve, no path recorded for the section, or
+     * the file is missing on disk (legacy audit / failed scrape / a feed or
+     * reels section that wasn't captured for this account).
      *
      * @return StreamedResponse|Response
      */
-    public function instagramScreenshot(string $token)
+    public function instagramScreenshot(string $token, ?string $section = null)
     {
         $audit = BrandAudit::where('session_token', $token)->firstOrFail();
 
+        $section = $section ?? 'profile';
+        if (! in_array($section, ['profile', 'feed', 'reels'], true)) {
+            abort(404);
+        }
+
         $payload = is_array($audit->instagram_audit) ? $audit->instagram_audit : [];
         $meta    = is_array($payload['_meta'] ?? null) ? $payload['_meta'] : [];
-        $path    = (string) ($meta['screenshot_path'] ?? '');
+        $paths   = is_array($meta['screenshot_paths'] ?? null) ? $meta['screenshot_paths'] : [];
+
+        $path = (string) ($paths[$section] ?? '');
+        // BB131 back-compat: the legacy single screenshot_path is the profile.
+        if ($path === '' && $section === 'profile') {
+            $path = (string) ($meta['screenshot_path'] ?? '');
+        }
 
         if ($path === '' || ! Storage::disk('local')->exists($path)) {
             abort(404);
@@ -270,7 +286,7 @@ class AuditController extends Controller
 
         // Inline (not download) so the dashboard <img> renders it. Private
         // Cache-Control — never let a shared proxy cache an audit screenshot.
-        return Storage::disk('local')->response($path, 'instagram-screenshot.png', [
+        return Storage::disk('local')->response($path, "instagram-{$section}.png", [
             'Content-Type'  => 'image/png',
             'Cache-Control' => 'private, max-age=3600',
         ]);

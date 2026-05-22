@@ -113,4 +113,80 @@ class InstagramScreenshotTest extends TestCase
 
         $response->assertStatus(404);
     }
+
+    // -- BB133: per-section screenshots -----------------------------------
+
+    #[Test]
+    public function streams_feed_section_when_present(): void
+    {
+        Storage::fake('local');
+
+        $base  = 'audits/test-id/instagram';
+        $audit = $this->makeAudit([
+            'instagram_audit_status' => 'done',
+            'instagram_audit'        => ['_meta' => ['screenshot_paths' => [
+                'profile' => "{$base}/profile.png",
+                'feed'    => "{$base}/feed.png",
+                'reels'   => "{$base}/reels.png",
+            ]]],
+        ]);
+        Storage::disk('local')->put("{$base}/feed.png", $this->fakePngBytes());
+
+        $response = $this->get("/audit/{$audit->session_token}/instagram/screenshot/feed");
+
+        $response->assertStatus(200);
+        $response->assertHeader('Content-Type', 'image/png');
+        $this->assertSame("\x89PNG", substr($response->streamedContent(), 0, 4));
+    }
+
+    #[Test]
+    public function profile_section_falls_back_to_legacy_screenshot_path(): void
+    {
+        Storage::fake('local');
+
+        // Pre-BB133 audit: only the legacy single screenshot_path exists.
+        $path  = 'audits/legacy-id/instagram/screenshot.png';
+        $audit = $this->makeAudit([
+            'instagram_audit_status' => 'done',
+            'instagram_audit'        => ['_meta' => ['screenshot_path' => $path]],
+        ]);
+        Storage::disk('local')->put($path, $this->fakePngBytes());
+
+        $response = $this->get("/audit/{$audit->session_token}/instagram/screenshot/profile");
+
+        $response->assertStatus(200);
+        $this->assertSame("\x89PNG", substr($response->streamedContent(), 0, 4));
+    }
+
+    #[Test]
+    public function returns_404_for_unknown_section(): void
+    {
+        Storage::fake('local');
+
+        $audit = $this->makeAudit([
+            'instagram_audit_status' => 'done',
+            'instagram_audit'        => ['_meta' => ['screenshot_paths' => ['profile' => 'audits/x/instagram/profile.png']]],
+        ]);
+
+        // 'stories' is not an allowed section — route constraint rejects it.
+        $response = $this->get("/audit/{$audit->session_token}/instagram/screenshot/stories");
+
+        $response->assertStatus(404);
+    }
+
+    #[Test]
+    public function returns_404_for_feed_section_when_absent(): void
+    {
+        Storage::fake('local');
+
+        // Account with no reels/feed captured — only profile present.
+        $audit = $this->makeAudit([
+            'instagram_audit_status' => 'done',
+            'instagram_audit'        => ['_meta' => ['screenshot_paths' => ['profile' => 'audits/x/instagram/profile.png']]],
+        ]);
+
+        $response = $this->get("/audit/{$audit->session_token}/instagram/screenshot/feed");
+
+        $response->assertStatus(404);
+    }
 }

@@ -518,6 +518,8 @@ class InstagramProfileAuditService
             'duration_ms'          => $result->durationMs,
             'profile_pic_path'     => null,
             'screenshot_path'      => null,
+            // BB133 — per-section screenshot paths {profile, feed, reels}.
+            'screenshot_paths'     => [],
             'post_thumbnail_paths' => [],
             'highlight_names'      => array_map(
                 static fn ($h) => $h->name,
@@ -535,13 +537,33 @@ class InstagramProfileAuditService
             }
         }
 
-        if ($result->screenshotBase64 !== '') {
+        // BB133 — new worker payloads carry a per-section screenshots map
+        // (profile / feed / reels). Persist each present section as its own
+        // PNG and record the paths. screenshot_path mirrors the profile
+        // section so KonsistensiScorer's vision path + the legacy
+        // single-screenshot route keep resolving. When the map is absent
+        // (older worker build), fall back to the BB131 single screenshot.
+        if ($result->screenshots !== []) {
+            foreach (['profile', 'feed', 'reels'] as $section) {
+                $bytes = $result->screenshotBytesFor($section);
+                if ($bytes === null || $bytes === '') {
+                    continue;
+                }
+                $path = "{$basePath}/{$section}.png";
+                $disk->put($path, $bytes);
+                $meta['screenshot_paths'][$section] = $path;
+            }
+            if (isset($meta['screenshot_paths']['profile'])) {
+                $meta['screenshot_path'] = $meta['screenshot_paths']['profile'];
+            }
+        } elseif ($result->screenshotBase64 !== '') {
             try {
                 $bytes = $result->screenshotBytes();
                 if ($bytes !== '') {
                     $path = "{$basePath}/screenshot.png";
                     $disk->put($path, $bytes);
                     $meta['screenshot_path'] = $path;
+                    $meta['screenshot_paths']['profile'] = $path;
                 }
             } catch (RuntimeException) {
                 // Malformed base64 — diagnostic only, skip.
