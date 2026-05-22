@@ -239,6 +239,43 @@ class AuditController extends Controller
         ]);
     }
 
+    /**
+     * BB131 — stream the Instagram scrape screenshot as proof the real
+     * profile was captured. The PNG lives on the PRIVATE ``local`` disk at
+     * audits/{id}/instagram/screenshot.png (persisted by
+     * InstagramProfileAuditService::persistInstagramAssets); its path is
+     * recorded in instagram_audit._meta.screenshot_path.
+     *
+     * Access control mirrors kit/download + place-photo: the unguessable
+     * session_token in the URL is the capability. We deliberately do NOT
+     * move screenshots to the public disk — they stay private and are only
+     * reachable through this token-scoped route.
+     *
+     * 404 when: token doesn't resolve, no screenshot_path recorded, or the
+     * file is missing on disk (legacy audit / failed scrape).
+     *
+     * @return StreamedResponse|Response
+     */
+    public function instagramScreenshot(string $token)
+    {
+        $audit = BrandAudit::where('session_token', $token)->firstOrFail();
+
+        $payload = is_array($audit->instagram_audit) ? $audit->instagram_audit : [];
+        $meta    = is_array($payload['_meta'] ?? null) ? $payload['_meta'] : [];
+        $path    = (string) ($meta['screenshot_path'] ?? '');
+
+        if ($path === '' || ! Storage::disk('local')->exists($path)) {
+            abort(404);
+        }
+
+        // Inline (not download) so the dashboard <img> renders it. Private
+        // Cache-Control — never let a shared proxy cache an audit screenshot.
+        return Storage::disk('local')->response($path, 'instagram-screenshot.png', [
+            'Content-Type'  => 'image/png',
+            'Cache-Control' => 'private, max-age=3600',
+        ]);
+    }
+
     public function downloadKit(string $token): StreamedResponse
     {
         $audit = BrandAudit::where('session_token', $token)->firstOrFail();

@@ -187,7 +187,12 @@ class ClaudeServiceAnalysisNormalizationTest extends TestCase
         // backfilled at root with defaults.
         $this->assertArrayHasKey('someUnknownWrapper', $out);
         $this->assertArrayHasKey('executive_summary', $out);
-        $this->assertSame('', $out['executive_summary']); // backfill default
+        // BB131 — executive_summary is now a structured object; the
+        // backfill default is the empty-structured shape, not ''.
+        $this->assertSame(
+            ['headline' => '', 'kekuatan' => [], 'area_perbaikan' => [], 'konteks' => ''],
+            $out['executive_summary'],
+        );
         // Schema validation passes because all 11 keys are present at root.
         $this->assertSame([], $this->missingKeys($out));
     }

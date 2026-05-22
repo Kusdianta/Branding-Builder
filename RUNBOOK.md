@@ -133,3 +133,49 @@ re-diagnosing the same bugs:
 
 Related memory:
 - `~/.claude/projects/.../memory/project_bb109_worker_diagnostic.md`
+
+---
+
+## Known limitations
+
+### BB131 — Instagram audit can run in an anonymous (logged-out) render
+
+**Symptom:** The scrape succeeds and returns real data, but the captured
+screenshot shows Instagram's **"Log in / Sign up"** buttons in the top nav
+(the logged-out public view) instead of an authenticated session.
+
+**Why it still works (for now):** A **public** profile serves its bio,
+follower counts, and post grid to anonymous visitors, so the audit gets real
+data even when the operator's session cookies aren't actually authenticating
+the browser. Diagnosed on the Dhobi Laundry audit (`@dhobilaundryofficial`,
+2026-05-21): real 199 followers / 429 posts captured, real bio visible in the
+screenshot — but logged-out chrome.
+
+**The latent risk:** A **private** profile (or heavier IG anti-bot) will yield
+empty/degraded data in this anonymous state, because the grid + highlights are
+gated to followers. The audit would then silently score a "profile shell."
+
+**Status:** Filed as a BB131 follow-up (operator referenced "BB132", but that
+number is already used for the audit_failed banner work — pick a fresh tracker
+ID). NOT fixed in BB131 — out of scope. The root cause is likely that the
+worker's injected cookies aren't taking effect (stale, or Playwright context
+not applying them), so IG falls back to the public render. Investigate the
+cookie injection path in `_make_context` / `cookies_to_playwright` and confirm
+`sessionid` is actually present and accepted at navigation time.
+
+### BB131 — Instagram bio + screenshot proof
+
+- **Bio extraction** no longer falls back to Instagram's `og:description`
+  boilerplate ("See Instagram photos and videos from …"). The worker keeps the
+  header DOM selector as the primary read, then backfills the real bio from the
+  `web_profile_info` JSON endpoint **executed inside the authenticated browser
+  page** (`_fetch_bio_via_web_profile_info`). A bio starting with the boilerplate
+  phrase is treated as "no real bio captured" and replaced.
+- **Existing audits keep the old (boilerplate) bio** — it can't be migrated
+  without re-scraping. Re-run the audit (BB59 retry-step `gather_instagram`) to
+  get the corrected bio.
+- **Screenshot proof** is served through `GET /audit/{token}/instagram/screenshot`
+  (token-scoped, streams from the private `local` disk — never moved to the
+  public disk). The dashboard "Bukti Scrape" card renders it. Screenshots were
+  always persisted at `audits/{id}/instagram/screenshot.png`; BB131 only exposes
+  the existing file.

@@ -372,6 +372,11 @@ INSTRUKSI ANALISIS
 
 Lakukan audit menyeluruh dengan kedalaman setara konsultan brand strategist senior (gaya apikprimadya):
 - Setiap penilaian harus terikat pada data yang TERAMATI di profil ini (bio aktual, tipe post nyata, jumlah, screenshot). Hindari klaim umum seperti "Instagram penting untuk bisnis" — itu noise, bukan insight.
+- Untuk `executive_summary`: kembalikan OBJEK terstruktur (BUKAN satu paragraf panjang) dengan 4 field —
+    * `headline`       : 1 kalimat verdict ringkas tentang kondisi brand di Instagram.
+    * `kekuatan`       : array 2-4 poin kekuatan utama yang TERAMATI (spesifik, bukan generik).
+    * `area_perbaikan` : array 2-4 poin area perbaikan paling berdampak.
+    * `konteks`        : 1 paragraf naratif yang menjelaskan angka/temuan utama (followers, frekuensi post, dll) sebagai konteks.
 - Untuk `engagement_analysis.estimated_er_range`: pilih tier berdasarkan jumlah followers, lalu pertimbangkan apakah positioning brand condong B2B/entrepreneur (turunkan 0.3 dari kedua bound) atau B2C/lifestyle (gunakan range default). Jelaskan basis pilihan di `estimation_basis`.
 - Untuk `content_pillars`: identifikasi 3-5 tema/pillar konten DARI POST YANG TERLAMPIR. Jangan tebak — kalau tidak terlihat pattern, katakan demikian dan flag di `limitations`.
 - Untuk `content_type_breakdown`: angka persentase (0-100), TOTAL 100 (terhadap 12 post yang diaudit, atau total post yang ter-scrape jika kurang dari 12). Contoh: `{"reels": 58, "carousel": 25, "static": 17}` berarti ~58% Reels, ~25% Carousel, ~17% Static. Bulatkan ke integer terdekat; jika total tidak persis 100 karena pembulatan, sesuaikan tipe dominan (selisih ±1 ditambahkan ke kategori terbesar).
@@ -490,7 +495,12 @@ TEXT;
     private function renderOutputSchemaBlock(): string
     {
         $schema = [
-            'executive_summary' => '<string, 2-3 paragraf, sebut fakta spesifik dari profil ini>',
+            'executive_summary' => [
+                'headline'       => '<string, 1 kalimat verdict ringkas>',
+                'kekuatan'       => ['<string>', '...'],
+                'area_perbaikan' => ['<string>', '...'],
+                'konteks'        => '<string, 1 paragraf konteks angka/temuan utama>',
+            ],
             'profile_branding' => [
                 'bio_analysis' => [
                     'current_bio'      => '<string, bio aktual saat ini>',
@@ -689,7 +699,15 @@ SYS;
     private function emptyAnalysisDefaults(): array
     {
         return [
-            'executive_summary' => '',
+            // BB131 — structured executive summary (was a flat string).
+            // Old audits persisted a string here; the dashboard + PDF
+            // renderers handle both shapes for back-compat.
+            'executive_summary' => [
+                'headline'       => '',
+                'kekuatan'       => [],
+                'area_perbaikan' => [],
+                'konteks'        => '',
+            ],
             'profile_branding' => [
                 'bio_analysis'          => ['current_bio' => '', 'strengths' => [], 'weaknesses' => [], 'recommended_bio' => ''],
                 'name_field_seo'        => ['current' => '', 'assessment' => '', 'recommended' => ''],

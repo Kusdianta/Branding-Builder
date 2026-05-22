@@ -3326,6 +3326,7 @@ new class extends Component {
                     @include('livewire._instagram-audit-section', [
                         'instagramAudit'       => $instagramAudit,
                         'instagramAuditStatus' => $instagramAuditStatus,
+                        'sessionToken'         => $sessionToken,
                     ])
                 </div>
 

@@ -124,7 +124,16 @@
     }
 
     // Section sub-records.
-    $execSummary = (string) ($igAudit['executive_summary'] ?? '');
+    // BB131 — executive_summary may be a structured object (new) or a
+    // flat string (audits created before BB131). Render both shapes.
+    $execSummaryRaw    = $igAudit['executive_summary'] ?? '';
+    $execIsStructured  = is_array($execSummaryRaw);
+    $execHeadline      = $execIsStructured ? (string) ($execSummaryRaw['headline'] ?? '') : '';
+    $execKekuatan      = $execIsStructured ? array_values(array_filter((array) ($execSummaryRaw['kekuatan'] ?? []))) : [];
+    $execAreaPerbaikan = $execIsStructured ? array_values(array_filter((array) ($execSummaryRaw['area_perbaikan'] ?? []))) : [];
+    $execKonteks       = $execIsStructured ? (string) ($execSummaryRaw['konteks'] ?? '') : '';
+    $execSummaryString = $execIsStructured ? '' : (string) $execSummaryRaw;
+    $hasExecStructured = $execHeadline !== '' || $execKekuatan !== [] || $execAreaPerbaikan !== [] || $execKonteks !== '';
     $profileBranding = (array) ($igAudit['profile_branding'] ?? []);
     $bioAnalysis     = (array) ($profileBranding['bio_analysis'] ?? []);
     $nameFieldSeo    = (array) ($profileBranding['name_field_seo'] ?? []);
@@ -276,9 +285,29 @@
 </div>
 
 {{-- ========================== EXECUTIVE SUMMARY ========================== --}}
-@if ($execSummary !== '')
+@if ($execIsStructured && $hasExecStructured)
     <h3 style="font-size: 13px; color: #0F1411; margin: 18px 0 8px 0;">Ringkasan Eksekutif</h3>
-    <p style="font-size: 10px; color: #0F1411; line-height: 1.7; margin: 0 0 8px 0; white-space: pre-line;">{{ $execSummary }}</p>
+    @if ($execHeadline !== '')
+        <p style="font-size: 11px; color: #0F1411; line-height: 1.6; margin: 0 0 8px 0; font-weight: 600;">{{ $execHeadline }}</p>
+    @endif
+    @if (! empty($execKekuatan))
+        <p style="font-size: 10px; color: #3D8948; font-weight: 600; margin: 6px 0 2px 0;">Kekuatan</p>
+        <ul style="margin: 0 0 6px 16px; padding: 0; font-size: 10px; color: #0F1411; line-height: 1.6;">
+            @foreach ($execKekuatan as $item)<li>{{ $item }}</li>@endforeach
+        </ul>
+    @endif
+    @if (! empty($execAreaPerbaikan))
+        <p style="font-size: 10px; color: #C97A1B; font-weight: 600; margin: 6px 0 2px 0;">Area Perbaikan</p>
+        <ul style="margin: 0 0 6px 16px; padding: 0; font-size: 10px; color: #0F1411; line-height: 1.6;">
+            @foreach ($execAreaPerbaikan as $item)<li>{{ $item }}</li>@endforeach
+        </ul>
+    @endif
+    @if ($execKonteks !== '')
+        <p style="font-size: 10px; color: #0F1411; line-height: 1.7; margin: 4px 0 8px 0; white-space: pre-line;">{{ $execKonteks }}</p>
+    @endif
+@elseif (! $execIsStructured && $execSummaryString !== '')
+    <h3 style="font-size: 13px; color: #0F1411; margin: 18px 0 8px 0;">Ringkasan Eksekutif</h3>
+    <p style="font-size: 10px; color: #0F1411; line-height: 1.7; margin: 0 0 8px 0; white-space: pre-line;">{{ $execSummaryString }}</p>
 @endif
 
 {{-- ========================== PROFILE & BRANDING ========================== --}}

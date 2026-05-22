@@ -110,7 +110,26 @@
         $analyzedAtLabel = $analyzedAt;
     }
 
-    $execSummary            = (string) ($igAudit['executive_summary'] ?? '');
+    // BB131 — executive_summary is now a structured object
+    // {headline, kekuatan[], area_perbaikan[], konteks}. Audits created
+    // before BB131 persisted a flat string; render both shapes.
+    $execSummaryRaw    = $igAudit['executive_summary'] ?? '';
+    $execIsStructured  = is_array($execSummaryRaw);
+    $execHeadline      = $execIsStructured ? (string) ($execSummaryRaw['headline'] ?? '') : '';
+    $execKekuatan      = $execIsStructured ? array_values(array_filter((array) ($execSummaryRaw['kekuatan'] ?? []))) : [];
+    $execAreaPerbaikan = $execIsStructured ? array_values(array_filter((array) ($execSummaryRaw['area_perbaikan'] ?? []))) : [];
+    $execKonteks       = $execIsStructured ? (string) ($execSummaryRaw['konteks'] ?? '') : '';
+    $execSummaryString = $execIsStructured ? '' : (string) $execSummaryRaw;
+    $hasExecStructured = $execHeadline !== '' || $execKekuatan !== [] || $execAreaPerbaikan !== [] || $execKonteks !== '';
+
+    // BB131 — screenshot proof. The PNG is on the private disk; we serve
+    // it through the token-scoped audit.instagram-screenshot route.
+    $screenshotPath = (string) ($meta['screenshot_path'] ?? '');
+    $sessionTokenForProof = (string) ($sessionToken ?? '');
+    $screenshotUrl  = ($screenshotPath !== '' && $sessionTokenForProof !== '')
+        ? route('audit.instagram-screenshot', ['token' => $sessionTokenForProof])
+        : '';
+
     $profileBranding        = (array) ($igAudit['profile_branding'] ?? []);
     $bioAnalysis            = (array) ($profileBranding['bio_analysis'] ?? []);
     $nameFieldSeo           = (array) ($profileBranding['name_field_seo'] ?? []);
@@ -280,6 +299,27 @@
         </div>
     </x-nui-card>
 
+    {{-- ===== BB131: Bukti Scrape (screenshot proof) ===== --}}
+    @if ($screenshotUrl !== '')
+        <x-nui-card style="margin-bottom: 16px;">
+            <div x-data="{ proofOpen: false }">
+                <button type="button" @click="proofOpen = !proofOpen" class="w-full flex items-center justify-between" style="background: none; border: none; cursor: pointer; text-align: left; padding: 0;">
+                    <div>
+                        <p style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 0;">Bukti Scrape</p>
+                        <p style="font-size: 12px; color: var(--text-tertiary); margin-top: 2px;">Screenshot profil Instagram yang diambil saat audit — bukti data ini benar dari profil brand kita.</p>
+                    </div>
+                    <span x-text="proofOpen ? '−' : '+'" style="font-size: 22px; color: var(--text-tertiary); font-weight: 300; line-height: 1;"></span>
+                </button>
+                <div x-show="proofOpen" x-cloak style="margin-top: 14px;">
+                    <img src="{{ $screenshotUrl }}"
+                         alt="Screenshot profil Instagram {{ $meta['username'] ?? '' }}"
+                         loading="lazy"
+                         style="max-width: 100%; border-radius: var(--radius-md); border: 1px solid var(--border-default); display: block;" />
+                </div>
+            </div>
+        </x-nui-card>
+    @endif
+
     {{-- Phase 12c.2 BB116 part 2: AI suggestion disclaimer rendered
          once at the top of the Instagram audit body so users know
          the analysis and recommendations below are LLM-generated. --}}
@@ -290,11 +330,45 @@
         </p>
     </div>
 
-    {{-- ===== Executive summary (always expanded) ===== --}}
-    @if ($execSummary !== '')
+    {{-- ===== Executive summary (always expanded) — BB131 structured ===== --}}
+    @if ($execIsStructured && $hasExecStructured)
         <x-nui-card style="margin-bottom: 16px;">
             <h4 style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 12px;">Ringkasan Eksekutif</h4>
-            <p style="font-size: 13px; color: var(--text-primary); line-height: 1.75; margin: 0; white-space: pre-line;">{{ $execSummary }}</p>
+
+            @if ($execHeadline !== '')
+                <div style="background: var(--surface-muted); border-left: 3px solid var(--color-info); padding: 10px 14px; border-radius: var(--radius-sm); margin-bottom: 14px;">
+                    <p style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 0; line-height: 1.5;">{{ $execHeadline }}</p>
+                </div>
+            @endif
+
+            @if (! empty($execKekuatan))
+                <p style="font-size: 11px; font-weight: 600; color: var(--color-success); margin: 12px 0 4px;">Kekuatan</p>
+                <div class="flex flex-col gap-1.5">
+                    @foreach ($execKekuatan as $item)
+                        <div style="background: var(--chimera-50); border-left: 3px solid var(--color-success); padding: 8px 12px; border-radius: var(--radius-sm); font-size: 12px; color: var(--text-primary); line-height: 1.55;">{{ $item }}</div>
+                    @endforeach
+                </div>
+            @endif
+
+            @if (! empty($execAreaPerbaikan))
+                <p style="font-size: 11px; font-weight: 600; color: var(--color-warning); margin: 12px 0 4px;">Area Perbaikan</p>
+                <div class="flex flex-col gap-1.5">
+                    @foreach ($execAreaPerbaikan as $item)
+                        <div style="background: #FEF3DC; border-left: 3px solid var(--color-warning); padding: 8px 12px; border-radius: var(--radius-sm); font-size: 12px; color: var(--text-primary); line-height: 1.55;">{{ $item }}</div>
+                    @endforeach
+                </div>
+            @endif
+
+            @if ($execKonteks !== '')
+                <p style="font-size: 13px; color: var(--text-secondary); line-height: 1.7; margin: 14px 0 0; white-space: pre-line;">{{ $execKonteks }}</p>
+            @endif
+        </x-nui-card>
+    @elseif (! $execIsStructured && $execSummaryString !== '')
+        {{-- Back-compat: audits created before BB131 stored a flat string. --}}
+        <x-nui-card style="margin-bottom: 16px;">
+            <h4 style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 6px;">Ringkasan Eksekutif</h4>
+            <p style="font-size: 11px; color: var(--text-tertiary); margin: 0 0 10px; font-style: italic;">Audit lama — format ringkasan sebelumnya</p>
+            <p style="font-size: 13px; color: var(--text-primary); line-height: 1.75; margin: 0; white-space: pre-line;">{{ $execSummaryString }}</p>
         </x-nui-card>
     @endif
 
