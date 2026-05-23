@@ -67,11 +67,11 @@
         ],
         "dev": [
             "Composer\\Config::disableProcessTimeout",
-            "npx concurrently -c \"#c4b5fd,#fb7185,#fdba74\" \"php artisan queue:work --tries=1 --timeout=600\" \"npm run dev\" \"uv --project ../workers/nema-worker run python ../workers/nema-worker/run_dev.py\" --names=queue,vite,worker"
+            "npx concurrently -c \"#c4b5fd,#a78bfa,#8b5cf6,#fb7185,#fdba74\" \"php artisan queue:work --tries=1 --timeout=600\" \"php artisan queue:work --tries=1 --timeout=600\" \"php artisan queue:work --tries=1 --timeout=600\" \"npm run dev\" \"uv --project ../workers/nema-worker run python ../workers/nema-worker/run_dev.py\" --names=queue1,queue2,queue3,vite,worker"
         ],
         "dev:no-worker": [
             "Composer\\Config::disableProcessTimeout",
-            "npx concurrently -c \"#c4b5fd,#fb7185\" \"php artisan queue:work --tries=1 --timeout=600\" \"npm run dev\" --names=queue,vite"
+            "npx concurrently -c \"#c4b5fd,#a78bfa,#8b5cf6,#fb7185\" \"php artisan queue:work --tries=1 --timeout=600\" \"php artisan queue:work --tries=1 --timeout=600\" \"php artisan queue:work --tries=1 --timeout=600\" \"npm run dev\" --names=queue1,queue2,queue3,vite"
         ],
         "test": [
             "@php artisan config:clear --ansi",
