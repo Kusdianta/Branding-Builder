@@ -847,3 +847,118 @@
     margin: 0;
     line-height: 1.6;
 }
+
+/* ============================================================
+   BB138 — Dashboard visualizations (7 charts).
+   Colour tokens are defined here as custom properties (the
+   sanctioned token pattern); component rules reference them via
+   var() and never inline raw hex.
+   ============================================================ */
+:root {
+    /* Score-gauge tier zones (5-band rainbow). */
+    --bb-gauge-critical:  #DC2626;
+    --bb-gauge-below:     #EA580C;
+    --bb-gauge-average:   #D97706;
+    --bb-gauge-good:      #2563EB;
+    --bb-gauge-excellent: #16A34A;
+    /* Owner reply-rate gauge tiers. */
+    --bb-reply-low:  #EA580C;
+    --bb-reply-mid:  #D97706;
+    --bb-reply-high: #16A34A;
+}
+
+/* Chart 1 — score gauge */
+.bb-score-gauge-wrapper { display: flex; justify-content: center; margin: 8px 0 4px; }
+.bb-score-gauge { width: 100%; max-width: 300px; height: auto; }
+.bb-gauge-needle {
+    transform-box: view-box;
+    transform-origin: 100px 100px;
+    animation: bb-needle-swing 1.2s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+@keyframes bb-needle-swing {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(var(--bb-needle-deg, 0deg)); }
+}
+
+/* Chart.js shared card + containers (radar / funnel / donut) */
+.bb-chart-card {
+    background: var(--surface-card);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: 16px 18px;
+}
+.bb-chart-card__label {
+    font-size: 11px; font-weight: 600; color: var(--text-tertiary);
+    letter-spacing: 0.5px; text-transform: uppercase; margin: 0 0 12px;
+}
+.bb-chart-container { position: relative; width: 100%; }
+.bb-chart-container--radar  { height: 300px; }
+.bb-chart-container--funnel { height: 160px; }
+.bb-chart-container--donut  { height: 190px; }
+
+/* Chart 3 — Brand Experience waterfall */
+.bb-waterfall {
+    margin: 4px 0 18px; padding: 14px 16px;
+    background: var(--surface-muted); border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+}
+.bb-waterfall__row { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; }
+.bb-waterfall__row:last-child { margin-bottom: 0; }
+.bb-waterfall__label { flex: 0 0 96px; font-size: 11px; color: var(--text-secondary); text-align: right; }
+.bb-waterfall__track {
+    position: relative; flex: 1; height: 16px;
+    background: var(--surface-card); border-radius: var(--radius-sm); overflow: hidden;
+}
+.bb-waterfall__seg {
+    position: absolute; top: 0; bottom: 0; border-radius: 3px;
+    transform-origin: left center; animation: bb-wf-grow .6s ease-out both;
+}
+.bb-waterfall__seg--base    { background: var(--chimera-500); }
+.bb-waterfall__seg--bonus   { background: var(--chimera-200); }
+.bb-waterfall__seg--penalty { background: var(--color-danger); }
+.bb-waterfall__seg--total   { background: var(--chimera-600); }
+.bb-waterfall__value { flex: 0 0 40px; font-size: 12px; font-weight: 600; text-align: right; }
+.bb-waterfall__value--bonus   { color: var(--chimera-600); }
+.bb-waterfall__value--penalty { color: var(--color-danger); }
+.bb-waterfall__value--base,
+.bb-waterfall__value--total   { color: var(--text-primary); }
+@keyframes bb-wf-grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
+/* Chart 4 — Digital Presence touchpoint grid */
+.bb-touchpoint-grid {
+    display: flex; flex-wrap: wrap; gap: 12px; justify-content: center;
+    margin: 4px 0 18px; padding: 16px;
+    background: var(--surface-muted); border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+}
+.bb-touchpoint { display: flex; flex-direction: column; align-items: center; gap: 5px; width: 84px; text-align: center; }
+.bb-touchpoint__disc {
+    display: flex; align-items: center; justify-content: center;
+    width: 44px; height: 44px; border-radius: var(--radius-pill);
+    font-size: 12px; font-weight: 700; letter-spacing: 0.3px;
+}
+.bb-touchpoint--on  .bb-touchpoint__disc { background: var(--chimera-50); border: 2px solid var(--chimera-500); color: var(--chimera-700); }
+.bb-touchpoint--off .bb-touchpoint__disc { background: var(--surface-card); border: 2px dashed var(--border-strong); color: var(--text-tertiary); }
+.bb-touchpoint__name { font-size: 10px; color: var(--text-secondary); line-height: 1.2; }
+.bb-touchpoint__pts  { font-size: 11px; font-weight: 600; }
+.bb-touchpoint--on  .bb-touchpoint__pts { color: var(--chimera-600); }
+.bb-touchpoint--off .bb-touchpoint__pts { color: var(--text-tertiary); }
+
+/* Chart 7 — owner reply-rate gauge */
+.bb-reply-gauge { display: inline-flex; flex-direction: column; align-items: center; gap: 4px; margin: 4px 0 12px; }
+.bb-reply-gauge__caption { font-size: 11px; font-weight: 500; color: var(--text-secondary); }
+.bb-reply-gauge__fill { animation: bb-reply-fill 1s ease-out both; }
+@keyframes bb-reply-fill {
+    from { stroke-dashoffset: var(--bb-reply-fill, 0); }
+    to   { stroke-dashoffset: 0; }
+}
+
+@media (max-width: 640px) {
+    .bb-waterfall__label { flex-basis: 70px; }
+    .bb-chart-container--radar { height: 260px; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .bb-gauge-needle { animation: none; transform: rotate(var(--bb-needle-deg, 0deg)); }
+    .bb-waterfall__seg { animation: none; }
+    .bb-reply-gauge__fill { animation: none; }
+}

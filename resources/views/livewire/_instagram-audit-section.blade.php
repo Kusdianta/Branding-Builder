@@ -321,6 +321,38 @@
         </div>
     </x-nui-card>
 
+    {{-- ===== BB138 Chart 5 — Engagement funnel (real-only: followers → engaged) ===== --}}
+    @php
+        $bbFollowers = (int) ($meta['followers'] ?? 0);
+        // Parse the ER range string (e.g. "3.5-6.0%") into a numeric midpoint.
+        $bbErMid = null;
+        if (preg_match_all('/\d+(?:[.,]\d+)?/', $estimatedErRange, $bbErM) && count($bbErM[0]) > 0) {
+            $bbNums = array_map(static fn ($n) => (float) str_replace(',', '.', $n), $bbErM[0]);
+            $bbErMid = round(array_sum($bbNums) / count($bbNums), 2);
+        }
+        $bbEngaged = ($bbFollowers > 0 && $bbErMid !== null)
+            ? (int) round($bbFollowers * $bbErMid / 100)
+            : null;
+        $bbFunnelData = ['reach' => $bbFollowers, 'engaged' => $bbEngaged, 'erMid' => $bbErMid];
+    @endphp
+    @if ($bbFollowers > 0 && $bbEngaged !== null)
+        <x-nui-card style="margin-bottom: 16px;">
+            <p style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 0;">Engagement Funnel</p>
+            <p style="font-size: 12px; color: var(--text-tertiary); margin: 2px 0 0;">Dari followers ke yang aktif berinteraksi</p>
+            <div class="bb-chart-container bb-chart-container--funnel" wire:ignore style="margin-top: 12px;">
+                <canvas
+                    data-chart-type="engagement-funnel"
+                    data-chart-data="{{ json_encode($bbFunnelData, JSON_THROW_ON_ERROR) }}"
+                    role="img"
+                    aria-label="Engagement funnel: {{ number_format($bbFollowers) }} followers, sekitar {{ number_format($bbEngaged) }} aktif berinteraksi"
+                ></canvas>
+            </div>
+            <p style="font-size: 11px; color: var(--text-tertiary); margin: 10px 0 0; font-style: italic;">
+                Engagement aktif diestimasi dari titik tengah rentang ER {{ $estimatedErRange ?: '—' }} × jumlah followers — bukan hitungan like aktual.
+            </p>
+        </x-nui-card>
+    @endif
+
     {{-- ===== BB131 + BB133: Bukti Scrape (multi-section screenshot proof) ===== --}}
     @if ($proofSections !== [])
         <x-nui-card style="margin-bottom: 16px;">
@@ -546,6 +578,17 @@
                 @endif
 
                 <h5 style="font-size: 13px; font-weight: 600; color: var(--text-primary); margin: 16px 0 8px;">◆ Distribusi Tipe Konten</h5>
+                {{-- BB138 Chart 6 — content-mix donut (bars below stay as fallback/detail). --}}
+                @if (($ctReels + $ctCarousel + $ctStatic) > 0)
+                    <div class="bb-chart-container bb-chart-container--donut" wire:ignore style="margin: 4px 0 14px;">
+                        <canvas
+                            data-chart-type="content-donut"
+                            data-chart-data="{{ json_encode(['reels' => $ctReels, 'carousel' => $ctCarousel, 'static' => $ctStatic], JSON_THROW_ON_ERROR) }}"
+                            role="img"
+                            aria-label="Distribusi tipe konten: Reels {{ $ctReels }} persen, Carousel {{ $ctCarousel }} persen, Statis {{ $ctStatic }} persen"
+                        ></canvas>
+                    </div>
+                @endif
                 <div class="flex flex-col gap-2 mb-4">
                     @foreach ([['Reels', $ctReels, 'var(--chimera-500)'], ['Carousel', $ctCarousel, 'var(--chimera-600)'], ['Static', $ctStatic, 'var(--text-tertiary)']] as [$lbl, $pct, $clr])
                         <div class="flex items-center gap-3">

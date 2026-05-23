@@ -2592,24 +2592,8 @@ new class extends Component {
 
                 {{-- ===== Overall score ring (centered, top of dashboard) ===== --}}
                 <div class="max-w-md mx-auto mb-12 text-center">
-                    <div style="position: relative; width: 220px; height: 220px; margin: 0 auto;">
-                        <svg viewBox="0 0 100 100" style="width: 220px; height: 220px;">
-                            <circle cx="50" cy="50" r="42" fill="none" stroke="var(--chimera-50)" stroke-width="7"/>
-                            <circle
-                                cx="50" cy="50" r="42"
-                                fill="none"
-                                stroke="{{ $scoreClr }}"
-                                stroke-width="7"
-                                stroke-dasharray="{{ $filled }} {{ $circ }}"
-                                stroke-linecap="round"
-                                transform="rotate(-90 50 50)"
-                            />
-                        </svg>
-                        <div style="position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;">
-                            <span style="font-size: 56px; font-weight: 700; line-height: 1; color: {{ $scoreClr }}; font-family: var(--font-display);">{{ $overallScore ?? '—' }}</span>
-                            <span style="font-size: 12px; color: var(--text-tertiary); margin-top: 4px;">dari 100</span>
-                        </div>
-                    </div>
+                    {{-- BB138 Chart 1 — overall score arc gauge (replaces the plain ring). --}}
+                    @include('livewire.charts._score-gauge')
                     @if ($overallLabel)
                         <p style="font-size: 18px; font-weight: 600; color: var(--text-primary); margin-top: 16px;">
                             {{ $overallLabel }}
@@ -2695,6 +2679,9 @@ new class extends Component {
                         </div>
                     </div>
                 @endif
+
+                {{-- BB138 Chart 2 — pillar radar (augments the breakdown table above). --}}
+                @include('livewire.charts._pillar-radar')
 
                 {{-- ============================================================
                      BB144 — Outlet photos from Google Places.
@@ -2880,6 +2867,13 @@ new class extends Component {
                                 </div>
                             @endif
 
+                            {{-- BB138 Chart 3/4 — pillar-specific visual above the sub-bucket list. --}}
+                            @if ($slug === 'brand-experience')
+                                @include('livewire.charts._be-waterfall')
+                            @elseif ($slug === 'digital-presence')
+                                @include('livewire.charts._touchpoint-grid')
+                            @endif
+
                             @if (count($sbs) > 0)
                                 <div class="flex flex-col mb-4" style="border-top: 1px solid var(--border-default);">
                                     @foreach ($sbs as $k => $v)
@@ -2988,6 +2982,13 @@ new class extends Component {
                                                         @endif
                                                     </span>
                                                 </div>
+                                                {{-- BB138 Chart 7 — owner reply-rate gauge beside Manajemen Ulasan. --}}
+                                                @if ($slug === 'brand-recall' && $k === 'manajemen_ulasan')
+                                                    @php $replyRatePct = (float) ($bd['raw_inputs']['reply_rate_pct'] ?? 0); @endphp
+                                                    @if ($replyRatePct > 0)
+                                                        @include('livewire.charts._reply-gauge')
+                                                    @endif
+                                                @endif
                                                 @php
                                                     // BB118 — every row gets a source line. When the
                                                     // breakdown is absent we still surface the canonical
