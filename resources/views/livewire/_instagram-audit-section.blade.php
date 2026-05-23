@@ -131,7 +131,11 @@
     $screenshotPathsRaw   = (array) ($meta['screenshot_paths'] ?? []);
     $proofSections        = [];
     if ($sessionTokenForProof !== '') {
-        foreach (['profile' => 'Profil', 'feed' => 'Feed', 'reels' => 'Reels'] as $section => $label) {
+        // BB139 Fix D — Feed tab dropped: its screenshot duplicated Profile.
+        // The worker still captures and persists feed.png; the dashboard
+        // simply doesn't list it (≈400KB/audit storage, acceptable trade-off
+        // vs. removing worker logic in this ticket's scope).
+        foreach (['profile' => 'Profil', 'reels' => 'Reels'] as $section => $label) {
             if (! empty($screenshotPathsRaw[$section])) {
                 $proofSections[$section] = [
                     'label' => $label,
@@ -178,7 +182,40 @@
     $contentGaps            = (array) ($igAudit['content_gaps'] ?? []);
     $priorityRecommendations = (array) ($igAudit['priority_recommendations'] ?? []);
     $quickWins              = (array) ($igAudit['quick_wins'] ?? []);
-    $competitivePositioning = (string) ($igAudit['competitive_positioning'] ?? '');
+    // BB139 Fix C — competitive_positioning is a string today; a future
+    // ticket may emit a structured object {headline, current_state,
+    // opportunity, timeframe}. Capture the raw value and derive a
+    // render-ready shape so BOTH forms read as tidy short paragraphs
+    // instead of one wall of text (same back-compat pattern as
+    // executive_summary in BB131).
+    $competitivePositioningRaw = $igAudit['competitive_positioning'] ?? '';
+    $positioningIsStructured   = is_array($competitivePositioningRaw);
+    $competitivePositioning    = $positioningIsStructured ? '' : (string) $competitivePositioningRaw;
+    $positioningHeadline       = $positioningIsStructured ? (string) ($competitivePositioningRaw['headline'] ?? '') : '';
+    $positioningTimeframe      = $positioningIsStructured ? (string) ($competitivePositioningRaw['timeframe'] ?? '') : '';
+    if ($positioningIsStructured) {
+        $positioningParagraphs = array_values(array_filter(
+            [(string) ($competitivePositioningRaw['current_state'] ?? ''), (string) ($competitivePositioningRaw['opportunity'] ?? '')],
+            static fn (string $p): bool => trim($p) !== ''
+        ));
+    } else {
+        $posText = trim($competitivePositioning);
+        // Honour explicit line breaks first; otherwise group sentences in
+        // pairs so a single long blob still reads as a few short paragraphs.
+        $byLine = array_values(array_filter(array_map('trim', preg_split('/\n+/', $posText) ?: [])));
+        if (count($byLine) > 1) {
+            $positioningParagraphs = $byLine;
+        } elseif ($posText !== '') {
+            $sentences = array_values(array_filter(array_map('trim', preg_split('/(?<=[.!?])\s+/', $posText) ?: [])));
+            $positioningParagraphs = array_map(
+                static fn (array $chunk): string => implode(' ', $chunk),
+                array_chunk($sentences, 2)
+            );
+        } else {
+            $positioningParagraphs = [];
+        }
+    }
+    $hasPositioning = $positioningHeadline !== '' || $positioningParagraphs !== [] || $positioningTimeframe !== '';
     $scorecard              = (array) ($igAudit['scorecard'] ?? []);
     $limitations            = (array) ($igAudit['limitations'] ?? []);
 
@@ -302,56 +339,27 @@
                     <p style="font-size: 12px; color: var(--chimera-600); margin-top: 10px; font-family: var(--font-mono); word-break: break-all;">↗ {{ $meta['external_url'] }}</p>
                 @endif
             </div>
-            <div style="min-width: 180px;">
-                <div class="flex flex-col gap-3">
-                    <div class="flex items-baseline justify-between gap-4">
-                        <span style="font-size: 11px; color: var(--text-tertiary);">Followers</span>
-                        <span style="font-size: 18px; font-weight: 700; color: var(--text-primary);">{{ number_format((int) ($meta['followers'] ?? 0)) }}</span>
-                    </div>
-                    <div class="flex items-baseline justify-between gap-4">
-                        <span style="font-size: 11px; color: var(--text-tertiary);">Following</span>
-                        <span style="font-size: 18px; font-weight: 700; color: var(--text-primary);">{{ number_format((int) ($meta['following'] ?? 0)) }}</span>
-                    </div>
-                    <div class="flex items-baseline justify-between gap-4">
-                        <span style="font-size: 11px; color: var(--text-tertiary);">Total Post</span>
-                        <span style="font-size: 18px; font-weight: 700; color: var(--text-primary);">{{ number_format((int) ($meta['posts_count'] ?? 0)) }}</span>
-                    </div>
+            {{-- BB139 Fix A — followers / following / posts in one horizontal row (wraps on mobile). --}}
+            <div class="ig-stats-row">
+                <div class="ig-stat">
+                    <span class="ig-stat-value">{{ number_format((int) ($meta['followers'] ?? 0)) }}</span>
+                    <span class="ig-stat-label">Followers</span>
+                </div>
+                <div class="ig-stat">
+                    <span class="ig-stat-value">{{ number_format((int) ($meta['following'] ?? 0)) }}</span>
+                    <span class="ig-stat-label">Following</span>
+                </div>
+                <div class="ig-stat">
+                    <span class="ig-stat-value">{{ number_format((int) ($meta['posts_count'] ?? 0)) }}</span>
+                    <span class="ig-stat-label">Total Post</span>
                 </div>
             </div>
         </div>
     </x-nui-card>
 
-    {{-- ===== BB138 Chart 5 — Engagement funnel (real-only: followers → engaged) ===== --}}
-    @php
-        $bbFollowers = (int) ($meta['followers'] ?? 0);
-        // Parse the ER range string (e.g. "3.5-6.0%") into a numeric midpoint.
-        $bbErMid = null;
-        if (preg_match_all('/\d+(?:[.,]\d+)?/', $estimatedErRange, $bbErM) && count($bbErM[0]) > 0) {
-            $bbNums = array_map(static fn ($n) => (float) str_replace(',', '.', $n), $bbErM[0]);
-            $bbErMid = round(array_sum($bbNums) / count($bbNums), 2);
-        }
-        $bbEngaged = ($bbFollowers > 0 && $bbErMid !== null)
-            ? (int) round($bbFollowers * $bbErMid / 100)
-            : null;
-        $bbFunnelData = ['reach' => $bbFollowers, 'engaged' => $bbEngaged, 'erMid' => $bbErMid];
-    @endphp
-    @if ($bbFollowers > 0 && $bbEngaged !== null)
-        <x-nui-card style="margin-bottom: 16px;">
-            <p style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 0;">Engagement Funnel</p>
-            <p style="font-size: 12px; color: var(--text-tertiary); margin: 2px 0 0;">Dari followers ke yang aktif berinteraksi</p>
-            <div class="bb-chart-container bb-chart-container--funnel" wire:ignore style="margin-top: 12px;">
-                <canvas
-                    data-chart-type="engagement-funnel"
-                    data-chart-data="{{ json_encode($bbFunnelData, JSON_THROW_ON_ERROR) }}"
-                    role="img"
-                    aria-label="Engagement funnel: {{ number_format($bbFollowers) }} followers, sekitar {{ number_format($bbEngaged) }} aktif berinteraksi"
-                ></canvas>
-            </div>
-            <p style="font-size: 11px; color: var(--text-tertiary); margin: 10px 0 0; font-style: italic;">
-                Engagement aktif diestimasi dari titik tengah rentang ER {{ $estimatedErRange ?: '—' }} × jumlah followers — bukan hitungan like aktual.
-            </p>
-        </x-nui-card>
-    @endif
+    {{-- BB139 Fix B — BB138 engagement-funnel chart removed (low signal: a
+         2-bar chart whose second bar rendered as a tiny stub). The
+         "Analisis Engagement" accordion below keeps the ER prose summary. --}}
 
     {{-- ===== BB131 + BB133: Bukti Scrape (multi-section screenshot proof) ===== --}}
     @if ($proofSections !== [])
@@ -814,17 +822,35 @@
                 <span x-text="sections.quickWins ? '−' : '+'" style="font-size: 22px; color: var(--text-tertiary); font-weight: 300; line-height: 1;"></span>
             </button>
             <div x-show="sections.quickWins" x-cloak style="padding: 0 20px 20px; border-top: 1px solid var(--border-default);">
-                <ul style="margin: 16px 0 0 20px; padding: 0; font-size: 13px; color: var(--text-primary); line-height: 1.7;">
+                {{-- BB139 Fix C — numbered action/detail cards. The em-dash
+                     heuristic splits "Aksi — penjelasan" into a bold action
+                     line + a muted detail line; bullets without an em-dash
+                     put everything in the action line. --}}
+                <div class="quickwin-list">
                     @foreach ($quickWins as $qw)
-                        <li style="margin-bottom: 6px;">{{ $qw }}</li>
+                        @php
+                            $qwStr = is_array($qw) ? trim((string) ($qw['action'] ?? reset($qw) ?: '')) : trim((string) $qw);
+                            $qwParts = explode('—', $qwStr, 2);
+                            $qwAction = trim($qwParts[0] ?? $qwStr);
+                            $qwDetail = trim($qwParts[1] ?? '');
+                        @endphp
+                        <div class="quickwin-card">
+                            <div class="quickwin-number">{{ $loop->iteration }}</div>
+                            <div class="quickwin-body">
+                                <p class="quickwin-action">{{ $qwAction }}</p>
+                                @if ($qwDetail !== '')
+                                    <p class="quickwin-detail">{{ $qwDetail }}</p>
+                                @endif
+                            </div>
+                        </div>
                     @endforeach
-                </ul>
+                </div>
             </div>
         </x-nui-card>
     @endif
 
     {{-- ===== Accordion: Positioning Kompetitif ===== --}}
-    @if ($competitivePositioning !== '')
+    @if ($hasPositioning)
         <x-nui-card padding="none" style="margin-bottom: 10px;">
             <button type="button" @click="sections.positioning = !sections.positioning" class="w-full flex items-center justify-between" style="padding: 16px 20px; background: none; border: none; cursor: pointer; text-align: left;">
                 <div>
@@ -834,7 +860,18 @@
                 <span x-text="sections.positioning ? '−' : '+'" style="font-size: 22px; color: var(--text-tertiary); font-weight: 300; line-height: 1;"></span>
             </button>
             <div x-show="sections.positioning" x-cloak style="padding: 0 20px 20px; border-top: 1px solid var(--border-default);">
-                <p style="font-size: 13px; color: var(--text-primary); line-height: 1.7; margin: 16px 0 0;">{{ $competitivePositioning }}</p>
+                {{-- BB139 Fix C — headline + short paragraphs instead of one wall of text. --}}
+                <div class="positioning-card" style="margin-top: 16px;">
+                    @if ($positioningHeadline !== '')
+                        <p class="positioning-headline">{{ $positioningHeadline }}</p>
+                    @endif
+                    @foreach ($positioningParagraphs as $para)
+                        <p class="positioning-paragraph">{{ $para }}</p>
+                    @endforeach
+                    @if ($positioningTimeframe !== '')
+                        <p class="positioning-timeframe">{{ $positioningTimeframe }}</p>
+                    @endif
+                </div>
             </div>
         </x-nui-card>
     @endif
@@ -850,11 +887,26 @@
                 <span x-text="sections.limitations ? '−' : '+'" style="font-size: 22px; color: var(--text-tertiary); font-weight: 300; line-height: 1;"></span>
             </button>
             <div x-show="sections.limitations" x-cloak style="padding: 0 20px 20px; border-top: 1px solid var(--border-default);">
-                <ul style="margin: 16px 0 0 20px; padding: 0; font-size: 12px; color: var(--text-secondary); line-height: 1.65;">
+                {{-- BB139 Fix C — tag-style cards. Each item is a string today
+                     (rendered as the "what"); a future ticket may emit
+                     {what, impact} objects, handled here too. --}}
+                <div class="limitations-list">
                     @foreach ($limitations as $lim)
-                        <li style="margin-bottom: 4px;">{{ $lim }}</li>
+                        <div class="limitation-card">
+                            <div class="limitation-marker">!</div>
+                            <div class="limitation-body">
+                                @if (is_array($lim))
+                                    <p class="limitation-what">{{ $lim['what'] ?? '' }}</p>
+                                    @if (! empty($lim['impact']))
+                                        <p class="limitation-impact">{{ $lim['impact'] }}</p>
+                                    @endif
+                                @else
+                                    <p class="limitation-what">{{ $lim }}</p>
+                                @endif
+                            </div>
+                        </div>
                     @endforeach
-                </ul>
+                </div>
             </div>
         </x-nui-card>
     @endif

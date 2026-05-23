@@ -1,9 +1,8 @@
-// BB138 — Audit dashboard charts (Chart.js).
+// BB138 — Audit dashboard charts (Chart.js). BB139 dropped the funnel.
 //
-// Three Chart.js visualisations augment the brand-health dashboard:
-//   - pillar-radar      (4 pillar scores vs ideal)
-//   - content-donut     (IG reels/carousel/static mix)
-//   - engagement-funnel (IG followers -> engaged, real-only 2 bars)
+// Two Chart.js visualisations augment the brand-health dashboard:
+//   - pillar-radar  (4 pillar scores vs ideal)
+//   - content-donut (IG reels/carousel/static mix)
 //
 // SVG charts (score gauge, BE waterfall, touchpoint grid, reply gauge) are
 // rendered server-side in Blade and need no JS.
@@ -29,10 +28,6 @@ import {
     Filler,
     DoughnutController,
     ArcElement,
-    BarController,
-    BarElement,
-    CategoryScale,
-    LinearScale,
     Tooltip,
     Legend,
 } from 'chart.js';
@@ -45,10 +40,6 @@ Chart.register(
     Filler,
     DoughnutController,
     ArcElement,
-    BarController,
-    BarElement,
-    CategoryScale,
-    LinearScale,
     Tooltip,
     Legend,
 );
@@ -72,8 +63,6 @@ function palette() {
         surfaceCard: v('--surface-card', '#FFFFFF'),
     };
 }
-
-const fmtInt = (n) => new Intl.NumberFormat('id-ID').format(Math.round(n));
 
 function radarConfig(data, p) {
     return {
@@ -159,55 +148,9 @@ function donutConfig(data, p) {
     };
 }
 
-function funnelConfig(data, p) {
-    // Real-only 2-bar "funnel": Jangkauan (followers) -> Engagement aktif
-    // (ER-midpoint x followers). No invented downstream tiers.
-    return {
-        type: 'bar',
-        data: {
-            labels: ['Jangkauan (followers)', 'Engagement aktif'],
-            datasets: [
-                {
-                    data: [data.reach, data.engaged],
-                    backgroundColor: ['rgba(61,137,72,0.9)', 'rgba(61,137,72,0.45)'],
-                    borderRadius: 6,
-                    barPercentage: 0.7,
-                },
-            ],
-        },
-        options: {
-            indexAxis: 'y',
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: { display: false },
-                tooltip: {
-                    callbacks: {
-                        label: (ctx) => {
-                            if (ctx.dataIndex === 1 && data.erMid) {
-                                return `${fmtInt(ctx.raw)} (≈ ER ${data.erMid}%)`;
-                            }
-                            return fmtInt(ctx.raw);
-                        },
-                    },
-                },
-            },
-            scales: {
-                x: {
-                    beginAtZero: true,
-                    grid: { color: p.border },
-                    ticks: { color: p.textSecondary, callback: (val) => fmtInt(val) },
-                },
-                y: { grid: { display: false }, ticks: { color: p.textPrimary, font: { size: 12 } } },
-            },
-        },
-    };
-}
-
 const BUILDERS = {
     'pillar-radar': radarConfig,
     'content-donut': donutConfig,
-    'engagement-funnel': funnelConfig,
 };
 
 function buildChart(canvas) {
