@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Jobs;
 
+use App\Jobs\Concerns\WritesAuditEvidence;
 use App\Models\AuditStep;
 use App\Models\BrandAudit;
 use App\Services\InstagramProfileAuditService;
@@ -13,7 +14,6 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -38,7 +38,7 @@ use Throwable;
  */
 class AnalyzeInstagramJob implements ShouldQueue
 {
-    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels, WritesAuditEvidence;
 
     /** Claude analysis budget plus retry headroom. */
     public int $timeout = 180;
@@ -114,28 +114,26 @@ class AnalyzeInstagramJob implements ShouldQueue
      */
     private function mirrorAnalysisToEvidence(BrandAudit $audit): void
     {
-        DB::transaction(function () use ($audit): void {
-            $fresh = BrandAudit::findOrFail($audit->id);
-            $evidence = (array) ($fresh->audit_evidence ?? []);
+        // instagram_audit is single-writer; re-read the freshly-analysed
+        // snapshot then write only the instagram_analysis slice via a single
+        // atomic json_set UPDATE (BB139 WritesAuditEvidence) so the
+        // concurrent Phase-2 service_signals write is preserved.
+        $payload = BrandAudit::findOrFail($audit->id)->instagram_audit;
 
-            $payload = $fresh->instagram_audit;
-            if (! is_array($payload)) {
-                $evidence['instagram_analysis'] = null;
-                $fresh->update(['audit_evidence' => $evidence]);
-                return;
-            }
+        if (! is_array($payload)) {
+            $this->writeEvidenceKey('instagram_analysis', null);
+            return;
+        }
 
-            $analysisSlice = $payload;
-            $meta = (array) ($analysisSlice['_meta'] ?? []);
-            unset(
-                $meta['profile_pic_path'],
-                $meta['screenshot_path'],
-                $meta['post_thumbnail_paths'],
-            );
-            $analysisSlice['_meta'] = $meta;
+        $analysisSlice = $payload;
+        $meta = (array) ($analysisSlice['_meta'] ?? []);
+        unset(
+            $meta['profile_pic_path'],
+            $meta['screenshot_path'],
+            $meta['post_thumbnail_paths'],
+        );
+        $analysisSlice['_meta'] = $meta;
 
-            $evidence['instagram_analysis'] = $analysisSlice;
-            $fresh->update(['audit_evidence' => $evidence]);
-        });
+        $this->writeEvidenceKey('instagram_analysis', $analysisSlice);
     }
 }

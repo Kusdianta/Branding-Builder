@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Jobs;
 
+use App\Jobs\Concerns\WritesAuditEvidence;
 use App\Models\AuditStep;
 use App\Models\BrandAudit;
 use App\Services\Fetchers\GoogleMapsReviewsFetcher;
@@ -32,7 +33,7 @@ use Throwable;
  */
 class FetchPlacesApiJob implements ShouldQueue
 {
-    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels, WritesAuditEvidence;
 
     public int $timeout = 60;
 
@@ -133,17 +134,13 @@ class FetchPlacesApiJob implements ShouldQueue
     }
 
     /**
-     * Atomic key-update on audit_evidence: read current JSON, set
-     * places_api slice, write back. SQLite-safe (no JSON_SET reliance)
-     * and tolerant of pre-Phase-10 rows with null audit_evidence.
+     * BB139 — concurrency-safe write of the places_api slice. Delegates to
+     * the shared WritesAuditEvidence trait, which issues a single atomic
+     * json_set UPDATE so a sibling gather job's key is never clobbered when
+     * the gather batch runs in parallel under multiple workers.
      */
     private function writeEvidenceSlice(?array $payload): void
     {
-        DB::transaction(function () use ($payload): void {
-            $audit = BrandAudit::findOrFail($this->auditId);
-            $evidence = (array) ($audit->audit_evidence ?? []);
-            $evidence['places_api'] = $payload;
-            $audit->update(['audit_evidence' => $evidence]);
-        });
+        $this->writeEvidenceKey('places_api', $payload);
     }
 }

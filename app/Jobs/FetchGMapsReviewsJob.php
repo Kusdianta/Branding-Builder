@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Jobs;
 
+use App\Jobs\Concerns\WritesAuditEvidence;
 use App\Models\AuditStep;
 use App\Models\BrandAudit;
 use App\Services\GMapsReviewsService;
@@ -13,7 +14,6 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -35,7 +35,7 @@ use Throwable;
  */
 class FetchGMapsReviewsJob implements ShouldQueue
 {
-    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels, WritesAuditEvidence;
 
     /**
      * BB130 — full-corpus scrape (up to 500 reviews) can take 3-5 min.
@@ -106,13 +106,12 @@ class FetchGMapsReviewsJob implements ShouldQueue
             ->first();
     }
 
+    /**
+     * BB139 — concurrency-safe write of the gmaps_scrape slice via the
+     * shared WritesAuditEvidence trait (single atomic json_set UPDATE).
+     */
     private function mirrorToEvidence(mixed $gmapsPayload): void
     {
-        DB::transaction(function () use ($gmapsPayload): void {
-            $audit = BrandAudit::findOrFail($this->auditId);
-            $evidence = (array) ($audit->audit_evidence ?? []);
-            $evidence['gmaps_scrape'] = is_array($gmapsPayload) ? $gmapsPayload : null;
-            $audit->update(['audit_evidence' => $evidence]);
-        });
+        $this->writeEvidenceKey('gmaps_scrape', is_array($gmapsPayload) ? $gmapsPayload : null);
     }
 }

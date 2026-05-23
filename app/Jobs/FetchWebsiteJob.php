@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Jobs;
 
+use App\Jobs\Concerns\WritesAuditEvidence;
 use App\Models\AuditStep;
 use App\Models\BrandAudit;
 use Illuminate\Bus\Batchable;
@@ -12,7 +13,6 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Nema\WorkerClient\Exceptions\WebsiteScrapeException;
 use Nema\WorkerClient\Exceptions\WorkerAuthException;
@@ -41,7 +41,7 @@ use Throwable;
  */
 class FetchWebsiteJob implements ShouldQueue
 {
-    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels, WritesAuditEvidence;
 
     /** Worker hard cap is 120s; this guards against transport stalls. */
     public int $timeout = 90;
@@ -135,19 +135,13 @@ class FetchWebsiteJob implements ShouldQueue
     }
 
     /**
-     * Atomic key-update on audit_evidence: read current JSON, set
-     * website slice, write back. SQLite-safe (no JSON_SET reliance)
-     * and tolerant of pre-Phase-10 rows with null audit_evidence.
+     * BB139 — concurrency-safe write of the website slice via the shared
+     * WritesAuditEvidence trait (single atomic json_set UPDATE).
      *
      * @param array<string,mixed>|null $payload
      */
     private function writeEvidenceSlice(?array $payload): void
     {
-        DB::transaction(function () use ($payload): void {
-            $audit = BrandAudit::findOrFail($this->auditId);
-            $evidence = (array) ($audit->audit_evidence ?? []);
-            $evidence['website'] = $payload;
-            $audit->update(['audit_evidence' => $evidence]);
-        });
+        $this->writeEvidenceKey('website', $payload);
     }
 }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Jobs;
 
+use App\Jobs\Concerns\WritesAuditEvidence;
 use App\Models\AuditStep;
 use App\Models\BrandAudit;
 use App\Services\Scoring\ServiceSignalsExtractor;
@@ -13,7 +14,6 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -39,7 +39,7 @@ use Throwable;
  */
 class ExtractServiceSignalsJob implements ShouldQueue
 {
-    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels, WritesAuditEvidence;
 
     /** Stage 1 is instant; Stage 2 LLM call is ~3-5s. Headroom for queue jitter. */
     public int $timeout = 60;
@@ -86,16 +86,16 @@ class ExtractServiceSignalsJob implements ShouldQueue
             ->first();
     }
 
+    /**
+     * BB139 — concurrency-safe write of the nested
+     * audit_evidence.analysis.service_signals slice. The trait creates the
+     * `analysis` parent if absent and preserves both parent siblings and
+     * top-level siblings (e.g. the Phase-2 instagram_analysis write) via a
+     * single atomic json_set UPDATE.
+     */
     private function writeAnalysisSlice(array $signals): void
     {
-        DB::transaction(function () use ($signals): void {
-            $audit = BrandAudit::findOrFail($this->auditId);
-            $evidence = (array) ($audit->audit_evidence ?? []);
-            $analysis = (array) ($evidence['analysis'] ?? []);
-            $analysis['service_signals'] = $signals;
-            $evidence['analysis'] = $analysis;
-            $audit->update(['audit_evidence' => $evidence]);
-        });
+        $this->writeEvidenceNestedKey('analysis', 'service_signals', $signals);
     }
 
     /** @return list<string> */

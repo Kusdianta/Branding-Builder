@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Jobs;
 
+use App\Jobs\Concerns\WritesAuditEvidence;
 use App\Models\AuditStep;
 use App\Models\BrandAudit;
 use App\Services\InstagramProfileAuditService;
@@ -13,7 +14,6 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -40,7 +40,7 @@ use Throwable;
  */
 class FetchInstagramAuditJob implements ShouldQueue
 {
-    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels, WritesAuditEvidence;
 
     public int $timeout = 240;
 
@@ -136,32 +136,29 @@ class FetchInstagramAuditJob implements ShouldQueue
         if ($audit === null) {
             return;
         }
-        $auditId = $audit->id;
 
-        DB::transaction(function () use ($auditId): void {
-            $fresh = BrandAudit::findOrFail($auditId);
-            $evidence = (array) ($fresh->audit_evidence ?? []);
+        // The instagram_audit column is single-writer
+        // (InstagramProfileAuditService), so re-reading the freshly-persisted
+        // snapshot here is race-free. The evidence write itself is a single
+        // atomic json_set UPDATE (BB139 WritesAuditEvidence), so the
+        // concurrent Phase-2 instagram_analysis write is never clobbered.
+        $payload = BrandAudit::findOrFail($audit->id)->instagram_audit;
 
-            $payload = $fresh->instagram_audit;
-            if (! is_array($payload)) {
-                $evidence['instagram_audit'] = null;
-                $fresh->update(['audit_evidence' => $evidence]);
-                return;
-            }
+        if (! is_array($payload)) {
+            $this->writeEvidenceKey('instagram_audit', null);
+            return;
+        }
 
-            $meta = (array) ($payload['_meta'] ?? []);
+        $meta = (array) ($payload['_meta'] ?? []);
 
-            $rawSlice = [
-                'profile_pic_path'      => $meta['profile_pic_path']      ?? null,
-                'screenshot_path'       => $meta['screenshot_path']       ?? null,
-                'post_thumbnail_paths'  => (array) ($meta['post_thumbnail_paths'] ?? []),
-                'captured_at'           => $meta['captured_at']           ?? null,
-                'username'              => $meta['username']              ?? null,
-            ];
+        $rawSlice = [
+            'profile_pic_path'      => $meta['profile_pic_path']      ?? null,
+            'screenshot_path'       => $meta['screenshot_path']       ?? null,
+            'post_thumbnail_paths'  => (array) ($meta['post_thumbnail_paths'] ?? []),
+            'captured_at'           => $meta['captured_at']           ?? null,
+            'username'              => $meta['username']              ?? null,
+        ];
 
-            $evidence['instagram_audit'] = $rawSlice;
-
-            $fresh->update(['audit_evidence' => $evidence]);
-        });
+        $this->writeEvidenceKey('instagram_audit', $rawSlice);
     }
 }
