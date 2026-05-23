@@ -6,11 +6,13 @@ namespace App\Jobs;
 
 use App\Models\AuditStep;
 use App\Models\BrandAudit;
+use App\Services\HubUsageLogger;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Carbon;
 use Throwable;
 
 /**
@@ -32,7 +34,7 @@ class GeneratePdfJob implements ShouldQueue
 
     public function __construct(public readonly string $auditId) {}
 
-    public function handle(): void
+    public function handle(HubUsageLogger $usageLogger): void
     {
         $audit = BrandAudit::findOrFail($this->auditId);
 
@@ -55,5 +57,40 @@ class GeneratePdfJob implements ShouldQueue
         // Mark the audit done regardless of PDF outcome — the dashboard
         // data is ready; PDF is a downloadable artifact, not a gate.
         $audit->update(['status' => BrandAudit::STATUS_DONE]);
+
+        // This is the guaranteed final step of the pipeline — report the
+        // audit's total execution time to the Hub for the admin duration
+        // chart. Fire-and-forget; never affects the audit outcome.
+        $this->reportTiming($audit, $usageLogger);
+    }
+
+    /**
+     * Total wall-time = first step start → last step completion. Falls back
+     * to the audit's created_at / now when step timestamps are unavailable.
+     */
+    private function reportTiming(BrandAudit $audit, HubUsageLogger $usageLogger): void
+    {
+        try {
+            $bounds = AuditStep::where('brand_audit_id', $this->auditId)
+                ->whereNotNull('started_at')
+                ->selectRaw('MIN(started_at) as first_start, MAX(completed_at) as last_end')
+                ->first();
+
+            $start = $bounds?->first_start ? Carbon::parse($bounds->first_start) : $audit->created_at;
+            $end   = $bounds?->last_end ? Carbon::parse($bounds->last_end) : Carbon::now();
+
+            if ($start === null) {
+                return;
+            }
+
+            $usageLogger->logAuditDuration(
+                auditId: $audit->id,
+                totalSeconds: (int) max(0, $start->diffInSeconds($end)),
+                completedAt: $end->toIso8601String(),
+                brandName: (string) $audit->brand_name,
+            );
+        } catch (Throwable $e) {
+            // Reporting must never affect the audit outcome.
+        }
     }
 }

@@ -120,6 +120,48 @@ class HubUsageLogger
     }
 
     /**
+     * Report a completed audit's total execution time to the Hub for the
+     * admin duration chart (POST /api/internal/audit-timings). Same
+     * fire-and-forget contract as the usage writes — never throws.
+     *
+     * @param array<string,mixed>|null $metadata
+     */
+    public function logAuditDuration(
+        string $auditId,
+        int $totalSeconds,
+        string $completedAt,
+        ?string $brandName = null,
+        ?array $metadata = null,
+    ): void {
+        if ($this->apiKey === '') {
+            return;
+        }
+
+        try {
+            $this->http->request('POST', 'api/internal/audit-timings', [
+                'headers' => [
+                    'Authorization' => 'Bearer ' . $this->apiKey,
+                    'Accept'        => 'application/json',
+                ],
+                'json' => [
+                    'spoke'             => self::SPOKE,
+                    'external_audit_id' => $auditId,
+                    'brand_name'        => $brandName,
+                    'total_seconds'     => $totalSeconds,
+                    'completed_at'      => $completedAt,
+                    'metadata'          => $metadata,
+                ],
+            ]);
+        } catch (Throwable $e) {
+            // Fire-and-forget — Hub down must not break the audit.
+            Log::warning('HubUsageLogger: audit timing write failed (continuing)', [
+                'audit_id' => $auditId,
+                'error'    => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
      * @param array<string,mixed> $body
      */
     private function post(array $body): void

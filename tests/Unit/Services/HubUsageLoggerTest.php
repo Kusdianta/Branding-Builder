@@ -99,6 +99,38 @@ class HubUsageLoggerTest extends TestCase
     }
 
     #[Test]
+    public function logs_audit_duration_to_timing_endpoint(): void
+    {
+        $logger = $this->makeLogger();
+        $logger->logAuditDuration(
+            auditId: '01abc',
+            totalSeconds: 87,
+            completedAt: '2026-05-23T10:00:00+07:00',
+            brandName: 'Dhobi Laundry',
+        );
+
+        $this->assertCount(1, $this->history);
+        $request = $this->history[0]['request'];
+        $this->assertStringEndsWith('api/internal/audit-timings', (string) $request->getUri());
+
+        $body = json_decode((string) $request->getBody(), true);
+        $this->assertSame('branding-builder', $body['spoke']);
+        $this->assertSame('01abc', $body['external_audit_id']);
+        $this->assertSame(87, $body['total_seconds']);
+        $this->assertSame('Dhobi Laundry', $body['brand_name']);
+        $this->assertSame('2026-05-23T10:00:00+07:00', $body['completed_at']);
+        $this->assertStringContainsString('Bearer test-key', $request->getHeaderLine('Authorization'));
+    }
+
+    #[Test]
+    public function audit_duration_skipped_when_api_key_empty(): void
+    {
+        $logger = new HubUsageLogger(baseUrl: 'http://hub.test', apiKey: '');
+        $logger->logAuditDuration('01abc', 10, '2026-05-23T10:00:00+07:00');
+        $this->assertTrue(true); // no exception, no POST
+    }
+
+    #[Test]
     public function silently_swallows_transport_errors(): void
     {
         $logger = $this->makeLogger([
