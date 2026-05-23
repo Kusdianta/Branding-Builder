@@ -39,9 +39,14 @@ use Throwable;
  *
  * Wall-time budget: ~30-60s for all three Claude calls in serial.
  * Could parallelise via Bus::batch but the marginal latency win
- * isn't worth the orchestration complexity here — the calling user
- * already sees the dashboard immediately after Track A + B finish;
- * insights + PDF are background polish that arrive a minute later.
+ * isn't worth the orchestration complexity here.
+ *
+ * BB145 — these insights are part of the GATED pipeline now. The
+ * wizard keeps the user on the "analyzing" screen until GeneratePdfJob
+ * flips status to DONE, so this is no longer "background polish" shown
+ * after an early dashboard reveal. The generate_recommendations /
+ * generate_quick_wins / generate_positioning / generate_pdf step rows
+ * surface this phase's progress on the loading view while it runs.
  */
 class GenerateInsightsJob implements ShouldQueue
 {
@@ -83,6 +88,20 @@ class GenerateInsightsJob implements ShouldQueue
 
         // Hand off to PDF generation regardless of generator outcomes —
         // templates handle null/empty payloads.
+        GeneratePdfJob::dispatch($this->auditId);
+    }
+
+    /**
+     * BB145 — safety net. Now that status === 'done' is gated SOLELY on
+     * GeneratePdfJob (dispatched at the end of handle()), a hard crash in
+     * this job before that dispatch would otherwise strand the audit on
+     * the "analyzing" screen forever. Roll forward to the terminal PDF
+     * step so the pipeline always reaches DONE even on an unexpected
+     * failure here. (The per-generator work is already try/caught inside
+     * handle(); this covers container-resolution / fatal paths around it.)
+     */
+    public function failed(Throwable $e): void
+    {
         GeneratePdfJob::dispatch($this->auditId);
     }
 

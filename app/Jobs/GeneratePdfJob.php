@@ -54,9 +54,20 @@ class GeneratePdfJob implements ShouldQueue
             // "Buat Activation Kit" button.
         }
 
-        // Mark the audit done regardless of PDF outcome — the dashboard
-        // data is ready; PDF is a downloadable artifact, not a gate.
-        $audit->update(['status' => BrandAudit::STATUS_DONE]);
+        // BB145 — this is the SOLE point that flips the audit to DONE,
+        // which is the gate the wizard uses to reveal the full dashboard.
+        // By the time we get here, scoring + the LLM insights have all
+        // run, so the preview the user finally sees is complete (no more
+        // "still processing" tail). PDF success/failure itself is not a
+        // gate — it's a downloadable artifact the user can re-trigger.
+        //
+        // Refresh + skip the flip when a terminal FAILED was already
+        // recorded (e.g. AggregateAuditJob hard-failed >=2 pillars) so we
+        // never mask a failed audit as a successful one.
+        $audit->refresh();
+        if ($audit->status !== BrandAudit::STATUS_FAILED) {
+            $audit->update(['status' => BrandAudit::STATUS_DONE]);
+        }
 
         // This is the guaranteed final step of the pipeline — report the
         // audit's total execution time to the Hub for the admin duration

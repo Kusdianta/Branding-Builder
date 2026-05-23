@@ -70,8 +70,17 @@ class AggregateAuditJob implements ShouldQueue
                 ? 'Skor pilar ' . $failedPillars[0] . ' gagal diambil — hasil mungkin tidak lengkap.'
                 : null;
 
+            // BB145 — DO NOT flip status to DONE here. Aggregation is a
+            // mid-pipeline step: GenerateInsightsJob (LLM recommendations,
+            // quick wins, positioning) and GeneratePdfJob still run after
+            // it. The wizard reveals the full dashboard the instant
+            // status === 'done', so flipping it here surfaced an
+            // incomplete preview while insights + PDF were still
+            // generating. GeneratePdfJob — the guaranteed final step — is
+            // now the SOLE setter of STATUS_DONE. The audit stays in its
+            // current status (analyzing / validation_warning) until then,
+            // so the loading view keeps showing live step progress.
             $audit->update([
-                'status'          => BrandAudit::STATUS_DONE,
                 'overall_score'   => $overallScore,
                 'overall_label'   => $overallLabel,
                 'key_findings'    => $keyFindings,

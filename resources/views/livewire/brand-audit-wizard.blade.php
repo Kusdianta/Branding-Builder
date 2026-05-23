@@ -3486,9 +3486,11 @@ new class extends Component {
 
                         {{-- Phase 12c.4 FIX E — LLM-generated reasoning paragraphs.
                              Read from audit_evidence.target_score_reasoning,
-                             populated by AggregateAuditJob after status flip
-                             to DONE. Block stays hidden when generation
-                             failed or hasn't run yet — never an error UI. --}}
+                             populated by AggregateAuditJob during the scoring
+                             phase (BB145: before the DONE flip, which now
+                             happens only at GeneratePdfJob). Block stays hidden
+                             when generation failed or hasn't run yet — never an
+                             error UI. --}}
                         @if (count($reasoningParagraphs) > 0)
                             <div style="margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border-default);">
                                 <p style="font-size: 11px; font-weight: 600; color: var(--chimera-700); letter-spacing: 0.4px; text-transform: uppercase; margin: 0 0 12px;">Mengapa target ini realistis?</p>
