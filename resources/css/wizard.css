@@ -1043,3 +1043,36 @@
     .bb-waterfall__seg { animation: none; }
     .bb-reply-gauge__fill { animation: none; }
 }
+
+/* ============================================================
+   BB141 — "Rincian Skor" table + "Profil Skor Pilar" radar laid
+   out side by side. Desktop: 50/50 columns of equal height.
+   Mobile (< 768px): single column, blocks stack naturally.
+   The two children keep their own classes; we only neutralize
+   their max-w-3xl / mx-auto / mb-12 so each fills its column.
+   ============================================================ */
+.pillar-summary-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    align-items: stretch;
+}
+.pillar-summary-grid > .brand-health-table,
+.pillar-summary-grid > .bb-chart-card {
+    max-width: none;
+    width: 100%;
+    margin: 0;
+}
+.pillar-summary-grid > .bb-chart-card {
+    display: flex;
+    flex-direction: column;
+}
+.pillar-summary-grid > .bb-chart-card .bb-chart-container--radar {
+    flex: 1;
+}
+@media (max-width: 768px) {
+    .pillar-summary-grid {
+        grid-template-columns: 1fr;
+        gap: 16px;
+    }
+}

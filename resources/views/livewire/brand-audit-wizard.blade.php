@@ -2651,8 +2651,15 @@ new class extends Component {
                      the pillar distribution is visible at-a-glance before
                      the user scrolls into the per-pillar sub-bucket detail
                      cards. Mobile (< 640px) collapses into stacked cards. --}}
+                {{-- BB141 — Rincian Skor table + Profil Skor Pilar radar
+                     rendered side by side (50/50 on desktop, stacking
+                     < 768px). Both blocks read the same pillar-score data so
+                     they render together; .pillar-summary-grid (see
+                     wizard.css) neutralizes each child's own
+                     max-w-3xl / mx-auto / mb-12 so it fills its grid column. --}}
                 @if (count($pillarScoreInts) > 0)
-                    <div class="brand-health-table max-w-3xl mx-auto mb-12">
+                    <div class="pillar-summary-grid max-w-5xl mx-auto mb-12">
+                        <div class="brand-health-table">
                         <p style="font-size: 11px; font-weight: 600; color: var(--text-tertiary); letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 12px;">Rincian Skor</p>
 
                         {{-- Desktop / tablet: table layout --}}
@@ -2708,11 +2715,16 @@ new class extends Component {
                                 </div>
                             @endforeach
                         </div>
-                    </div>
-                @endif
+                        </div>{{-- /.brand-health-table --}}
 
-                {{-- BB138 Chart 2 — pillar radar (augments the breakdown table above). --}}
-                @include('livewire.charts._pillar-radar')
+                        {{-- BB138 Chart 2 — pillar radar (augments the breakdown table). --}}
+                        @include('livewire.charts._pillar-radar')
+                    </div>{{-- /.pillar-summary-grid --}}
+                @else
+                    {{-- No pillar scores: the radar renders nothing here, but
+                         keep the legacy unconditional include path intact. --}}
+                    @include('livewire.charts._pillar-radar')
+                @endif
 
                 {{-- ============================================================
                      BB144 — Outlet photos from Google Places.
