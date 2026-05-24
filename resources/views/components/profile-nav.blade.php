@@ -3,7 +3,8 @@
 
     Avatar + first-name button toggles an Alpine-driven dropdown showing
     full name + email, navigation to /audits and /, and POST logout via
-    the `auth.logout` route (Google OAuth controller signs the user out).
+    the `auth.logout` route (SsoCallbackController clears the local session
+    and notifies the Hub for platform-wide logout).
 
     Replaces the inline BB87 markup that previously lived in
     layouts/audit.blade.php. Markup uses CSS variables instead of

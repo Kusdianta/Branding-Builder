@@ -7,6 +7,7 @@ namespace App\Providers;
 use App\Services\HubCredentialsClient;
 use App\Services\HubUsageLogger;
 use App\Services\PlacesApiService;
+use App\Services\SsoTokenValidator;
 use App\View\Composers\MapsConfigComposer;
 use Illuminate\Auth\Middleware\Authenticate;
 use Illuminate\Contracts\Foundation\Application;
@@ -51,6 +52,9 @@ class AppServiceProvider extends ServiceProvider
                 timeoutSeconds: (float) config('services.google.maps_timeout', 10.0),
             );
         });
+
+        // BB02 — validate-only SSO token verifier (shared secret from config/sso.php).
+        $this->app->singleton(SsoTokenValidator::class, static fn (): SsoTokenValidator => SsoTokenValidator::fromConfig());
     }
 
     public function boot(): void
@@ -59,11 +63,11 @@ class AppServiceProvider extends ServiceProvider
             resource_path('views/livewire'),
         ]);
 
-        // BB83 — there is no Laravel 'login' route in branding-builder
-        // (OAuth-only). Send unauthenticated users to /auth/google so the
-        // auth middleware on /audits and friends does the right thing.
+        // BB03 — auth is now delegated to the Hub SSO gateway. The local
+        // 'login' route bounces unauthenticated users to the Hub, which
+        // signs them in and posts a signed token back to /auth/sso/callback.
         Authenticate::redirectUsing(static function (): string {
-            return route('auth.google.redirect');
+            return route('login');
         });
 
         // BB89 — scope the Places API key + country bias to the wizard

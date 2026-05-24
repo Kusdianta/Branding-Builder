@@ -7,6 +7,7 @@ namespace Tests\Feature\Livewire;
 use App\Models\BrandAudit;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Livewire\Livewire;
 use Tests\TestCase;
 
 class AuditsIndexTest extends TestCase
@@ -61,6 +62,49 @@ class AuditsIndexTest extends TestCase
             strpos($body, 'Baru Laundry'),
             'Newer audit should appear before older audit in the markup.'
         );
+    }
+
+    public function test_user_can_delete_their_own_audit(): void
+    {
+        $user = User::factory()->create();
+        $audit = $this->makeAudit($user, 'Hapus Laundry');
+
+        Livewire::actingAs($user)
+            ->test('audits-index')
+            ->call('deleteAudit', $audit->id);
+
+        $this->assertDatabaseMissing('brand_audits', ['id' => $audit->id]);
+    }
+
+    public function test_user_cannot_delete_another_users_audit(): void
+    {
+        $alice = User::factory()->create();
+        $bob = User::factory()->create();
+        $bobAudit = $this->makeAudit($bob, 'Bob Laundry');
+
+        Livewire::actingAs($alice)
+            ->test('audits-index')
+            ->call('deleteAudit', $bobAudit->id);
+
+        $this->assertDatabaseHas('brand_audits', ['id' => $bobAudit->id]);
+    }
+
+    public function test_deleting_audit_cascades_related_rows(): void
+    {
+        $user = User::factory()->create();
+        $audit = $this->makeAudit($user, 'Cascade Laundry');
+
+        $audit->brandKit()->create([
+            'generated_payload' => ['summary' => 'test'],
+            'pdf_path'          => 'audits/' . $audit->id . '/activation-kit.pdf',
+        ]);
+
+        Livewire::actingAs($user)
+            ->test('audits-index')
+            ->call('deleteAudit', $audit->id);
+
+        $this->assertDatabaseMissing('brand_audits', ['id' => $audit->id]);
+        $this->assertDatabaseMissing('brand_kits', ['brand_audit_id' => $audit->id]);
     }
 
     private function makeAudit(User $user, string $brandName, ?\Carbon\Carbon $createdAt = null): BrandAudit

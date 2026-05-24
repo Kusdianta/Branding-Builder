@@ -149,4 +149,82 @@ class UsersApiControllerTest extends TestCase
 
         $response->assertStatus(422);
     }
+
+    public function test_destroy_requires_bearer_token(): void
+    {
+        $user = User::factory()->create();
+
+        $response = $this->deleteJson('/api/internal/users/' . $user->id);
+
+        $response->assertStatus(401);
+        $this->assertDatabaseHas('users', ['id' => $user->id]);
+    }
+
+    public function test_destroy_returns_404_for_unknown_user(): void
+    {
+        $response = $this->withToken('test-bearer-xyz')
+            ->deleteJson('/api/internal/users/01-bogus-id');
+
+        $response->assertStatus(404);
+    }
+
+    public function test_destroy_deletes_user_and_cascades_their_data(): void
+    {
+        $user = User::factory()->create();
+        $other = User::factory()->create();
+
+        $audit = BrandAudit::create([
+            'session_token' => 'tok-del-1',
+            'user_id'       => $user->id,
+            'ip_address'    => '127.0.0.1',
+            'brand_name'    => 'Doomed Brand',
+            'city'          => 'Jakarta',
+            'service_type'  => 'kiloan',
+            'touchpoints'   => [],
+            'status'        => BrandAudit::STATUS_DONE,
+            'expires_at'    => now()->addDays(30),
+        ]);
+        $audit->brandKit()->create([
+            'generated_payload' => ['summary' => 'test'],
+            'pdf_path'          => 'audits/' . $audit->id . '/activation-kit.pdf',
+        ]);
+        CreditAdjustment::create([
+            'user_id'     => $user->id,
+            'amount'      => 5,
+            'reason'      => 'Compensation',
+            'adjusted_by' => 'ops@nema.local',
+            'created_at'  => now(),
+        ]);
+
+        // A second user's audit must survive untouched.
+        $otherAudit = BrandAudit::create([
+            'session_token' => 'tok-keep-1',
+            'user_id'       => $other->id,
+            'ip_address'    => '127.0.0.1',
+            'brand_name'    => 'Survivor Brand',
+            'city'          => 'Bandung',
+            'service_type'  => 'kiloan',
+            'touchpoints'   => [],
+            'status'        => BrandAudit::STATUS_DONE,
+            'expires_at'    => now()->addDays(30),
+        ]);
+
+        $response = $this->withToken('test-bearer-xyz')
+            ->deleteJson('/api/internal/users/' . $user->id);
+
+        $response->assertOk()
+            ->assertJson([
+                'deleted'        => true,
+                'user_id'        => $user->id,
+                'audits_deleted' => 1,
+            ]);
+
+        $this->assertDatabaseMissing('users', ['id' => $user->id]);
+        $this->assertDatabaseMissing('brand_audits', ['id' => $audit->id]);
+        $this->assertDatabaseMissing('brand_kits', ['brand_audit_id' => $audit->id]);
+        $this->assertDatabaseMissing('credit_adjustments', ['user_id' => $user->id]);
+
+        $this->assertDatabaseHas('users', ['id' => $other->id]);
+        $this->assertDatabaseHas('brand_audits', ['id' => $otherAudit->id]);
+    }
 }

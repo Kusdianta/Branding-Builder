@@ -11,6 +11,8 @@ use App\Models\User;
 use App\Services\CreditLedger;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 
 /**
  * BB84 — internal API surface consumed by the Hub Filament dashboard.
@@ -124,6 +126,44 @@ class UsersApiController extends Controller
         return response()->json([
             'user_id'         => $user->id,
             'credits_balance' => $newBalance,
+        ]);
+    }
+
+    /**
+     * Permanently delete a branding-builder user and everything they own.
+     *
+     * brand_audits.user_id and credit_adjustments.user_id carry no DB
+     * foreign key, so deleting the user does NOT cascade to them — we
+     * clean up explicitly inside a transaction. Each audit's brand_kits
+     * and audit_steps DO cascade at the DB level when the audit row is
+     * removed; their on-disk asset directory (activation kit PDF, GMaps
+     * screenshot, Instagram assets under audits/{id}/) does not, so it is
+     * deleted first.
+     */
+    public function destroy(string $id): JsonResponse
+    {
+        /** @var User|null $user */
+        $user = User::find($id);
+        if (! $user) {
+            return response()->json(['error' => 'user_not_found'], 404);
+        }
+
+        $auditIds = $user->brandAudits()->pluck('id')->all();
+
+        DB::transaction(function () use ($user, $auditIds): void {
+            foreach ($auditIds as $auditId) {
+                Storage::disk('local')->deleteDirectory("audits/{$auditId}");
+            }
+
+            BrandAudit::whereIn('id', $auditIds)->delete();
+            CreditAdjustment::where('user_id', $user->id)->delete();
+            $user->delete();
+        });
+
+        return response()->json([
+            'deleted'        => true,
+            'user_id'        => $id,
+            'audits_deleted' => count($auditIds),
         ]);
     }
 

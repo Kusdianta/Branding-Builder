@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 use App\Http\Controllers\Api\HealthController;
 use App\Http\Controllers\AuditController;
-use App\Http\Controllers\Auth\GoogleAuthController;
+use App\Http\Controllers\Auth\SsoCallbackController;
 use App\Http\Controllers\HandleCheckController;
 use Illuminate\Support\Facades\Route;
 use Livewire\Volt\Volt;
@@ -35,10 +35,10 @@ Route::post('/check-handle/tiktok', [HandleCheckController::class, 'tiktok'])
     ->middleware('throttle:30,1')
     ->name('check-handle.tiktok');
 
-// BB81 — Google OAuth entry points.
-Route::get('/auth/google', [GoogleAuthController::class, 'redirect'])->name('auth.google.redirect');
-Route::get('/auth/google/callback', [GoogleAuthController::class, 'callback'])->name('auth.google.callback');
-Route::post('/auth/logout', [GoogleAuthController::class, 'logout'])->name('auth.logout');
+// BB02/BB03 — auth via the Hub SSO gateway (Google OAuth now lives in the Hub).
+Route::get('/auth/login', [SsoCallbackController::class, 'login'])->name('login');
+Route::get('/auth/sso/callback', [SsoCallbackController::class, 'callback'])->name('auth.sso.callback');
+Route::post('/auth/logout', [SsoCallbackController::class, 'logout'])->name('auth.logout');
 
 // BB83 — Per-user audit history (auth required).
 Route::middleware('auth')->group(function () {

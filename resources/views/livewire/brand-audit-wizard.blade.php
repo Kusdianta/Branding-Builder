@@ -1179,7 +1179,7 @@ new class extends Component {
     public function submit(CreditLedger $ledger): void
     {
         if (! Auth::check()) {
-            $this->redirect(route('auth.google.redirect'));
+            $this->redirect(route('login'));
             return;
         }
 
@@ -1679,7 +1679,7 @@ new class extends Component {
                     <div class="bb-auth-panel">
                         <h2>Masuk dulu untuk mulai audit</h2>
                         <p>Saya akan menyimpan hasil audit di akun Google kamu.</p>
-                        <a href="{{ route('auth.google.redirect') }}" class="signin">
+                        <a href="{{ route('login') }}" class="signin">
                             <i class="ti ti-brand-google"></i> Masuk dengan Google
                         </a>
                     </div>
@@ -1848,7 +1848,7 @@ new class extends Component {
                         </div>
                     @endif
                     <a
-                        href="{{ route('auth.google.redirect') }}"
+                        href="{{ route('login') }}"
                         class="nui-btn-primary rounded-pill"
                         style="font-size: 15px; font-weight: 500; padding: 12px 24px; display: inline-flex; align-items: center; gap: 10px;"
                     >

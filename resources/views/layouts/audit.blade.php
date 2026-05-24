@@ -113,7 +113,7 @@
         <x-profile-nav />
 
         @guest
-            <a href="{{ route('auth.google.redirect') }}"
+            <a href="{{ route('login') }}"
                style="font-size: 13px; font-weight: 500; color: var(--text-on-inverse); text-decoration: none; padding: 7px 16px; border-radius: var(--radius-pill); background: var(--surface-inverse); display: inline-flex; align-items: center; gap: 6px;">
                 <i class="ti ti-brand-google" style="font-size: 13px;"></i>
                 Masuk

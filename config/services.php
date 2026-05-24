@@ -52,14 +52,9 @@ return [
         // MapsConfigComposer and injected into wizard views only.
         'maps_country_bias' => env('GOOGLE_MAPS_COUNTRY_BIAS', 'id'),
 
-        // BB81 — Google OAuth (Phase 12a). The redirect URL is env-driven so
-        // dev (Tailscale Funnel HTTPS) and prod (subdomain HTTPS) can both
-        // work without code changes. Google rejects non-HTTPS callbacks for
-        // anything other than localhost, so .test URLs cannot be used as the
-        // OAuth callback — sign-in testing must go through the funnel.
-        'client_id'     => env('GOOGLE_CLIENT_ID'),
-        'client_secret' => env('GOOGLE_CLIENT_SECRET'),
-        'redirect'      => env('GOOGLE_REDIRECT_URL'),
+        // Google OAuth moved to the Hub SSO gateway (SSO01). This spoke no
+        // longer holds Google client credentials — auth is delegated to the
+        // Hub. See config/sso.php.
     ],
 
     'nema_worker' => [
