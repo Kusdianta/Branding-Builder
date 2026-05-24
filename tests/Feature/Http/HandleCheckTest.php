@@ -70,6 +70,17 @@ class HandleCheckTest extends TestCase
         ];
     }
 
+    /** @return array{id:string,platform:string,username:string,session_cookies:list<array<string,string>>} */
+    private function fakeTikTokCredential(): array
+    {
+        return [
+            'id'              => '01krtiktokcredulid000000000',
+            'platform'        => 'tiktok',
+            'username'        => 'nairs.tr.ac',
+            'session_cookies' => [['name' => 'sessionid', 'value' => 'x']],
+        ];
+    }
+
     // ─── Instagram via worker (BB131 — primary path) ─────────────────
 
     #[Test]
@@ -494,6 +505,80 @@ class HandleCheckTest extends TestCase
     {
         $response = $this->postJson('/check-handle/tiktok', ['username' => '']);
         $response->assertStatus(422);
+    }
+
+    #[Test]
+    public function tiktok_login_wall_reports_credential_stale_and_returns_error(): void
+    {
+        // BB142 — a stale TikTok session makes the worker return login_wall_hit
+        // (TikTok's edge rejects the authenticated navigation). The checker must
+        // mark the Hub credential requires_2fa (fires the admin "Cookies TikTok
+        // kedaluwarsa" banner) and surface 'error' to the wizard — NOT the legacy
+        // oembed fallback, which would mask the operator-actionable cause with a
+        // follower-less guess. Mirrors the Instagram BB137 contract.
+        $cred = $this->fakeTikTokCredential();
+        $hub  = Mockery::mock(HubCredentialsClient::class);
+        $hub->shouldReceive('getNextCredential')->andReturn($cred);
+        $hub->shouldReceive('reportCredentialStatus')
+            ->once()
+            ->with($cred['id'], 'requires_2fa', Mockery::type('string'));
+        $this->app->instance(HubCredentialsClient::class, $hub);
+
+        $worker = Mockery::mock(NemaWorkerClient::class);
+        $worker->shouldReceive('auditTikTokProfile')
+            ->once()
+            ->andThrow(new ProfileAuditException(
+                errorCode: 'login_wall_hit',
+                httpStatus: 400,
+                detail: 'TikTok edge rejected authenticated navigation',
+                retryAfterSeconds: null,
+            ));
+        $this->app->instance(NemaWorkerClient::class, $worker);
+
+        Http::fake(); // legacy oembed probe must NOT be touched
+
+        $response = $this->postJson('/check-handle/tiktok', ['username' => 'timothyronald']);
+
+        $response->assertOk()->assertJson(['exists' => false, 'status' => 'error']);
+        Http::assertNothingSent(); // no legacy fallback on a login wall
+    }
+
+    #[Test]
+    public function tiktok_transient_worker_error_falls_back_to_legacy_probe(): void
+    {
+        // A NON-wall worker error (timeout / captcha_hit / worker down) is
+        // advisory — the checker still falls back to the legacy oembed probe,
+        // and the Hub credential is NOT marked stale.
+        $cred = $this->fakeTikTokCredential();
+        $hub  = Mockery::mock(HubCredentialsClient::class);
+        $hub->shouldReceive('getNextCredential')->andReturn($cred);
+        $hub->shouldReceive('reportCredentialStatus')->never();
+        $this->app->instance(HubCredentialsClient::class, $hub);
+
+        $worker = Mockery::mock(NemaWorkerClient::class);
+        $worker->shouldReceive('auditTikTokProfile')
+            ->once()
+            ->andThrow(new ProfileAuditException(
+                errorCode: 'timeout',
+                httpStatus: 500,
+                detail: 'nav timeout',
+                retryAfterSeconds: null,
+            ));
+        $this->app->instance(NemaWorkerClient::class, $worker);
+
+        Http::fake([
+            'tiktok.com/oembed*' => Http::response('', 503),
+            'tiktok.com/api/user/detail*' => Http::response(
+                json_encode(['statusCode' => 10221, 'statusMsg' => 'user_not_exist']),
+                200,
+                ['Content-Type' => 'application/json'],
+            ),
+        ]);
+
+        $response = $this->postJson('/check-handle/tiktok', ['username' => 'ghosthandle']);
+
+        $response->assertOk()->assertJson(['exists' => false, 'status' => 'not_found']);
+        Http::assertSentCount(2); // legacy oembed + user/detail fallback ran
     }
 
     // ─── helpers ─────────────────────────────────────────────────────

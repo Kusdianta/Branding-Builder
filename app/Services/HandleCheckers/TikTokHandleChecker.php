@@ -7,6 +7,7 @@ namespace App\Services\HandleCheckers;
 use App\Services\HubCredentialsClient;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use Nema\WorkerClient\Exceptions\ProfileAuditException;
 use Nema\WorkerClient\NemaWorkerClient;
 use Throwable;
 
@@ -109,11 +110,40 @@ final class TikTokHandleChecker
             return null;
         }
 
+        $credentialId = isset($credential['id']) && is_string($credential['id'])
+            ? $credential['id']
+            : null;
+
         try {
             $audit = $this->worker->auditTikTokProfile($username, $cookies);
+        } catch (ProfileAuditException $e) {
+            // BB142 — a login wall / interstitial means the claimed session's
+            // cookies are stale: TikTok's edge rejected the authenticated
+            // navigation (net::ERR_HTTP_RESPONSE_CODE_FAILURE, classified as
+            // login_wall_hit by the worker). Mark the Hub credential
+            // requires_2fa (fires the admin "Cookies TikTok kedaluwarsa"
+            // banner) and surface 'error' — NOT the legacy oembed probe, which
+            // would only mask the operator-actionable cause with a
+            // follower-less guess. Mirrors InstagramHandleChecker (BB137).
+            if (in_array($e->errorCode, ['login_wall_hit', 'interstitial_blocked'], true)) {
+                if ($credentialId !== null) {
+                    $this->reportCredentialStale(
+                        $credentialId,
+                        $e->errorCode . ' during wizard handle check',
+                    );
+                }
+                return TikTokHandleResult::error($username);
+            }
+
+            // Other codes (timeout / captcha_hit / rate_limited) are advisory —
+            // fall back to the legacy oembed probe (best-effort name, no follower).
+            Log::info('TikTokHandleChecker: worker audit failed; legacy fallback', [
+                'username'   => $username,
+                'error_code' => $e->errorCode,
+            ]);
+            return null;
         } catch (Throwable $e) {
-            // login_wall_hit / captcha_hit / timeout / worker down — advisory.
-            // Fall back to the legacy probe (best-effort name, no follower).
+            // Worker unreachable / unexpected — advisory legacy fallback.
             Log::info('TikTokHandleChecker: worker audit failed; legacy fallback', [
                 'username' => $username,
                 'error'    => $e->getMessage(),
@@ -134,5 +164,23 @@ final class TikTokHandleChecker
             followerCount: $audit->followerCount,
             checkedAt:     now()->toIso8601String(),
         );
+    }
+
+    /**
+     * BB142 — report a stale TikTok session to the Hub so the admin banner
+     * warns the operator. Best-effort: a Hub hiccup must never break the
+     * wizard check (which already degrades to 'error'). Mirrors
+     * {@see InstagramHandleChecker::reportCredentialStale}.
+     */
+    private function reportCredentialStale(string $credentialId, string $reason): void
+    {
+        try {
+            $this->hub->reportCredentialStatus($credentialId, 'requires_2fa', $reason);
+        } catch (Throwable $e) {
+            Log::warning('TikTokHandleChecker: failed to report credential stale', [
+                'credential_id' => $credentialId,
+                'error'         => $e->getMessage(),
+            ]);
+        }
     }
 }
