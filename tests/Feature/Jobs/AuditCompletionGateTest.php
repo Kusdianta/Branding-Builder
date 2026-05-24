@@ -99,10 +99,78 @@ class AuditCompletionGateTest extends TestCase
     {
         Bus::fake([GenerateActivationKit::class]);
         $audit = $this->makeScoredAudit(BrandAudit::STATUS_FAILED);
+        $audit->update(['instagram_audit_status' => 'pending']);
 
         (new GeneratePdfJob($audit->id))->handle($this->app->make(HubUsageLogger::class));
 
-        $this->assertSame(BrandAudit::STATUS_FAILED, $audit->refresh()->status);
+        $audit->refresh();
+        $this->assertSame(BrandAudit::STATUS_FAILED, $audit->status);
+        // BB146 — coercion is inside the success branch, so a FAILED audit's
+        // lingering IG status is left untouched (the 'failed' reveal gate
+        // already allows the dashboard to show).
+        $this->assertSame('pending', $audit->instagram_audit_status);
+    }
+
+    #[Test]
+    public function generate_pdf_coerces_lingering_pending_instagram_to_terminal(): void
+    {
+        Bus::fake([GenerateActivationKit::class]);
+        $audit = $this->makeScoredAudit();
+        $audit->update(['instagram_audit_status' => 'pending']);
+
+        (new GeneratePdfJob($audit->id))->handle($this->app->make(HubUsageLogger::class));
+
+        $audit->refresh();
+        $this->assertSame(BrandAudit::STATUS_DONE, $audit->status);
+        $this->assertSame('audit_failed', $audit->instagram_audit_status);
+        $this->assertStringStartsWith('worker_unavailable', (string) ($audit->instagram_audit['error'] ?? ''));
+    }
+
+    #[Test]
+    public function generate_pdf_coerces_lingering_scraped_instagram_to_terminal(): void
+    {
+        Bus::fake([GenerateActivationKit::class]);
+        $audit = $this->makeScoredAudit();
+        $audit->update(['instagram_audit_status' => 'scraped']);
+
+        (new GeneratePdfJob($audit->id))->handle($this->app->make(HubUsageLogger::class));
+
+        $audit->refresh();
+        $this->assertSame(BrandAudit::STATUS_DONE, $audit->status);
+        $this->assertSame('audit_failed', $audit->instagram_audit_status);
+        $this->assertStringStartsWith('claude_analysis_failed', (string) ($audit->instagram_audit['error'] ?? ''));
+    }
+
+    #[Test]
+    public function generate_pdf_does_not_touch_a_terminal_instagram_status(): void
+    {
+        Bus::fake([GenerateActivationKit::class]);
+        $audit = $this->makeScoredAudit();
+        $audit->update([
+            'instagram_audit_status' => 'done',
+            'instagram_audit'        => ['executive_summary' => 'all good'],
+        ]);
+
+        (new GeneratePdfJob($audit->id))->handle($this->app->make(HubUsageLogger::class));
+
+        $audit->refresh();
+        $this->assertSame(BrandAudit::STATUS_DONE, $audit->status);
+        $this->assertSame('done', $audit->instagram_audit_status);
+        $this->assertSame('all good', $audit->instagram_audit['executive_summary']);
+    }
+
+    #[Test]
+    public function generate_pdf_does_not_touch_no_instagram_url_provided(): void
+    {
+        Bus::fake([GenerateActivationKit::class]);
+        $audit = $this->makeScoredAudit();
+        $audit->update(['instagram_audit_status' => 'no_instagram_url_provided']);
+
+        (new GeneratePdfJob($audit->id))->handle($this->app->make(HubUsageLogger::class));
+
+        $audit->refresh();
+        $this->assertSame(BrandAudit::STATUS_DONE, $audit->status);
+        $this->assertSame('no_instagram_url_provided', $audit->instagram_audit_status);
     }
 
     #[Test]

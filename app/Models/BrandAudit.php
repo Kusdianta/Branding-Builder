@@ -30,6 +30,20 @@ class BrandAudit extends Model
     public const STATUS_VALIDATION_WARNING = 'validation_warning';
 
     /**
+     * BB146 — Instagram bonus-audit statuses that are NOT yet settled.
+     * `pending` is the column default (never written by the service —
+     * it only lingers when FetchInstagramAuditJob is killed by its 240s
+     * wall-clock timeout before the service persisted a terminal status).
+     * `scraped` means the scrape finished but AnalyzeInstagramJob hasn't
+     * produced (or failed) the Claude analysis yet. Every other value the
+     * service emits (done, no_instagram_url_provided, no_credentials_available,
+     * credentials_stale, rate_limited, profile_not_found, audit_failed) is
+     * terminal. Listing the small non-terminal set keeps the reveal gate
+     * fail-safe: an unknown/future status reveals rather than hangs.
+     */
+    public const INSTAGRAM_NON_TERMINAL_STATUSES = ['pending', 'scraped'];
+
+    /**
      * Wizard schema generations.
      *
      * V1 = pre-Phase-12c single-page form: required city + free-text
@@ -116,6 +130,20 @@ class BrandAudit extends Model
             'competitive_positioning' => 'array',
             'expires_at'              => 'datetime',
         ];
+    }
+
+    /**
+     * BB146 — has the Instagram bonus audit reached a settled (terminal)
+     * state? The dashboard reveal gate requires this to be true (alongside
+     * a terminal main status) so the result page never reveals while the
+     * IG audit is genuinely mid-process. Null/missing is treated as the
+     * `pending` default → non-terminal.
+     */
+    public function instagramAuditIsTerminal(): bool
+    {
+        $status = (string) ($this->instagram_audit_status ?? 'pending');
+
+        return ! in_array($status, self::INSTAGRAM_NON_TERMINAL_STATUSES, true);
     }
 
     /**

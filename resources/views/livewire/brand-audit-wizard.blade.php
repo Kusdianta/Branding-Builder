@@ -462,9 +462,17 @@ new class extends Component {
             break;
         }
 
-        $this->step = match ($audit->status) {
-            'done', 'failed' => 'dashboard',
-            default          => 'analyzing',
+        // BB146 — hard-gate the reveal on the IG bonus audit too. A main
+        // 'failed' always reveals; a main 'done' only reveals once the IG
+        // audit has settled (terminal). While IG is still pending/scraped we
+        // stay on the analyzing screen (which keeps polling), so the user
+        // never sees a result page with a never-resolving "masih dalam
+        // proses" IG banner. GeneratePdfJob coerces a stuck IG status to a
+        // terminal failure before it flips to 'done', so this can't hang.
+        $this->step = match (true) {
+            $audit->status === 'failed'                                     => 'dashboard',
+            $audit->status === 'done' && $audit->instagramAuditIsTerminal() => 'dashboard',
+            default                                                         => 'analyzing',
         };
     }
 
@@ -1400,7 +1408,19 @@ new class extends Component {
 
     public function pollStatus(): void
     {
-        if (in_array($this->auditStatus, ['done', 'failed'], true) || ! $this->auditId) {
+        // BB146 — keep polling until the reveal gate opens: a main 'failed',
+        // or a main 'done' AND the IG bonus audit has settled (terminal).
+        // Without the IG check, a 'done' main status while IG is still
+        // pending/scraped would stop polling and strand the analyzing screen.
+        $igTerminal = ! in_array(
+            (string) ($this->instagramAuditStatus ?? 'pending'),
+            BrandAudit::INSTAGRAM_NON_TERMINAL_STATUSES,
+            true,
+        );
+        $gateOpen = $this->auditStatus === 'failed'
+            || ($this->auditStatus === 'done' && $igTerminal);
+
+        if ($gateOpen || ! $this->auditId) {
             return;
         }
 
@@ -2355,8 +2375,19 @@ new class extends Component {
             $pomelliSourceUrl  = isset($placeId) && $placeId
                 ? 'https://www.google.com/maps/place/?q=place_id:' . $placeId
                 : null;
+
+            // BB146 — keep polling until the reveal gate opens (main 'failed',
+            // or main 'done' AND the IG bonus audit settled). FQN const —
+            // @php blocks can't `use`. Mirrors pollStatus()'s server-side gate.
+            $bbIgTerminal = ! in_array(
+                (string) ($instagramAuditStatus ?? 'pending'),
+                \App\Models\BrandAudit::INSTAGRAM_NON_TERMINAL_STATUSES,
+                true,
+            );
+            $bbGateOpen = $auditStatus === 'failed'
+                || ($auditStatus === 'done' && $bbIgTerminal);
         @endphp
-        <div @if (! in_array($auditStatus, ['done', 'failed'])) wire:poll.2000ms="pollStatus" @endif class="max-w-3xl mx-auto py-12">
+        <div @if (! $bbGateOpen) wire:poll.2000ms="pollStatus" @endif class="max-w-3xl mx-auto py-12">
             {{-- BB96 Pomelli-style hero. --}}
             <div style="text-align: center; padding: 24px 16px 32px;">
                 <h1 style="font-size: 36px; font-weight: 600; line-height: 1.15; color: var(--text-primary); margin: 0 0 12px;">

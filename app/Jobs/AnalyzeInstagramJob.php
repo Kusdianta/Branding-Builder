@@ -98,6 +98,25 @@ class AnalyzeInstagramJob implements ShouldQueue
         }
     }
 
+    /**
+     * BB146 — a 180s timeout (tries=1) can kill this job after a successful
+     * scrape, leaving instagram_audit_status stranded at 'scraped'. Coerce
+     * that to a terminal failure so the reveal gate can open. Guarded so a
+     * real failure status analyze() already persisted is never clobbered.
+     */
+    public function failed(Throwable $e): void
+    {
+        $audit = BrandAudit::find($this->auditId);
+        if ($audit === null || $audit->instagramAuditIsTerminal()) {
+            return;
+        }
+
+        $audit->update([
+            'instagram_audit_status' => 'audit_failed',
+            'instagram_audit'        => ['error' => 'claude_analysis_failed: ' . $e->getMessage()],
+        ]);
+    }
+
     private function step(string $key): ?AuditStep
     {
         return AuditStep::where('brand_audit_id', $this->auditId)

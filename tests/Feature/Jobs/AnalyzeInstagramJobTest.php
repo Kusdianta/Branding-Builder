@@ -144,4 +144,34 @@ class AnalyzeInstagramJobTest extends TestCase
         $this->assertSame(AuditStep::STATUS_DONE, $step->status);
         $this->assertSame('audit_failed', $step->detail['status']);
     }
+
+    #[Test]
+    public function failed_coerces_a_lingering_scraped_status_to_terminal(): void
+    {
+        // BB146 — a 180s timeout can kill this job after a successful scrape,
+        // leaving instagram_audit_status stranded at 'scraped'. failed()
+        // coerces it to a terminal failure so the reveal gate can open.
+        $audit = $this->makeAudit(); // default instagram_audit_status='scraped'
+
+        (new AnalyzeInstagramJob($audit->id))->failed(new \RuntimeException('boom'));
+
+        $audit->refresh();
+        $this->assertSame('audit_failed', $audit->instagram_audit_status);
+        $this->assertStringStartsWith('claude_analysis_failed', (string) ($audit->instagram_audit['error'] ?? ''));
+    }
+
+    #[Test]
+    public function failed_is_a_noop_when_status_already_terminal(): void
+    {
+        $audit = $this->makeAudit([
+            'instagram_audit_status' => 'done',
+            'instagram_audit'        => ['executive_summary' => 'all good'],
+        ]);
+
+        (new AnalyzeInstagramJob($audit->id))->failed(new \RuntimeException('boom'));
+
+        $audit->refresh();
+        $this->assertSame('done', $audit->instagram_audit_status);
+        $this->assertSame('all good', $audit->instagram_audit['executive_summary']);
+    }
 }

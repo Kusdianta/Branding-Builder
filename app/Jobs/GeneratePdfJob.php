@@ -66,6 +66,14 @@ class GeneratePdfJob implements ShouldQueue
         // never mask a failed audit as a successful one.
         $audit->refresh();
         if ($audit->status !== BrandAudit::STATUS_FAILED) {
+            // BB146 — guarantee the IG bonus audit is terminal before we open
+            // the reveal gate. In the normal flow it already is (both IG jobs
+            // are upstream in the chain), but a 240s scrape timeout can strand
+            // instagram_audit_status at 'pending' (or 'scraped' on an analysis
+            // timeout). Coerce that to a real failure so the dashboard reveals
+            // with an honest banner instead of a never-resolving "masih dalam
+            // proses" one — and so the reveal gate never hangs.
+            $this->coerceLingeringInstagramStatus($audit);
             $audit->update(['status' => BrandAudit::STATUS_DONE]);
         }
 
@@ -73,6 +81,33 @@ class GeneratePdfJob implements ShouldQueue
         // audit's total execution time to the Hub for the admin duration
         // chart. Fire-and-forget; never affects the audit outcome.
         $this->reportTiming($audit, $usageLogger);
+    }
+
+    /**
+     * BB146 — if the IG audit never reached a terminal state (scrape timed
+     * out → 'pending'; analysis timed out → 'scraped'), persist a terminal
+     * failure so the reveal gate can open. Runs only on the success path
+     * (caller already excluded STATUS_FAILED). By here both IG jobs have
+     * stopped, so there is no concurrent writer to instagram_audit — a
+     * direct update() is race-free. The error prefixes match the friendly
+     * banners in _instagram-audit-section.blade.php (worker_unavailable /
+     * claude_analysis_failed).
+     */
+    private function coerceLingeringInstagramStatus(BrandAudit $audit): void
+    {
+        if ($audit->instagramAuditIsTerminal()) {
+            return;
+        }
+
+        $reason = $audit->instagram_audit_status === 'scraped'
+            ? 'claude_analysis_failed: instagram analysis did not finish (worker timeout)'
+            : 'worker_unavailable: instagram scrape did not finish (worker timeout)';
+
+        $audit->update([
+            'instagram_audit_status' => 'audit_failed',
+            'instagram_audit'        => ['error' => $reason],
+        ]);
+        $audit->refresh();
     }
 
     /**

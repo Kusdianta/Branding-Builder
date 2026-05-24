@@ -12,6 +12,7 @@ use App\Services\PlatformHealthChecker;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -347,5 +348,81 @@ class BrandAuditWizardTest extends TestCase
             ->assertSet('wizardStep', 4)
             ->call('nextStep')
             ->assertSet('wizardStep', 4, 'nextStep clamps at totalWizardSteps');
+    }
+
+    // ====================================================================
+    // BB146 — dashboard reveal is hard-gated on the IG bonus audit too.
+    // Mounting with ?token={session_token} runs loadAudit(), which sets
+    // $step. A main 'done' with a non-terminal IG status must stay on the
+    // analyzing screen instead of revealing a half-finished result page.
+    // ====================================================================
+
+    private function makeAuditRow(string $status, string $igStatus): BrandAudit
+    {
+        return BrandAudit::create([
+            'session_token'          => Str::random(64),
+            'ip_address'             => '127.0.0.1',
+            'brand_name'             => 'Less Worry Laundry',
+            'city'                   => 'Bandung',
+            'service_type'           => 'kiloan',
+            'touchpoints'            => ['gmaps_url' => 'https://maps.app.goo.gl/x'],
+            'status'                 => $status,
+            'instagram_audit_status' => $igStatus,
+            'expires_at'             => now()->addDays(30),
+        ]);
+    }
+
+    public function test_reveal_blocked_while_instagram_pending(): void
+    {
+        $audit = $this->makeAuditRow('done', 'pending');
+
+        Livewire::test(self::VIEW, ['token' => $audit->session_token])
+            ->assertSet('step', 'analyzing');
+    }
+
+    public function test_reveal_blocked_while_instagram_scraped(): void
+    {
+        $audit = $this->makeAuditRow('done', 'scraped');
+
+        Livewire::test(self::VIEW, ['token' => $audit->session_token])
+            ->assertSet('step', 'analyzing');
+    }
+
+    public function test_reveal_proceeds_once_instagram_terminal(): void
+    {
+        $audit = $this->makeAuditRow('done', 'done');
+
+        Livewire::test(self::VIEW, ['token' => $audit->session_token])
+            ->assertSet('step', 'dashboard');
+    }
+
+    public function test_reveal_proceeds_with_no_instagram_url(): void
+    {
+        $audit = $this->makeAuditRow('done', 'no_instagram_url_provided');
+
+        Livewire::test(self::VIEW, ['token' => $audit->session_token])
+            ->assertSet('step', 'dashboard');
+    }
+
+    public function test_reveal_proceeds_on_main_failed_regardless_of_instagram(): void
+    {
+        $audit = $this->makeAuditRow('failed', 'pending');
+
+        Livewire::test(self::VIEW, ['token' => $audit->session_token])
+            ->assertSet('step', 'dashboard');
+    }
+
+    public function test_poll_reveals_dashboard_once_instagram_becomes_terminal(): void
+    {
+        $audit = $this->makeAuditRow('done', 'pending');
+
+        $component = Livewire::test(self::VIEW, ['token' => $audit->session_token])
+            ->assertSet('step', 'analyzing');
+
+        // IG settles (real completion, or GeneratePdfJob's coercion) — the
+        // next poll re-loads the row and opens the reveal gate.
+        $audit->update(['instagram_audit_status' => 'done']);
+
+        $component->call('pollStatus')->assertSet('step', 'dashboard');
     }
 }

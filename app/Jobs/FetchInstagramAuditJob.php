@@ -111,6 +111,28 @@ class FetchInstagramAuditJob implements ShouldQueue
         }
     }
 
+    /**
+     * BB146 — a queue-level failure (notably the 240s wall-clock timeout,
+     * tries=1) can kill this job before the never-throw service persisted a
+     * terminal status, leaving instagram_audit_status at its 'pending'
+     * default. Coerce that to a terminal failure so the dashboard reveal
+     * gate can open. Guarded so a real status the service already wrote is
+     * never clobbered. Fires after the job has stopped — no concurrent
+     * writer to instagram_audit.
+     */
+    public function failed(Throwable $e): void
+    {
+        $audit = BrandAudit::find($this->auditId);
+        if ($audit === null || $audit->instagramAuditIsTerminal()) {
+            return;
+        }
+
+        $audit->update([
+            'instagram_audit_status' => 'audit_failed',
+            'instagram_audit'        => ['error' => 'worker_unavailable: ' . $e->getMessage()],
+        ]);
+    }
+
     private function step(string $key): ?AuditStep
     {
         return AuditStep::where('brand_audit_id', $this->auditId)
