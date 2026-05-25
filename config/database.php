@@ -48,7 +48,17 @@ return [
             'busy_timeout' => env('DB_SQLITE_BUSY_TIMEOUT', 10000),
             'journal_mode' => env('DB_SQLITE_JOURNAL_MODE', 'WAL'),
             'synchronous' => env('DB_SQLITE_SYNCHRONOUS', 'NORMAL'),
-            'transaction_mode' => 'DEFERRED',
+            // BB148 — IMMEDIATE (not DEFERRED). DEFERRED took a read lock first
+            // then upgraded to write on the first write; two concurrent writers
+            // (e.g. the queue's SELECT-then-UPDATE job reservation under N
+            // workers) deadlocked and SQLite returned SQLITE_BUSY *immediately*
+            // — busy_timeout cannot wait that out. IMMEDIATE grabs the write
+            // lock at BEGIN so writers serialise and honour busy_timeout (10s)
+            // instead of erroring "database is locked", which was silently
+            // stranding the audit pipeline at phase boundaries (the Bus::batch
+            // advance dispatch threw and Batch::invokeHandlerCallback swallowed
+            // it). Honoured by SQLiteConnection on PHP >= 8.4.
+            'transaction_mode' => env('DB_SQLITE_TRANSACTION_MODE', 'IMMEDIATE'),
         ],
 
         'mysql' => [
