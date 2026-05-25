@@ -91,7 +91,15 @@ class GeneratePdfJob implements ShouldQueue
      * stopped, so there is no concurrent writer to instagram_audit — a
      * direct update() is race-free. The error prefixes match the friendly
      * banners in _instagram-audit-section.blade.php (worker_unavailable /
-     * claude_analysis_failed).
+     * analysis_incomplete).
+     *
+     * BB147 — a stranded 'scraped' status means the Claude analysis never
+     * finished (the job was interrupted, not that Claude erred). Use the
+     * honest 'analysis_incomplete' code — NOT 'claude_analysis_failed',
+     * which is reserved for genuine Claude exceptions raised inside
+     * InstagramProfileAuditService::analyze(). This is the rare backstop:
+     * with the BB147 finally() chaining, the pipeline no longer advances
+     * here until IG is genuinely terminal, so this should seldom fire.
      */
     private function coerceLingeringInstagramStatus(BrandAudit $audit): void
     {
@@ -100,7 +108,7 @@ class GeneratePdfJob implements ShouldQueue
         }
 
         $reason = $audit->instagram_audit_status === 'scraped'
-            ? 'claude_analysis_failed: instagram analysis did not finish (worker timeout)'
+            ? 'analysis_incomplete: instagram analysis did not finish (process interrupted before completion)'
             : 'worker_unavailable: instagram scrape did not finish (worker timeout)';
 
         $audit->update([

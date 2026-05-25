@@ -54,6 +54,16 @@
                     'title'    => 'Audit Instagram gagal — autentikasi worker',
                     'body'     => 'Worker menolak request audit (token salah atau kedaluwarsa). Operator perlu memeriksa konfigurasi WORKER_AUTH_TOKEN di Hub dan spoke.',
                 ];
+            } elseif (str_starts_with($errDetail, 'analysis_incomplete')) {
+                // BB147 — the analysis was INTERRUPTED before it finished
+                // (worker restart / re-reservation / timeout). This is NOT a
+                // Claude error or quota issue — say so honestly so the
+                // operator just re-runs instead of chasing a phantom API fault.
+                $banner = [
+                    'severity' => 'warning',
+                    'title'    => 'Audit Instagram belum selesai',
+                    'body'     => 'Scraping Instagram berhasil, tetapi analisis AI terhenti sebelum selesai (proses dihentikan / worker di-restart) — bukan karena error atau kuota Claude. Data mentah tersimpan; jalankan ulang untuk melengkapi analisis.',
+                ];
             } elseif (str_starts_with($errDetail, 'claude_analysis_failed')) {
                 $banner = [
                     'severity' => 'warning',

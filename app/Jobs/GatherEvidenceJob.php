@@ -79,24 +79,26 @@ class GatherEvidenceJob implements ShouldQueue
         ])
             ->name("audit:{$auditId}:gather")
             ->allowFailures()
-            ->then(static function (Batch $batch) use ($auditId): void {
+            // BB147 — advance Phase 2 from finally(), NOT then()/catch().
+            // catch() fired on the first sub-job failure, which could start
+            // Phase 2 while FetchInstagramAuditJob (240s scrape) was still
+            // running → IG stuck at 'pending' when AnalyzeInstagramJob ran
+            // → no-op → mislabelled downstream. finally() fires exactly once,
+            // only after every gather job has settled, so Phase 2 always sees
+            // the IG scrape in its real terminal state.
+            ->catch(static function (Batch $batch, Throwable $e) use ($auditId): void {
+                Log::error('GatherEvidenceJob: inner batch job failed (allowFailures should make this rare)', [
+                    'audit_id' => $auditId, 'error' => $e->getMessage(),
+                ]);
+            })
+            ->finally(static function (Batch $batch) use ($auditId): void {
                 // Idempotent transition — sub-jobs may have written to
                 // audit_evidence concurrently; we only flip the status here.
                 BrandAudit::where('id', $auditId)
                     ->update(['audit_evidence_status' => 'gathered']);
-                // BB71: chain Phase 2 (analyze). AnalysisOrchestratorJob
-                // batches AnalyzeInstagramJob + ExtractServiceSignalsJob,
-                // then chains ValidateEvidenceJob.
-                AnalysisOrchestratorJob::dispatch($auditId);
-            })
-            ->catch(static function (Batch $batch, Throwable $e) use ($auditId): void {
-                Log::error('GatherEvidenceJob: inner batch catch fired (allowFailures should make this rare)', [
-                    'audit_id' => $auditId, 'error' => $e->getMessage(),
-                ]);
-                // Still transition to 'gathered' so the chain can decide
-                // what to do — partial evidence is acceptable downstream.
-                BrandAudit::where('id', $auditId)
-                    ->update(['audit_evidence_status' => 'gathered']);
+                // Chain Phase 2 (analyze). AnalysisOrchestratorJob batches
+                // AnalyzeInstagramJob + ExtractServiceSignalsJob, then chains
+                // ValidateEvidenceJob from its own finally().
                 AnalysisOrchestratorJob::dispatch($auditId);
             })
             ->dispatch();

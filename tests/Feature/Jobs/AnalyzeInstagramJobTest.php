@@ -148,16 +148,21 @@ class AnalyzeInstagramJobTest extends TestCase
     #[Test]
     public function failed_coerces_a_lingering_scraped_status_to_terminal(): void
     {
-        // BB146 — a 180s timeout can kill this job after a successful scrape,
-        // leaving instagram_audit_status stranded at 'scraped'. failed()
-        // coerces it to a terminal failure so the reveal gate can open.
+        // BB146 — a 180s timeout / worker restart / re-reservation can kill
+        // this job after a successful scrape, leaving instagram_audit_status
+        // stranded at 'scraped'. failed() coerces it to a terminal failure so
+        // the reveal gate can open.
         $audit = $this->makeAudit(); // default instagram_audit_status='scraped'
 
         (new AnalyzeInstagramJob($audit->id))->failed(new \RuntimeException('boom'));
 
         $audit->refresh();
         $this->assertSame('audit_failed', $audit->instagram_audit_status);
-        $this->assertStringStartsWith('claude_analysis_failed', (string) ($audit->instagram_audit['error'] ?? ''));
+        // BB147 — a queue-level death means the analysis never finished; it is
+        // NOT a Claude error. The code must be the honest 'analysis_incomplete'
+        // so the banner stops claiming "Claude error / kuota habis".
+        $this->assertStringStartsWith('analysis_incomplete', (string) ($audit->instagram_audit['error'] ?? ''));
+        $this->assertStringNotContainsString('claude_analysis_failed', (string) ($audit->instagram_audit['error'] ?? ''));
     }
 
     #[Test]

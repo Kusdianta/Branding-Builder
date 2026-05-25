@@ -62,4 +62,26 @@ class AnalysisOrchestratorJobTest extends TestCase
         (new AnalysisOrchestratorJob('non-existent-ulid-x'))->handle();
         Bus::assertNothingBatched();
     }
+
+    #[Test]
+    public function it_advances_phase_3_from_finally_not_then_or_catch(): void
+    {
+        // BB147 regression guard. catch() fires on the FIRST sub-job failure
+        // — which can be the sibling ExtractServiceSignalsJob while
+        // AnalyzeInstagramJob is still running its Claude pass. Advancing the
+        // chain there raced GeneratePdfJob ahead of the IG analysis, so the
+        // dashboard revealed with IG still 'scraped' and the coercion
+        // mislabelled the unfinished analysis as a Claude error. The advance
+        // MUST live in finally() (fires once, after every sub-job settles),
+        // NOT then() (success-only, skipped on any failure) or catch().
+        Bus::fake();
+        $audit = $this->makeAudit();
+
+        (new AnalysisOrchestratorJob($audit->id))->handle();
+
+        Bus::assertBatched(function (\Illuminate\Bus\PendingBatch $batch): bool {
+            return count($batch->thenCallbacks()) === 0
+                && count($batch->finallyCallbacks()) === 1;
+        });
+    }
 }

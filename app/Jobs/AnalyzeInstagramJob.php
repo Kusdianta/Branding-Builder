@@ -99,10 +99,19 @@ class AnalyzeInstagramJob implements ShouldQueue
     }
 
     /**
-     * BB146 — a 180s timeout (tries=1) can kill this job after a successful
+     * BB146 — a 180s timeout (tries=1), a worker restart, or a re-reservation
+     * (MaxAttemptsExceededException) can kill this job after a successful
      * scrape, leaving instagram_audit_status stranded at 'scraped'. Coerce
      * that to a terminal failure so the reveal gate can open. Guarded so a
      * real failure status analyze() already persisted is never clobbered.
+     *
+     * BB147 — use the honest 'analysis_incomplete' code, NOT
+     * 'claude_analysis_failed'. A queue-level death means the analysis never
+     * RAN to completion — it is not a Claude error or quota exhaustion.
+     * Conflating the two produced a banner ("Claude error / kuota habis")
+     * that lied about an analysis that was merely interrupted. Genuine Claude
+     * exceptions are still recorded as 'claude_analysis_failed' by
+     * InstagramProfileAuditService::analyze()'s catch block.
      */
     public function failed(Throwable $e): void
     {
@@ -113,7 +122,7 @@ class AnalyzeInstagramJob implements ShouldQueue
 
         $audit->update([
             'instagram_audit_status' => 'audit_failed',
-            'instagram_audit'        => ['error' => 'claude_analysis_failed: ' . $e->getMessage()],
+            'instagram_audit'        => ['error' => 'analysis_incomplete: ' . $e->getMessage()],
         ]);
     }
 

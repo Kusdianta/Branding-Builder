@@ -138,7 +138,12 @@ class AuditCompletionGateTest extends TestCase
         $audit->refresh();
         $this->assertSame(BrandAudit::STATUS_DONE, $audit->status);
         $this->assertSame('audit_failed', $audit->instagram_audit_status);
-        $this->assertStringStartsWith('claude_analysis_failed', (string) ($audit->instagram_audit['error'] ?? ''));
+        // BB147 — a stranded 'scraped' status means the analysis never
+        // finished; it must be coerced to the HONEST 'analysis_incomplete'
+        // code, NOT 'claude_analysis_failed' (which lied "Claude error /
+        // kuota habis" about an analysis that was merely interrupted).
+        $this->assertStringStartsWith('analysis_incomplete', (string) ($audit->instagram_audit['error'] ?? ''));
+        $this->assertStringNotContainsString('claude_analysis_failed', (string) ($audit->instagram_audit['error'] ?? ''));
     }
 
     #[Test]
