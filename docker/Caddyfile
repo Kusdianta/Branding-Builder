@@ -1,0 +1,25 @@
+# FrankenPHP-bundled Caddy config. Serves Laravel public/ on :8080 (plain HTTP;
+# TLS is terminated upstream by the gateway caddy + Cloudflare Tunnel).
+# Classic php_server mode (no Octane worker) — RAM-friendly on the DS223j.
+{
+    auto_https off
+    admin off
+    log {
+        output stdout
+        format console
+        level INFO
+    }
+}
+
+:8080 {
+    root * /app/public
+    encode zstd gzip
+
+    # Edge health (no PHP) for the gateway Caddy's health_uri probe.
+    @health path /health
+    handle @health {
+        respond "OK" 200
+    }
+
+    php_server
+}
