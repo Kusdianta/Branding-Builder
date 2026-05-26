@@ -1526,33 +1526,18 @@ new class extends Component {
     }
 
     /**
-     * BB60: take the user back to the wizard's touchpoint_inputs step
-     * with the existing form fields preserved (they live on public
-     * properties already). The dashboard's audit-id state is cleared
-     * so submitting will create a fresh BrandAudit row — the original
-     * audit is left untouched (operators can navigate back to it via
-     * the session_token URL if they change their mind).
+     * BB60: the validation-warning "Edit URL & ulangi audit" button.
+     * Sends the operator to the v3 wizard entry point — the same
+     * fresh-start flow as "Mulai audit baru" / "Analisis brand lain"
+     * (route('home')) — instead of the deprecated v1 'touchpoint_inputs'
+     * flat form. A full navigate remounts the component clean (step
+     * defaults to 'wizard'), so no manual state reset is needed. The
+     * original audit is left untouched — operators can reopen it via
+     * its session_token URL if they change their mind.
      */
     public function editAndRerun(): void
     {
-        $this->step = 'touchpoint_inputs';
-        $this->auditId     = null;
-        $this->auditStatus = '';
-        $this->sessionToken = null;
-        // Score + finding state cleared so the partial dashboard
-        // doesn't flash when the user returns from a different audit.
-        $this->overallScore         = null;
-        $this->overallLabel         = null;
-        $this->pillarScores         = [];
-        $this->subBucketScores      = [];
-        $this->scoreBreakdown       = [];
-        $this->keyFindings          = [];
-        $this->recommendations      = [];
-        $this->activationKitPath    = null;
-        $this->auditSteps           = [];
-        $this->hasValidationWarning = false;
-        $this->validationWarnings   = [];
-        $this->validationConfidence = 1.0;
+        $this->redirect(route('home'), navigate: true);
     }
 
     public function checkKit(): void
