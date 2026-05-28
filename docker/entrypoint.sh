@@ -11,7 +11,12 @@ if [ ! -f database/database.sqlite ]; then
 fi
 
 php artisan migrate --force || true
-php artisan storage:link 2>/dev/null || true
+
+# Publish nema/ui-kit assets + (re)link storage on every boot. --force makes both
+# idempotent; || true keeps a publish hiccup (or a spoke without the ui-kit tag)
+# from aborting startup under `set -e`.
+php artisan vendor:publish --tag=nema-ui-kit --force --no-interaction || true
+php artisan storage:link --force --no-interaction || true
 
 php artisan config:cache || true
 php artisan event:cache  || true
