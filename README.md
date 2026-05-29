@@ -10,7 +10,7 @@ The user submits their brand touchpoints (Google Place ID, Instagram handle, opt
 
 | Layer | Package / Version |
 |---|---|
-| Runtime | PHP 8.3, Laravel 13 |
+| Runtime | PHP 8.4, Laravel 13 |
 | Reactivity | Livewire 4 + Volt 1 |
 | Frontend build | Vite 8 + Tailwind 4 |
 | Charts | chart.js ^4.5 |
